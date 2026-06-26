@@ -54,6 +54,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - [修复] 默认通知报告补充展示 `dashboard.phase_decision` 盘中决策护栏字段，避免与模板渲染路径展示不一致。
 - [修复] 修复 Windows 环境下 Web/Desktop 静态 JS 资源可能被识别为 `text/plain` 导致前端黑屏的问题。
+- [修复] 将 Docker 可安装的 Longbridge SDK 版本固定为 0.2.75，避免 `longbridge>=0.2.77` 从包索引消失后导致 docker-build 失败。
+
 - [改进] Web 设置页新增首次启动配置检查卡，串联基础配置状态、自选股入口、模型配置入口和一次简短试跑。
 - [修复] Web 设置页韩文 UI 下本地化通知测试失败消息与飞书通知选项标签，避免中文状态文案混入 알림 채널 설정。
 - [修复] Web 持仓页在韩文 UI 下本地化 CSV 导入、流水分页、账户校验等残留中文文案，并让持仓分析提交携带当前界面语言以生成对应语言的 AI 建议信号。
