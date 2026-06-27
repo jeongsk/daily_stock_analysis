@@ -23,6 +23,10 @@ const NEWS_SOURCE_TEXT = {
     sourceLabel: 'Related news / follow-up retrieval',
     sourceHint: 'Source: supplemental report-page news; analysis input is shown in Input Blocks.',
   },
+  ko: {
+    sourceLabel: '관련 뉴스 / 후속 검색',
+    sourceHint: '출처: 보고서 페이지 보충 뉴스; 분석 입력은 입력 블록에 표시됩니다.',
+  },
 } as const;
 
 /**

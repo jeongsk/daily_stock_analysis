@@ -255,6 +255,25 @@ const MARKET_REVIEW_TEXT: Record<ReportLanguage, {
     change: 'Change',
     highLow: 'High/Low',
   },
+  ko: {
+    reviewSummary: '시장 요약',
+    noReviewSummary: '아직 요약이 없습니다',
+    noSentimentScore: '아직 점수가 없습니다',
+    rotationAndFunds: '섹터 순환 및 자금',
+    noRotationView: '아직 순환 분석이 없습니다',
+    riskAndWatch: '리스크 및 관찰',
+    noRiskWatch: '아직 주요 관찰 항목이 없습니다',
+    structuredMarketData: '구조화된 시장 데이터',
+    noBreadthData: '데이터 없음',
+    advancers: '상승 종목',
+    decliners: '하락 종목',
+    limitUpDown: '상한가/하한가',
+    turnover: '거래대금',
+    index: '지수',
+    last: '최신',
+    change: '등락률',
+    highLow: '고/저',
+  },
 };
 
 export const MarketReviewReportView: React.FC<MarketReviewReportViewProps> = ({

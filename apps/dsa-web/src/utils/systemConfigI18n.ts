@@ -22,6 +22,16 @@ const categoryTitleMap: Record<UiLanguage, Record<SystemConfigCategory, string>>
     backtest: 'Backtest',
     uncategorized: 'Other',
   },
+  ko: {
+    base: '기본 설정',
+    data_source: '데이터 소스',
+    ai_model: 'AI 모델',
+    notification: '알림 채널',
+    system: '시스템',
+    agent: 'Agent',
+    backtest: '백테스트',
+    uncategorized: '기타',
+  },
 };
 
 const categoryDescriptionMap: Record<UiLanguage, Partial<Record<SystemConfigCategory, string>>> = {
@@ -44,6 +54,16 @@ const categoryDescriptionMap: Record<UiLanguage, Partial<Record<SystemConfigCate
     agent: 'Manage Agent mode, strategies, and multi-agent orchestration.',
     backtest: 'Manage backtest switches, evaluation windows, and engine parameters.',
     uncategorized: 'Other uncategorized settings.',
+  },
+  ko: {
+    base: '관심 종목과 기본 실행 파라미터를 관리합니다.',
+    data_source: '시세 데이터 소스와 우선순위 전략을 관리합니다.',
+    ai_model: '모델 서비스, 모델명, 추론 파라미터를 관리합니다.',
+    notification: '봇, Webhook, 메시지 전송 설정을 관리합니다.',
+    system: '스케줄링, 로그, 포트 등 시스템 파라미터를 관리합니다.',
+    agent: 'Agent 모드, 전략, 멀티 Agent 오케스트레이션을 관리합니다.',
+    backtest: '백테스트 스위치, 평가 윈도우, 엔진 파라미터를 관리합니다.',
+    uncategorized: '기타 분류되지 않은 설정입니다.',
   },
 };
 
