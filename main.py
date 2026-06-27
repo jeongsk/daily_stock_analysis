@@ -373,14 +373,14 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         '--port',
         type=int,
-        default=8000,
+        default=None,
         help='FastAPI 服务端口（默认 8000）'
     )
 
     parser.add_argument(
         '--host',
         type=str,
-        default='0.0.0.0',
+        default=None,
         help='FastAPI 服务监听地址（默认 0.0.0.0）'
     )
 
@@ -1291,10 +1291,10 @@ def main() -> int:
 
     # 兼容旧版 WEBUI_HOST/WEBUI_PORT：如果用户未通过 --host/--port 指定，则使用旧变量
     if start_serve:
-        if args.host == '0.0.0.0' and os.getenv('WEBUI_HOST'):
-            args.host = os.getenv('WEBUI_HOST')
-        if args.port == 8000 and os.getenv('WEBUI_PORT'):
-            args.port = int(os.getenv('WEBUI_PORT'))
+        if args.host is None:
+            args.host = os.getenv('WEBUI_HOST') or '0.0.0.0'
+        if args.port is None:
+            args.port = int(os.getenv('WEBUI_PORT') or 8000)
         _warn_if_public_webui_without_auth(args.host)
 
     bot_clients_started = False
