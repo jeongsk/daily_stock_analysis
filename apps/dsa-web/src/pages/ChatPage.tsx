@@ -26,6 +26,8 @@ import {
 } from '../utils/chatFollowUp';
 import { isNearBottom } from '../utils/chatScroll';
 import { getReportText } from '../utils/reportLanguage';
+import { useUiLanguage } from '../contexts/UiLanguageContext';
+import { CHAT_TEXT } from '../locales/featureText';
 import { extractStockCodesFromMessage } from '../utils/chatStockCode';
 import { findMatchingStockCode, includesStockCode, normalizeStockCode } from '../utils/stockCode';
 
@@ -150,6 +152,8 @@ const restoreActiveStockContextFromMessages = (messages: Message[]): ActiveStock
 };
 
 const ChatPage: React.FC = () => {
+  const { language } = useUiLanguage();
+  const tx = CHAT_TEXT[language];
   const [searchParams, setSearchParams] = useSearchParams();
   const [input, setInput] = useState('');
   const [skills, setSkills] = useState<SkillInfo[]>([]);
@@ -209,8 +213,8 @@ const ChatPage: React.FC = () => {
 
   // Set page title
   useEffect(() => {
-    document.title = '问股 - DSA';
-  }, []);
+    document.title = tx.documentTitle;
+  }, [tx.documentTitle]);
 
   useEffect(() => () => {
     isMountedRef.current = false;
@@ -771,7 +775,7 @@ const ChatPage: React.FC = () => {
         <button
           onClick={handleStartNewChat}
           className="rounded-lg p-1.5 text-muted-text transition-all hover:bg-white/10 hover:text-foreground"
-          aria-label="开启新对话"
+          aria-label={tx.newChat}
         >
           <svg
             className="w-4 h-4"
@@ -793,13 +797,13 @@ const ChatPage: React.FC = () => {
           <DashboardStateBlock
             loading
             compact
-            title="加载对话中..."
+            title={tx.loadingChats}
             className="rounded-2xl border border-dashed border-border/50 bg-surface/30"
           />
         ) : sessions.length === 0 ? (
           <DashboardStateBlock
             compact
-            title="暂无历史对话"
+            title={tx.noChatsTitle}
             description="开始提问后，这里会保留会话记录。"
             className="rounded-2xl border border-dashed border-border/50 bg-surface/30"
           />
@@ -895,7 +899,7 @@ const ChatPage: React.FC = () => {
       {/* Delete confirmation dialog */}
       <ConfirmDialog
         isOpen={Boolean(deleteConfirmId)}
-        title="删除对话"
+        title={tx.deleteChat}
         message="删除后，该对话将不可恢复，确认删除吗？"
         confirmText="删除"
         cancelText="取消"
@@ -912,7 +916,7 @@ const ChatPage: React.FC = () => {
               <button
                 onClick={() => setSidebarOpen(true)}
                 className="md:hidden p-1.5 -ml-1 rounded-lg hover:bg-hover transition-colors text-secondary-text hover:text-foreground"
-                aria-label="历史对话"
+                aria-label={tx.history}
               >
                 <svg
                   className="w-5 h-5"
@@ -951,7 +955,7 @@ const ChatPage: React.FC = () => {
                       variant="action-primary"
                       size="sm"
                       onClick={() => downloadSession(messages)}
-                      aria-label="导出会话为 Markdown 文件"
+                      aria-label={tx.exportMarkdown}
                     >
                       <svg
                         className="w-4 h-4"
@@ -994,7 +998,7 @@ const ChatPage: React.FC = () => {
                           setSending(false);
                         }
                       }}
-                      aria-label="发送到已配置的通知机器人/邮箱"
+                      aria-label={tx.sendToNotify}
                     >
                       {sending ? (
                         <svg
@@ -1044,7 +1048,7 @@ const ChatPage: React.FC = () => {
           {sendToast ? (
             <InlineAlert
               variant={sendToast.type === 'success' ? 'success' : 'danger'}
-              title={sendToast.type === 'success' ? '发送成功' : '发送失败'}
+              title={sendToast.type === 'success' ? tx.sendSuccess : tx.sendFailed}
               message={sendToast.message}
               className="max-w-md rounded-xl px-3 py-2 text-xs shadow-none"
             />
@@ -1063,7 +1067,7 @@ const ChatPage: React.FC = () => {
             {messages.length === 0 && !loading ? (
               <div className="flex h-full items-center justify-center">
                 <EmptyState
-                  title="开始问股"
+                  title={tx.startChatTitle}
                   description="输入「分析 600519」或「茅台现在能买吗」，AI 将调用实时数据工具为您生成决策报告。"
                   className="max-w-2xl border-dashed bg-card/55"
                   icon={(
@@ -1158,7 +1162,7 @@ const ChatPage: React.FC = () => {
                             type="button"
                             onClick={() => downloadMessageAsMarkdown(msg)}
                             className="chat-copy-btn"
-                            aria-label="导出此条消息为 Markdown"
+                            aria-label={tx.exportMessage}
                           >
                             导出
                           </button>
@@ -1218,7 +1222,7 @@ const ChatPage: React.FC = () => {
                   requestScrollToBottom('smooth');
                   scrollToBottom('smooth');
                 }}
-                aria-label="查看最新消息"
+                aria-label={tx.scrollToLatest}
               >
                 <svg
                   className="h-3.5 w-3.5"
@@ -1245,7 +1249,7 @@ const ChatPage: React.FC = () => {
               {isFollowUpContextLoading ? (
                 <InlineAlert
                   variant="info"
-                  title="追问上下文加载中"
+                  title={tx.followUpLoading}
                   message="正在加载历史分析上下文；现在可直接发送追问。"
                   className="rounded-xl px-3 py-2 text-xs shadow-none"
                 />
@@ -1280,7 +1284,7 @@ const ChatPage: React.FC = () => {
               {contextCompressionError ? (
                 <InlineAlert
                   variant="danger"
-                  title="上下文压缩设置未保存"
+                  title={tx.compressNotSaved}
                   message={contextCompressionError}
                   className="rounded-xl px-3 py-2 text-xs shadow-none"
                 />
@@ -1290,7 +1294,7 @@ const ChatPage: React.FC = () => {
                   <button
                     type="button"
                     className="home-surface-button flex h-10 w-full items-center justify-between gap-3 rounded-xl px-3 text-left text-sm text-foreground md:hidden"
-                    aria-label={mobileSkillPickerOpen ? '收起策略选择' : '展开策略选择'}
+                    aria-label={mobileSkillPickerOpen ? tx.collapseStrategy : tx.expandStrategy}
                     aria-expanded={mobileSkillPickerOpen}
                     aria-controls="chat-skill-picker-panel"
                     onClick={() => setMobileSkillPickerOpen((open) => !open)}
@@ -1394,7 +1398,7 @@ const ChatPage: React.FC = () => {
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={handleKeyDown}
-                  placeholder="例如：分析 600519 / 茅台现在适合买入吗？ (Enter 发送, Shift+Enter 换行)"
+                  placeholder={tx.inputPlaceholder}
                   disabled={loading}
                   rows={1}
                   className="input-surface input-focus-glow flex-1 min-h-[44px] max-h-[200px] rounded-xl border bg-transparent px-4 py-2.5 text-sm transition-all focus:outline-none resize-none disabled:cursor-not-allowed disabled:opacity-60"

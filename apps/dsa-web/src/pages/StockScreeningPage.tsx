@@ -39,6 +39,8 @@ import {
 } from '../api/alphasift';
 import { formatParsedApiError, getParsedApiError, toApiErrorMessage, type ParsedApiError } from '../api/error';
 import { AppPage, Button, InlineAlert } from '../components/common';
+import { useUiLanguage } from '../contexts/UiLanguageContext';
+import { SCREENING_TEXT } from '../locales/featureText';
 
 const MARKETS = [{ id: 'cn', label: 'A 股' }];
 const SCREEN_TASK_STORAGE_KEY = 'dsa.alphasift.activeScreenTask.v1';
@@ -434,6 +436,8 @@ const MiniSparkline: React.FC<{ score?: number | null; selected?: boolean }> = (
 };
 
 const StockScreeningPage: React.FC = () => {
+  const { language } = useUiLanguage();
+  const tx = SCREENING_TEXT[language];
   const navigate = useNavigate();
   const [restoredTask] = useState<PersistedScreenTask | null>(() => readPersistedScreenTask());
   const [enabled, setEnabled] = useState(false);
@@ -832,8 +836,8 @@ const StockScreeningPage: React.FC = () => {
             <PlusCircle className="h-4 w-4" />
           </span>
           <div>
-            <h1 className="text-2xl font-bold tracking-normal text-foreground">AlphaSift 选股</h1>
-            <p className="mt-1 text-sm text-secondary-text">开启后通过内置 AlphaSift 适配层生成候选股票，并补充 DSA 数据与新闻</p>
+            <h1 className="text-2xl font-bold tracking-normal text-foreground">{tx.pageTitle}</h1>
+            <p className="mt-1 text-sm text-secondary-text">{tx.pageDescription}</p>
           </div>
         </div>
 
@@ -846,7 +850,7 @@ const StockScreeningPage: React.FC = () => {
       {!enabled ? (
         <InlineAlert
           variant="info"
-          title="AlphaSift 未开启"
+          title={tx.alphaSiftDisabled}
           message="点击后写入 ALPHASIFT_ENABLED=true；AlphaSift 已随后端依赖安装，若适配层缺失请先更新依赖或重建后端。"
           action={
             <Button size="sm" isLoading={enabling} loadingText="开启中..." onClick={() => void handleEnable()}>
@@ -859,26 +863,26 @@ const StockScreeningPage: React.FC = () => {
       {enabled && !available ? (
         <InlineAlert
           variant="warning"
-          title="AlphaSift 适配层不可用"
+          title={tx.alphaSiftUnavailable}
           message="适配层当前不可用，请先确认后端已安装依赖并重启服务，必要时执行 pip install -r requirements.txt 或使用设置页/服务端 /install 接口进行修复安装。"
         />
       ) : null}
 
       <InlineAlert
         variant="warning"
-        title="实验功能与风险提示"
+        title={tx.experimentalWarning}
         message="AlphaSift 选股仍处于实验性质，结果仅用于研究和辅助判断，不构成投资建议；市场有风险，交易决策和损益由使用者自行承担。"
       />
 
       {loading ? (
         <InlineAlert
           variant="info"
-          title="选股任务运行中"
+          title={tx.taskRunning}
           message={`${taskMessage || '正在执行 AlphaSift 选股'}。任务 ID：${activeTaskId ? activeTaskId.slice(0, 12) : '-'}`}
         />
       ) : null}
 
-      {error ? <InlineAlert variant="danger" title="调用失败" message={error} /> : null}
+      {error ? <InlineAlert variant="danger" title={tx.callFailed} message={error} /> : null}
 
       <section className="rounded-2xl border border-border/80 bg-card/95 p-4 shadow-soft-card">
         <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -887,7 +891,7 @@ const StockScreeningPage: React.FC = () => {
               <Flame className="h-5 w-5" />
             </span>
             <div>
-              <h2 className="text-lg font-bold tracking-normal text-foreground">热点题材</h2>
+              <h2 className="text-lg font-bold tracking-normal text-foreground">{tx.hotThemes}</h2>
               <p className="mt-1 text-xs leading-5 text-secondary-text">
                 来自 AlphaSift 最新 hotspot 能力；capital_heat、balanced_alpha 等策略会把 theme_heat 纳入评分。
               </p>
@@ -1121,7 +1125,7 @@ const StockScreeningPage: React.FC = () => {
       <section className="rounded-2xl border border-cyan/35 bg-card/95 p-4 shadow-soft-card">
         <div className="mb-4 flex items-center justify-between gap-3">
           <div>
-            <h2 className="text-sm font-semibold text-foreground">选择策略</h2>
+            <h2 className="text-sm font-semibold text-foreground">{tx.selectStrategy}</h2>
             <p className="mt-1 text-xs text-secondary-text">策略来自 AlphaSift；DSA 会对候选补充行情、基本面和新闻上下文。</p>
           </div>
           <span className="rounded-full border border-cyan/30 bg-cyan/10 px-3 py-1 text-xs font-semibold text-cyan">
@@ -1265,7 +1269,7 @@ const StockScreeningPage: React.FC = () => {
       {screenMeta && alertMessages.length > 0 ? (
         <InlineAlert
           variant={llmDegraded ? 'warning' : 'info'}
-          title={llmDegraded ? 'LLM 已降级' : 'AlphaSift 提示'}
+          title={llmDegraded ? tx.llmDegraded : tx.alphaSiftHint}
           message={<ScreenAlertMessage messages={alertMessages} />}
         />
       ) : null}
@@ -1273,7 +1277,7 @@ const StockScreeningPage: React.FC = () => {
       <section className="rounded-2xl border border-border bg-card/95 p-4 shadow-soft-card">
         <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <h2 className="text-base font-semibold text-foreground">选股结果</h2>
+            <h2 className="text-base font-semibold text-foreground">{tx.screeningResults}</h2>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-secondary-text">
               AlphaSift 返回候选后，DSA 会对前几名补充行情、基本面、新闻和辅助摘要。
             </p>
@@ -1286,7 +1290,7 @@ const StockScreeningPage: React.FC = () => {
 
         {candidates.length === 0 ? (
           <div className="rounded-xl border border-dashed border-border bg-surface/70 px-5 py-10 text-center">
-            <p className="text-sm font-medium text-foreground">暂无结果</p>
+            <p className="text-sm font-medium text-foreground">{tx.noResults}</p>
             <p className="mt-2 text-sm text-secondary-text">开启 AlphaSift 后点击“运行选股”生成候选列表。</p>
           </div>
         ) : (
@@ -1295,15 +1299,14 @@ const StockScreeningPage: React.FC = () => {
               <thead className="bg-surface text-left text-xs text-secondary-text">
                 <tr>
                   <th className="w-14 px-4 py-3 font-semibold">#</th>
-                  <th className="px-4 py-3 font-semibold">代码</th>
-                  <th className="px-4 py-3 font-semibold">名称</th>
-                  <th className="px-4 py-3 font-semibold">行业</th>
-                  <th className="px-4 py-3 font-semibold">价格</th>
-                  <th className="px-4 py-3 font-semibold">涨跌幅</th>
-                  <th className="px-4 py-3 font-semibold">评分</th>
-                  <th className="px-4 py-3 font-semibold">LLM</th>
-                  <th className="px-4 py-3 font-semibold">风险</th>
-                  <th className="px-4 py-3 font-semibold">详情</th>
+                  <th className="px-4 py-3 font-semibold">{tx.code}</th>
+                  <th className="px-4 py-3 font-semibold">{tx.name}</th>
+                  <th className="px-4 py-3 font-semibold">{tx.sector}</th>
+                  <th className="px-4 py-3 font-semibold">{tx.price}</th>
+                  <th className="px-4 py-3 font-semibold">{tx.changePct}</th>
+                  <th className="px-4 py-3 font-semibold">{tx.score}</th>
+                  <th className="px-4 py-3 font-semibold">{tx.risk}</th>
+                  <th className="px-4 py-3 font-semibold">{tx.details}</th>
                 </tr>
               </thead>
               <tbody>

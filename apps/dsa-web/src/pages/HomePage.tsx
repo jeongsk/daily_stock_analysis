@@ -416,9 +416,10 @@ const HomePage: React.FC = () => {
         originalQuery: query,
         selectionSource: selectionSource ?? 'manual',
         skills: selectedAnalysisSkills,
+        reportLanguage: uiLanguage,
       });
     },
-    [query, selectedAnalysisSkills, submitAnalysis],
+    [query, selectedAnalysisSkills, submitAnalysis, uiLanguage],
   );
 
   useEffect(() => {
@@ -458,8 +459,9 @@ const HomePage: React.FC = () => {
       selectionSource: 'manual',
       forceRefresh: true,
       skills: selectedAnalysisSkills,
+      reportLanguage: uiLanguage,
     });
-  }, [selectedAnalysisSkills, selectedReport, submitAnalysis]);
+  }, [selectedAnalysisSkills, selectedReport, submitAnalysis, uiLanguage]);
 
   const openTaskRunFlow = useCallback((task: TaskInfo) => {
     const stock = task.stockName || task.stockCode || task.taskId;

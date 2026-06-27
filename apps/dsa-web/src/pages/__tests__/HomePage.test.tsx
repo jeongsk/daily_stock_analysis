@@ -641,7 +641,7 @@ describe('HomePage', () => {
     expect(analysisApi.getStatus).toHaveBeenCalledWith('task-1');
   });
 
-  it('keeps report language unset when only the UI language is English', async () => {
+  it('sends reportLanguage matching the UI language (English)', async () => {
     window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'en');
     vi.mocked(historyApi.getList).mockResolvedValue({
       total: 0,
@@ -689,7 +689,7 @@ describe('HomePage', () => {
       expect(analysisApi.analyzeAsync).toHaveBeenCalled();
       expect(analysisApi.triggerMarketReview).toHaveBeenCalledWith({ sendNotification: true });
     });
-    expect(vi.mocked(analysisApi.analyzeAsync).mock.calls[0]?.[0]).not.toHaveProperty('reportLanguage');
+    expect(vi.mocked(analysisApi.analyzeAsync).mock.calls[0]?.[0]).toHaveProperty('reportLanguage', 'en');
   });
 
   it('uses the payload language for live market review controls', async () => {
@@ -1120,7 +1120,7 @@ describe('HomePage', () => {
       originalQuery: '600519',
       forceRefresh: true,
     }));
-    expect(vi.mocked(analysisApi.analyzeAsync).mock.calls[0]?.[0]).not.toHaveProperty('reportLanguage');
+    expect(vi.mocked(analysisApi.analyzeAsync).mock.calls[0]?.[0]).toHaveProperty('reportLanguage', 'zh');
   });
 
   it('passes the selected strategy when submitting stock analysis', async () => {
