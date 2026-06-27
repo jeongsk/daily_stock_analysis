@@ -20,6 +20,7 @@ from src.data.stock_index_loader import resolve_index_stock_code
 from src.report_language import (
     get_bias_status_emoji,
     get_localized_stock_name,
+    get_localized_text,
     get_report_labels,
     get_signal_level,
     get_chip_unavailable_reason,
@@ -894,14 +895,14 @@ class HistoryService:
         report_time = record.created_at.strftime("%H:%M:%S") if record.created_at else datetime.now().strftime("%H:%M:%S")
         report_language = normalize_report_language(getattr(result, "report_language", "zh"))
         labels = get_report_labels(report_language)
-        analysis_date_label = "Analysis Date" if report_language == "en" else "分析日期"
-        report_time_label = "Report Time" if report_language == "en" else "报告生成时间"
-        reason_label = "Rationale" if report_language == "en" else "操作理由"
-        risk_warning_label = "Risk Warning" if report_language == "en" else "风险提示"
-        technical_heading = "Technicals" if report_language == "en" else "技术面"
-        ma_label = "Moving Averages" if report_language == "en" else "均线"
-        volume_analysis_label = "Volume" if report_language == "en" else "量能"
-        news_heading = "News Flow" if report_language == "en" else "消息面"
+        analysis_date_label = get_localized_text("analysis_date", report_language)
+        report_time_label = get_localized_text("report_time", report_language)
+        reason_label = get_localized_text("rationale_label", report_language)
+        risk_warning_label = get_localized_text("risk_warning_label", report_language)
+        technical_heading = get_localized_text("technicals_label", report_language)
+        ma_label = get_localized_text("moving_averages_label", report_language)
+        volume_analysis_label = get_localized_text("volume_label_short", report_language)
+        news_heading = get_localized_text("news_flow_label", report_language)
 
         # Escape markdown special characters in stock name
         name_escaped = self._escape_md(

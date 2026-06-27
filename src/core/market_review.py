@@ -19,7 +19,7 @@ import uuid
 from src.config import get_config
 from src.notification import NotificationService
 from src.market_analyzer import MarketAnalyzer
-from src.report_language import normalize_report_language
+from src.report_language import normalize_report_language, get_localized_text, get_report_labels
 from src.search_service import SearchService
 from src.analyzer import AnalysisResult, GeminiAnalyzer
 from src.llm.generation_backend import GenerationError
@@ -93,15 +93,33 @@ def _record_market_review_notification_run(
 
 def _get_market_review_text(language: str) -> dict[str, str]:
     normalized = normalize_report_language(language)
-    if normalized == "en":
-        return {
+    texts: dict[str, dict[str, str]] = {
+        "zh": {
+            "root_title": "# 🎯 大盘复盘",
+            "push_title": "🎯 大盘复盘",
+            "cn_title": "# A股大盘复盘",
+            "us_title": "# 美股大盘复盘",
+            "hk_title": "# 港股大盘复盘",
+            "separator": "> 接下来是下一市场复盘",
+        },
+        "en": {
             "root_title": "# 🎯 Market Review",
             "push_title": "🎯 Market Review",
             "cn_title": "# A-share Market Recap",
             "us_title": "# US Market Recap",
             "hk_title": "# HK Market Recap",
             "separator": "> Next market recap follows",
-        }
+        },
+        "ko": {
+            "root_title": "# 🎯 시장 리뷰",
+            "push_title": "🎯 시장 리뷰",
+            "cn_title": "# A주 시장 리뷰",
+            "us_title": "# 미국 시장 리뷰",
+            "hk_title": "# 홍콩 시장 리뷰",
+            "separator": "> 다음 시장 리뷰로 이어집니다",
+        },
+    }
+    return texts.get(normalized, texts["zh"])
     return {
         "root_title": "# 🎯 大盘复盘",
         "push_title": "🎯 大盘复盘",
@@ -521,14 +539,10 @@ def _persist_market_review_history(
 
         report_language = normalize_report_language(getattr(config, "report_language", "zh"))
         summary = _summarize_market_review(review_report, report_language)
-        if report_language == "en":
-            stock_name = "Market Review"
-            operation_advice = "View review"
-            trend_prediction = "Market review"
-        else:
-            stock_name = "大盘复盘"
-            operation_advice = "查看复盘"
-            trend_prediction = "大盘复盘"
+        labels = get_report_labels(report_language)
+        stock_name = labels.get("buy_label", "Market Review")
+        operation_advice = get_localized_text("advice_watch", report_language)
+        trend_prediction = stock_name
 
         result = AnalysisResult(
             code=MARKET_REVIEW_HISTORY_CODE,
@@ -628,7 +642,7 @@ def _build_market_review_context_overview(
         metadata["trigger_source"] = diagnostic_snapshot.get("trigger_source") or metadata["trigger_source"]
         metadata["scope"] = diagnostic_snapshot.get("scope") or metadata["scope"]
 
-    label = "Market review" if report_language == "en" else "大盘复盘"
+    label = get_localized_text("market_review_title", report_language)
     return {
         "pack_version": "market_review/1.0",
         "created_at": datetime.now().isoformat(),
@@ -665,4 +679,4 @@ def _summarize_market_review(review_report: str, report_language: str) -> str:
         text = line.strip().lstrip("#").strip()
         if text and not text.startswith("---") and not text.startswith(">"):
             return text[:200]
-    return "Market review report generated." if report_language == "en" else "大盘复盘报告已生成。"
+    return get_localized_text("market_review_generated", report_language)

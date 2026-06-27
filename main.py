@@ -68,6 +68,7 @@ from datetime import date, datetime, timezone, timedelta
 from src.webui_frontend import prepare_webui_frontend_assets
 from src.config import get_config, Config
 from src.logging_config import setup_logging
+from src.report_language import get_localized_text, normalize_report_language
 from src.services.stock_code_utils import resolve_index_stock_code_for_analysis
 
 
@@ -614,12 +615,12 @@ def _save_reused_market_review_report(
     body = str(market_report or "").strip()
     if not body:
         return
-    title = (
-        "# 🎯 Market Review"
-        if str(getattr(config, "report_language", "zh")).strip().lower() == "en"
-        else "# 🎯 大盘复盘"
+    title = get_localized_text(
+        "market_review_title",
+        normalize_report_language(getattr(config, "report_language", "zh")),
     )
-    if not any(body.startswith(item) for item in ("# 🎯 大盘复盘", "# 🎯 Market Review")):
+    title = f"# 🎯 {title}"
+    if not any(body.startswith(item) for item in ("# 🎯 大盘复盘", "# 🎯 Market Review", "# 🎯 시장 리뷰")):
         body = f"{title}\n\n{body}"
     try:
         date_str = datetime.now().strftime('%Y%m%d')

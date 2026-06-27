@@ -165,20 +165,33 @@ class MarketAnalyzer:
     def _get_market_scope_name(self, review_language: str | None = None) -> str:
         review_language = review_language or self._get_review_language()
         if self.region == "us":
-            return "US market" if review_language == "en" else "美股市场"
+            if review_language == "en":
+                return "US market"
+            if review_language == "ko":
+                return "미국 시장"
+            return "美股市场"
         if self.region == "hk":
-            return "Hong Kong market" if review_language == "en" else "港股市场"
+            if review_language == "en":
+                return "Hong Kong market"
+            if review_language == "ko":
+                return "홍콩 시장"
+            return "港股市场"
         if review_language == "en":
             return "A-share market"
+        if review_language == "ko":
+            return "A주 시장"
         return "A股市场"
 
     def _get_turnover_unit_label(self) -> str:
         """Return the turnover unit label for the current market/language."""
         if self.region == "us":
-            return "USD bn" if self._get_review_language() == "en" else "十亿美元"
+            review_lang = self._get_review_language()
+            return "USD bn" if review_lang == "en" else "십억 달러" if review_lang == "ko" else "十亿美元"
         if self.region == "hk":
-            return "HKD bn" if self._get_review_language() == "en" else "十亿港元"
-        return "CNY 100m" if self._get_review_language() == "en" else "亿"
+            review_lang = self._get_review_language()
+            return "HKD bn" if review_lang == "en" else "십억 홍콩달러" if review_lang == "ko" else "十亿港元"
+        review_lang = self._get_review_language()
+        return "CNY 100m" if review_lang == "en" else "억 위안" if review_lang == "ko" else "亿"
 
     def _format_turnover_value(self, amount_raw: float) -> str:
         """Format raw turnover according to market-specific units."""
@@ -320,6 +333,14 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
                 "mild_down": "mild losses",
                 "strong_down": "clear weakness",
                 "range": "range-bound trading",
+            }
+        elif review_language == "ko":
+            mapping = {
+                "strong_up": "강한 상승",
+                "mild_up": "소폭 상승",
+                "mild_down": "소폭 하락",
+                "strong_down": "뚜렷한 약세",
+                "range": "횡보",
             }
         else:
             mapping = {

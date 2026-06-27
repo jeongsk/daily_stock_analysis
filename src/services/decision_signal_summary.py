@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 
 from src.utils.sanitize import sanitize_decision_signal_payload, sanitize_decision_signal_text
+from src.report_language import normalize_report_language
 
 
 SUMMARY_FIELDS = (
@@ -46,8 +47,8 @@ def format_decision_signal_excerpt(summary: Any, report_language: str = "zh") ->
 
     if not isinstance(summary, dict) or not summary:
         return ""
-    language = "en" if str(report_language or "").lower().startswith("en") else "zh"
-    labels = {
+    language = normalize_report_language(report_language)
+    all_labels = {
         "zh": {
             "heading": "AI 决策信号",
             "action": "动作",
@@ -66,7 +67,17 @@ def format_decision_signal_excerpt(summary: Any, report_language: str = "zh") ->
             "risk_summary": "Risk",
             "source_report_id": "Report",
         },
-    }[language]
+        "ko": {
+            "heading": "AI 의사결정 신호",
+            "action": "동작",
+            "horizon": "기간",
+            "reason": "이유",
+            "watch_conditions": "관찰 조건",
+            "risk_summary": "리스크",
+            "source_report_id": "보고서",
+        },
+    }
+    labels = all_labels.get(language, all_labels["zh"])
 
     parts = []
     action_label = _public_scalar(summary.get("action_label") or summary.get("action"), max_length=32)
