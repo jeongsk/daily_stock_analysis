@@ -146,7 +146,7 @@ git clone https://github.com/ZhuLinsen/daily_stock_analysis.git && cd daily_stoc
 pip install -r requirements.txt
 
 # 환경 변수 설정
-cp .env.example .env && vim .env
+cp .env.example.ko .env && vim .env
 
 # 분석 실행
 python main.py

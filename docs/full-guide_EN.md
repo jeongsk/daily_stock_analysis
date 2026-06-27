@@ -488,9 +488,9 @@ services:
   server:
     <<: *common
     container_name: stock-server
-    command: ["python", "main.py", "--serve-only", "--host", "0.0.0.0", "--port", "${API_PORT:-8000}"]
+    command: ["python", "main.py", "--serve-only", "--host", "0.0.0.0", "--port", "8000"]
     ports:
-      - "${API_PORT:-8000}:${API_PORT:-8000}"
+      - "${WEBUI_PORT:-8000}:8000"
 ```
 
 ### `.env` and Volume Mapping

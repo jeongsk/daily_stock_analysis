@@ -117,7 +117,7 @@ docker-compose -f ./docker/docker-compose.yml ps
 默认端口是 8000。如果想改用其他端口，在 `.env` 里设置：
 
 ```env
-API_PORT=8888
+WEBUI_PORT=8888
 ```
 
 然后重新启动容器：
@@ -238,7 +238,7 @@ sudo firewall-cmd --reload
 检查访问地址里的端口是否和 `.env` / 启动命令里设置的端口一致。
 
 - 直接部署：默认 8000，可通过 `WEBUI_PORT=xxxx` 修改
-- Docker：默认 8000，可通过 `API_PORT=xxxx` 修改
+- Docker：默认 8000，可通过 `WEBUI_PORT=xxxx` 修改
 
 ### 5. 页面能打开，但 UI 元素异常变大 / 布局错乱
 
