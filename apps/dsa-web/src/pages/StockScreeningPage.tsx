@@ -482,7 +482,7 @@ const StockScreeningPage: React.FC = () => {
       : ['LLM 重排未完成或未返回判断，当前候选来自 AlphaSift 本地因子评分。']
     : screenMessages;
   const isScreeningEnabled = enabled && available;
-  const statusText = isScreeningEnabled ? '选股已开启' : '选股未开启';
+  const statusText = isScreeningEnabled ? tx.screeningEnabled : tx.screeningDisabled;
 
   const applyScreenResult = useCallback((result: AlphaSiftScreenResponse) => {
     const nextCandidates = result.candidates || [];
@@ -809,7 +809,7 @@ const StockScreeningPage: React.FC = () => {
     setError('');
     setScreenMeta(null);
     setTaskProgress(0);
-    setTaskMessage('正在提交选股任务...');
+    setTaskMessage(tx.submittingTask);
     try {
       const task = await alphasiftApi.startScreen({ market, strategy, maxResults });
       persistScreenTask({
@@ -853,8 +853,8 @@ const StockScreeningPage: React.FC = () => {
           title={tx.alphaSiftDisabled}
           message="点击后写入 ALPHASIFT_ENABLED=true；AlphaSift 已随后端依赖安装，若适配层缺失请先更新依赖或重建后端。"
           action={
-            <Button size="sm" isLoading={enabling} loadingText="开启中..." onClick={() => void handleEnable()}>
-              开启 AlphaSift
+            <Button size="sm" isLoading={enabling} loadingText={tx.enabling} onClick={() => void handleEnable()}>
+              {tx.enableAlphaSift}
             </Button>
           }
         />
@@ -906,7 +906,7 @@ const StockScreeningPage: React.FC = () => {
                 onClick={toggleHotspotsExpanded}
               >
                 <Bookmark className="h-4 w-4" />
-                {hotspotsExpanded ? '收起热点题材' : `展开热点题材${hotspots.length ? `（${hotspots.length}）` : ''}`}
+                {hotspotsExpanded ? tx.collapseHotThemes : tx.expandHotThemes.replace('{count}', String(hotspots.length))}
                 <ChevronDown className={`h-4 w-4 transition-transform ${hotspotsExpanded ? 'rotate-180' : ''}`} />
               </Button>
               {hotspotsExpanded ? (
@@ -914,12 +914,12 @@ const StockScreeningPage: React.FC = () => {
                 size="sm"
                 variant="secondary"
                 isLoading={loadingHotspots}
-                loadingText="刷新中..."
+                loadingText={tx.refreshing}
                 disabled={!isScreeningEnabled || loadingHotspots}
                 onClick={() => void loadHotspots(true)}
               >
                 <RefreshCw className="h-4 w-4" />
-                刷新热点题材
+                {tx.refreshHotThemes}
               </Button>
               ) : null}
             </div>
@@ -1172,12 +1172,12 @@ const StockScreeningPage: React.FC = () => {
       <section className="rounded-2xl border border-border bg-card/95 p-4 shadow-soft-card">
         <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-foreground">
           <SlidersHorizontal className="h-4 w-4 text-cyan" />
-          参数设置
+          {tx.paramSettings}
         </div>
 
         <div className="grid gap-4 lg:grid-cols-[1fr_1.2fr_180px_auto] lg:items-end">
           <label className="space-y-2 text-xs font-medium text-secondary-text">
-            市场
+            {tx.market}
             <select
               className="h-11 w-full rounded-xl border border-border bg-surface px-3 text-sm text-foreground outline-none transition-colors focus:border-cyan"
               value={market}
@@ -1193,7 +1193,7 @@ const StockScreeningPage: React.FC = () => {
           </label>
 
           <label className="space-y-2 text-xs font-medium text-secondary-text">
-            策略参数
+            {tx.strategyParams}
             <input
               className="h-11 w-full rounded-xl border border-border bg-surface px-3 text-sm text-foreground outline-none transition-colors focus:border-cyan"
               value={strategy}
@@ -1203,7 +1203,7 @@ const StockScreeningPage: React.FC = () => {
           </label>
 
           <label className="space-y-2 text-xs font-medium text-secondary-text">
-            返回数量
+            {tx.resultCount}
             <input
               className="h-11 w-full rounded-xl border border-border bg-surface px-3 text-sm text-foreground outline-none transition-colors focus:border-cyan"
               type="number"
@@ -1218,12 +1218,12 @@ const StockScreeningPage: React.FC = () => {
           <Button
             className="h-11 min-w-40"
             isLoading={loading}
-            loadingText="筛选中..."
+            loadingText={tx.screening}
             disabled={!isScreeningEnabled || loading}
             onClick={() => void handleSubmit()}
           >
             <Play className="h-4 w-4" />
-            运行选股
+            {tx.runScreening}
           </Button>
         </div>
       </section>
@@ -1240,7 +1240,7 @@ const StockScreeningPage: React.FC = () => {
             </span>
             <div>
               <h2 className="text-sm font-semibold text-foreground">
-                {loading ? '选股运行中' : candidates.length > 0 ? '选股完成' : isScreeningEnabled ? '等待运行' : '等待开启'}
+                {loading ? tx.running : candidates.length > 0 ? tx.completed : isScreeningEnabled ? tx.waiting : tx.waitingEnable}
               </h2>
               <p className="mt-1 text-xs text-secondary-text">
                 {loading

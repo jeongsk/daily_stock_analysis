@@ -1044,7 +1044,7 @@ const PortfolioPage: React.FC = () => {
                   setAccountCreateSuccess(null);
                 }}
               >
-                收起
+                {text.collapseCreate}
               </button>
             ) : (
               <span className="text-xs text-secondary">{text.createAccountAutoSwitch}</span>

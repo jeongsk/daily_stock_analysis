@@ -25,7 +25,6 @@ import {
   sanitizeFollowUpStockName,
 } from '../utils/chatFollowUp';
 import { isNearBottom } from '../utils/chatScroll';
-import { getReportText } from '../utils/reportLanguage';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
 import { CHAT_TEXT } from '../locales/featureText';
 import { extractStockCodesFromMessage } from '../utils/chatStockCode';
@@ -152,7 +151,7 @@ const restoreActiveStockContextFromMessages = (messages: Message[]): ActiveStock
 };
 
 const ChatPage: React.FC = () => {
-  const { language } = useUiLanguage();
+  const { language, t } = useUiLanguage();
   const tx = CHAT_TEXT[language];
   const [searchParams, setSearchParams] = useSearchParams();
   const [input, setInput] = useState('');
@@ -192,9 +191,6 @@ const ChatPage: React.FC = () => {
   const followUpContextRef = useRef<ChatFollowUpContext | null>(null);
   const shouldStickToBottomRef = useRef(true);
   const pendingScrollBehaviorRef = useRef<ScrollBehavior>('auto');
-
-  // Get localized text (default to Chinese)
-  const text = getReportText('zh');
 
   // Cleanup timers on unmount
   useEffect(() => {
@@ -678,16 +674,16 @@ const ChatPage: React.FC = () => {
   }, []);
 
   const getCurrentStage = (steps: ProgressStep[]): string => {
-    if (steps.length === 0) return '正在连接...';
+    if (steps.length === 0) return tx.connecting;
     const last = steps[steps.length - 1];
-    if (last.type === 'thinking') return last.message || 'AI 正在思考...';
+    if (last.type === 'thinking') return last.message || tx.aiThinking;
     if (last.type === 'tool_start')
       return `${last.display_name || last.tool}...`;
     if (last.type === 'tool_done')
       return `${last.display_name || last.tool} 完成`;
     if (last.type === 'generating')
-      return last.message || '正在生成最终分析...';
-    return '处理中...';
+      return last.message || tx.generating;
+    return tx.processing;
   };
 
   const renderThinkingBlock = (msg: Message) => {
@@ -719,7 +715,7 @@ const ChatPage: React.FC = () => {
           />
         </svg>
         <span className="flex items-center gap-1.5">
-          <span className="opacity-60">思考过程</span>
+          <span className="opacity-60">{tx.thinking}</span>
           <span className="text-muted-text/50">·</span>
           <span className="opacity-50">{summary}</span>
         </span>
@@ -770,7 +766,7 @@ const ChatPage: React.FC = () => {
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
-          历史对话
+           {tx.history}
         </h2>
         <button
           onClick={handleStartNewChat}
@@ -804,7 +800,7 @@ const ChatPage: React.FC = () => {
           <DashboardStateBlock
             compact
             title={tx.noChatsTitle}
-            description="开始提问后，这里会保留会话记录。"
+            description={tx.noChatsDescription}
             className="rounded-2xl border border-dashed border-border/50 bg-surface/30"
           />
         ) : (
@@ -815,7 +811,7 @@ const ChatPage: React.FC = () => {
                   type="button"
                   onClick={() => handleSwitchSession(s.session_id)}
                   className={`session-item ${s.session_id === sessionId ? 'active' : ''}`}
-                  aria-label={`切换到对话 ${s.title}`}
+                  aria-label={`${tx.history}: ${s.title}`}
                   aria-current={s.session_id === sessionId ? 'page' : undefined}
                 >
                   <div className="indicator" />
@@ -823,7 +819,7 @@ const ChatPage: React.FC = () => {
                     <span className="title">{s.title}</span>
                     <div className="mt-0.5 flex items-center gap-2">
                       <span className="meta">
-                        {s.message_count} 条对话
+                        {tx.messagesCount.replace('{count}', String(s.message_count))}
                       </span>
                       {s.last_active && (
                         <>
@@ -842,7 +838,7 @@ const ChatPage: React.FC = () => {
                   onClick={() => {
                     setDeleteConfirmId(s.session_id);
                   }}
-                  aria-label={`删除对话 ${s.title}`}
+                  aria-label={`${tx.deleteChat} ${s.title}`}
                 >
                   <svg
                     className="w-3.5 h-3.5"
@@ -868,7 +864,7 @@ const ChatPage: React.FC = () => {
 
   const selectedSkillSummary = selectedSkillIds.length > 0
     ? getSkillNames(selectedSkillIds).join('、')
-    : '通用分析';
+    : tx.generalAnalysis;
 
   return (
     <div
@@ -900,9 +896,9 @@ const ChatPage: React.FC = () => {
       <ConfirmDialog
         isOpen={Boolean(deleteConfirmId)}
         title={tx.deleteChat}
-        message="删除后，该对话将不可恢复，确认删除吗？"
-        confirmText="删除"
-        cancelText="取消"
+        message={tx.deleteConfirmMessage}
+        confirmText={t('common.delete')}
+        cancelText={t('common.cancel')}
         isDanger
         onConfirm={confirmDelete}
         onCancel={() => setDeleteConfirmId(null)}
@@ -945,11 +941,11 @@ const ChatPage: React.FC = () => {
                   d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"
                 />
               </svg>
-              问股
+              {t('layout.nav.chat')}
             </h1>
             {messages.length > 0 && (
               <div className="flex flex-shrink-0 flex-wrap items-center justify-end gap-2">
-                <Tooltip content="导出会话为 Markdown 文件">
+                <Tooltip content={tx.exportMarkdown}>
                   <span className="inline-flex">
                     <Button
                       variant="action-primary"
@@ -970,11 +966,11 @@ const ChatPage: React.FC = () => {
                           d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
                         />
                       </svg>
-                      导出会话
+                      {tx.exportSession}
                     </Button>
                   </span>
                 </Tooltip>
-                <Tooltip content="发送到已配置的通知机器人/邮箱">
+                <Tooltip content={tx.sendToNotify}>
                   <span className="inline-flex">
                     <Button
                       variant="action-primary"
@@ -987,12 +983,12 @@ const ChatPage: React.FC = () => {
                         try {
                           const content = formatSessionAsMarkdown(messages);
                           await agentApi.sendChat(content);
-                          showSendFeedback({ type: 'success', message: '已发送到通知渠道' }, 3000);
+                          showSendFeedback({ type: 'success', message: tx.sentToChannel }, 3000);
                         } catch (err) {
                           const parsed = getParsedApiError(err);
                           showSendFeedback({
                             type: 'error',
-                            message: parsed.message || '发送失败',
+                            message: parsed.message || tx.sendFailed,
                           }, 5000);
                         } finally {
                           setSending(false);
@@ -1035,7 +1031,7 @@ const ChatPage: React.FC = () => {
                           />
                         </svg>
                       )}
-                      发送
+                      {tx.send}
                     </Button>
                   </span>
                 </Tooltip>
@@ -1043,7 +1039,7 @@ const ChatPage: React.FC = () => {
             )}
           </div>
           <p className="text-secondary-text text-sm">
-            向 AI 询问个股分析，获取基于技能视角的交易建议与实时决策报告。
+             {tx.pageDescription}
           </p>
           {sendToast ? (
             <InlineAlert
@@ -1068,7 +1064,7 @@ const ChatPage: React.FC = () => {
               <div className="flex h-full items-center justify-center">
                 <EmptyState
                   title={tx.startChatTitle}
-                  description="输入「分析 600519」或「茅台现在能买吗」，AI 将调用实时数据工具为您生成决策报告。"
+                  description={tx.startChatDescription}
                   className="max-w-2xl border-dashed bg-card/55"
                   icon={(
                     <svg
@@ -1124,7 +1120,7 @@ const ChatPage: React.FC = () => {
                   >
                     {msg.role === 'assistant' && skillLabel && (
                       <div className="mb-2">
-                        <Badge variant="info" className="chat-skill-badge shadow-none" aria-label={`技能 ${skillLabel}`}>
+                        <Badge variant="info" className="chat-skill-badge shadow-none" aria-label={`${tx.strategy} ${skillLabel}`}>
                           <svg
                             className="w-3 h-3"
                             fill="none"
@@ -1154,9 +1150,9 @@ const ChatPage: React.FC = () => {
                             type="button"
                             onClick={() => copyMessageToClipboard(msg.id, msg.content)}
                             className="chat-copy-btn"
-                            aria-label={copiedMessages.has(msg.id) ? text.copied : text.copy}
-                          >
-                            {copiedMessages.has(msg.id) ? text.copied : text.copy}
+                          aria-label={copiedMessages.has(msg.id) ? t('common.copied') : t('common.copy')}
+                        >
+                          {copiedMessages.has(msg.id) ? t('common.copied') : t('common.copy')}
                           </button>
                           <button
                             type="button"
@@ -1164,7 +1160,7 @@ const ChatPage: React.FC = () => {
                             className="chat-copy-btn"
                             aria-label={tx.exportMessage}
                           >
-                            导出
+                            {tx.exportSession}
                           </button>
                         </div>
                         <div className="chat-prose pr-20 sm:pr-24">
@@ -1237,7 +1233,7 @@ const ChatPage: React.FC = () => {
                     d="M19 14l-7 7m0 0l-7-7m7 7V3"
                   />
                 </svg>
-                有新消息
+                {tx.newMessage}
               </button>
             </div>
           )}
@@ -1250,7 +1246,7 @@ const ChatPage: React.FC = () => {
                 <InlineAlert
                   variant="info"
                   title={tx.followUpLoading}
-                  message="正在加载历史分析上下文；现在可直接发送追问。"
+                  message={tx.followUpLoadingMessage}
                   className="rounded-xl px-3 py-2 text-xs shadow-none"
                 />
               ) : null}
@@ -1270,15 +1266,15 @@ const ChatPage: React.FC = () => {
                     onChange={(event) => void updateContextCompressionEnabled(event.target.checked)}
                     className="chat-skill-checkbox"
                   />
-                  <span className="font-medium">上下文压缩</span>
-                  <span className="text-xs text-muted-text">节省长会话 token</span>
+                  <span className="font-medium">{tx.contextCompression}</span>
+                  <span className="text-xs text-muted-text">{tx.saveLongSessionTokens}</span>
                 </label>
                 <span className="text-xs text-muted-text">
                   {contextCompressionSaving
-                    ? '保存中...'
+                    ? tx.saving
                     : contextCompressionEnabled
-                      ? '已启用'
-                      : '未启用'}
+                      ? tx.enabled
+                      : tx.disabled}
                 </span>
               </div>
               {contextCompressionError ? (
@@ -1301,7 +1297,7 @@ const ChatPage: React.FC = () => {
                   >
                     <span className="flex min-w-0 items-center gap-2">
                       <SlidersHorizontal className="h-4 w-4 flex-shrink-0" aria-hidden="true" />
-                      <span className="flex-shrink-0 font-medium">策略</span>
+                      <span className="flex-shrink-0 font-medium">{tx.strategy}</span>
                       <span className="truncate text-xs text-muted-text">{selectedSkillSummary}</span>
                     </span>
                     <ChevronDown
@@ -1321,7 +1317,7 @@ const ChatPage: React.FC = () => {
                     )}
                   >
                     <span className="text-xs text-muted-text font-medium uppercase tracking-wider flex-shrink-0 mt-1">
-                      策略
+                      {tx.strategy}
                     </span>
                     <label className="flex items-center gap-1.5 text-sm cursor-pointer group mt-0.5">
                       <input
@@ -1335,7 +1331,7 @@ const ChatPage: React.FC = () => {
                       <span
                         className={`transition-colors text-sm ${selectedSkillIds.length === 0 ? 'text-foreground font-medium' : 'text-secondary-text group-hover:text-foreground'}`}
                       >
-                        通用分析
+                        {tx.generalAnalysis}
                       </span>
                     </label>
                     {skills.map((s) => {
@@ -1385,7 +1381,7 @@ const ChatPage: React.FC = () => {
                   onClick={() => void handleToggleWatchlist(activeStockCode)}
                   className="text-[11px]"
                 >
-                  {stockInWatchlist(activeStockCode) ? '从自选删除' : '加入自选'}
+                  {stockInWatchlist(activeStockCode) ? tx.removeFromWatchlist : tx.addToWatchlist}
                 </Button>
                 {watchlistMessage && (
                   <span className="text-[11px] text-secondary-text animate-in fade-in">{watchlistMessage}</span>
@@ -1416,7 +1412,7 @@ const ChatPage: React.FC = () => {
                   isLoading={loading}
                   className="btn-primary flex-shrink-0"
                 >
-                  发送
+                  {tx.send}
                 </Button>
               </div>
             </div>
