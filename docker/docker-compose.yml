@@ -33,11 +33,11 @@ x-common: &common
     # - ../static:/app/static:ro
 
   environment:
-    - TZ=Asia/Shanghai
+    - TZ=${TZ:-Asia/Seoul}
 
     # Web/API service bind address (must be 0.0.0.0 inside container)
     - WEBUI_HOST=0.0.0.0
-    # API_PORT 从 .env 文件读取，无需在此硬编码
+    # The app listens on 8000 inside the container; WEBUI_PORT controls the host-side published port.
 
     # 代理设置（如果需要）
     # - http_proxy=http://host.docker.internal:10809
@@ -66,7 +66,7 @@ services:
   server:
     <<: *common
     container_name: stock-server
-    command: ["python", "main.py", "--serve-only", "--host", "0.0.0.0", "--port", "${API_PORT:-8000}"]
+    command: ["python", "main.py", "--serve-only", "--host", "0.0.0.0", "--port", "8000"]
     # 若使用 network_mode: host，则以下 ports 映射无效，端口由 command 中的 --port 指定
     ports:
-      - "${API_PORT:-8000}:${API_PORT:-8000}"
+      - "${WEBUI_PORT:-8000}:8000"
