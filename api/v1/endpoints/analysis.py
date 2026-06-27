@@ -1091,7 +1091,11 @@ def get_analysis_status(task_id: str) -> TaskStatus:
                 context_snapshot=context_snapshot,
                 fallback_fundamental_payload=fallback_fundamental,
             )
-            has_board_details = bool(extracted_boards.get("belong_boards")) or extracted_boards.get("sector_rankings") is not None
+            has_board_details = (
+                bool(extracted_boards.get("belong_boards"))
+                or extracted_boards.get("sector_rankings") is not None
+                or extracted_boards.get("concept_rankings") is not None
+            )
             details = None
             if any(extracted_fundamental.values()) or has_board_details or context_snapshot is not None or analysis_context_pack_overview is not None:
                 details = ReportDetails(
@@ -1103,6 +1107,7 @@ def get_analysis_status(task_id: str) -> TaskStatus:
                     dividend_metrics=extracted_fundamental.get("dividend_metrics"),
                     belong_boards=extracted_boards.get("belong_boards"),
                     sector_rankings=extracted_boards.get("sector_rankings"),
+                    concept_rankings=extracted_boards.get("concept_rankings"),
                 )
 
             raw_dict = raw_result if isinstance(raw_result, dict) else {}
@@ -1328,7 +1333,11 @@ def _build_analysis_report(
     analysis_context_pack_overview = extract_analysis_context_pack_overview(context_snapshot)
     api_context_snapshot = sanitize_context_snapshot_for_api(context_snapshot)
     details = None
-    has_board_details = bool(extracted_boards.get("belong_boards")) or extracted_boards.get("sector_rankings") is not None
+    has_board_details = (
+        bool(extracted_boards.get("belong_boards"))
+        or extracted_boards.get("sector_rankings") is not None
+        or extracted_boards.get("concept_rankings") is not None
+    )
     if details_data or any(extracted_fundamental.values()) or has_board_details or context_snapshot is not None or analysis_context_pack_overview is not None:
         details = ReportDetails(
             news_content=details_data.get("news_summary") or details_data.get("news_content"),
@@ -1339,6 +1348,7 @@ def _build_analysis_report(
             dividend_metrics=extracted_fundamental.get("dividend_metrics"),
             belong_boards=extracted_boards.get("belong_boards"),
             sector_rankings=extracted_boards.get("sector_rankings"),
+            concept_rankings=extracted_boards.get("concept_rankings"),
         )
 
     return AnalysisReport(

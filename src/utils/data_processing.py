@@ -109,6 +109,11 @@ def _normalize_sector_ranking_items(value: Any) -> List[Dict[str, Any]]:
         if not name_text:
             continue
         ranking_item: Dict[str, Any] = {"name": name_text}
+        for optional_field in ("code", "source", "updated_at"):
+            if item.get(optional_field) is not None:
+                optional_text = str(item.get(optional_field)).strip()
+                if optional_text:
+                    ranking_item[optional_field] = optional_text
         change_pct = _safe_float(item.get("change_pct"))
         if change_pct is not None:
             ranking_item["change_pct"] = change_pct
@@ -124,6 +129,21 @@ def _normalize_sector_rankings(value: Any) -> Optional[Dict[str, List[Dict[str, 
         "top": _normalize_sector_ranking_items(value.get("top")),
         "bottom": _normalize_sector_ranking_items(value.get("bottom")),
     }
+
+
+def _extract_ranking_payload_from_block(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return None
+    if "top" in value or "bottom" in value:
+        return value
+
+    status = value.get("status")
+    if status not in {"ok", "partial", None}:
+        return None
+    data = value.get("data")
+    if isinstance(data, dict):
+        return data
+    return None
 
 
 def _is_empty_value(value: Any) -> bool:
@@ -256,17 +276,21 @@ def extract_board_detail_fields(
         fallback_fundamental_payload=fallback_fundamental_payload,
     )
     if not isinstance(fundamental_ctx, dict):
-        return {"belong_boards": [], "sector_rankings": None}
+        return {"belong_boards": [], "sector_rankings": None, "concept_rankings": None}
 
     boards_block = fundamental_ctx.get("boards")
-    sector_rankings = None
-    if isinstance(boards_block, dict):
-        boards_status = boards_block.get("status")
-        if boards_status in {"ok", "partial"} or boards_status is None:
-            sector_rankings = boards_block.get("data")
+    sector_rankings = _extract_ranking_payload_from_block(boards_block)
+    concept_rankings = (
+        _extract_ranking_payload_from_block(fundamental_ctx.get("concept_boards"))
+        or _extract_ranking_payload_from_block(fundamental_ctx.get("concepts"))
+        or _extract_ranking_payload_from_block(fundamental_ctx.get("concept_rankings"))
+    )
+    if concept_rankings is None and isinstance(sector_rankings, dict):
+        concept_rankings = _extract_ranking_payload_from_block(sector_rankings.get("concepts"))
     return {
         "belong_boards": _normalize_belong_boards(fundamental_ctx.get("belong_boards")),
         "sector_rankings": _normalize_sector_rankings(sector_rankings),
+        "concept_rankings": _normalize_sector_rankings(concept_rankings),
     }
 
 
