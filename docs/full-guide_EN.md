@@ -490,7 +490,7 @@ services:
     container_name: stock-server
     command: ["python", "main.py", "--serve-only", "--host", "0.0.0.0", "--port", "8000"]
     ports:
-      - "${WEBUI_PORT:-8000}:8000"
+      - "${WEBUI_DOCKER_PORT:-8001}:8000"
 ```
 
 ### `.env` and Volume Mapping

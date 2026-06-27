@@ -37,7 +37,8 @@ x-common: &common
 
     # Web/API service bind address (must be 0.0.0.0 inside container)
     - WEBUI_HOST=0.0.0.0
-    # The app listens on 8000 inside the container; WEBUI_PORT controls the host-side published port.
+    # The app listens on 8000 inside the container (--port 8000 fixed).
+    # WEBUI_DOCKER_PORT controls the host-side published port (default 8001); WEBUI_PORT is for local dev only.
 
     # 代理设置（如果需要）
     # - http_proxy=http://host.docker.internal:10809
@@ -69,4 +70,4 @@ services:
     command: ["python", "main.py", "--serve-only", "--host", "0.0.0.0", "--port", "8000"]
     # 若使用 network_mode: host，则以下 ports 映射无效，端口由 command 中的 --port 指定
     ports:
-      - "${WEBUI_PORT:-8000}:8000"
+      - "${WEBUI_DOCKER_PORT:-8001}:8000"

@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - [文档] 新增 `.env.example.ko` 韩文环境变量模板，并将韩文 README 的本地配置示例切换为该模板。
 - [文档] 新增韩文 README，并在现有 README 语言切换入口中补充韩文链接。
+- [改进] 将 Docker Compose 宿主机发布端口从 WEBUI_PORT 分离为专用变量 WEBUI_DOCKER_PORT（默认 8001），避免本地 dev 与 Docker 同时运行时端口冲突。此前通过 WEBUI_PORT 控制 Docker 宿主机端口的用户需迁移至 WEBUI_DOCKER_PORT（breaking），如需保持原 8000 端口可设置 WEBUI_DOCKER_PORT=8000。
 - [修复] 放宽 Longbridge SDK 最低版本约束，避免 Debian bookworm Docker 镜像因当前平台只能解析到 0.2.75 而构建失败；OAuth 能力继续在运行时检测并降级。
 - [修复] 修复 Docker Compose 中 `.env` 的 `WEBUI_PORT` 与容器内监听端口互相覆盖导致 WebUI 无法访问的问题。
 - [改进] Web 设置页新增首次启动配置检查卡，串联基础配置状态、自选股入口、模型配置入口和一次简短试跑。

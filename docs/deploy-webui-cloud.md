@@ -8,13 +8,29 @@
 
 ## 目录
 
-- [方式一：直接部署（pip + python）](#方式一直接部署pip--python)
-- [方式二：Docker Compose](#方式二docker-compose)
-- [如何在浏览器里打开界面](#如何在浏览器里打开界面)
-- [如何确认 Docker 重建已生效](#如何确认-docker-重建已生效)
-- [访问不了？先检查这几项](#访问不了先检查这几项)
-- [可选：Nginx 反向代理（绑定域名 / 80 端口）](#可选nginx-反向代理绑定域名--80-端口)
-- [安全建议](#安全建议)
+- [云服务器 Web 界面访问指南](#云服务器-web-界面访问指南)
+  - [目录](#目录)
+  - [方式一：直接部署（pip + python）](#方式一直接部署pip--python)
+    - [第一步：修改 .env 中的监听地址](#第一步修改-env-中的监听地址)
+    - [第二步：启动服务](#第二步启动服务)
+    - [修改端口（可选）](#修改端口可选)
+  - [方式二：Docker Compose](#方式二docker-compose)
+    - [第一步：确认已有 .env 配置](#第一步确认已有-env-配置)
+    - [第二步：启动服务](#第二步启动服务-1)
+    - [修改端口（可选）](#修改端口可选-1)
+  - [如何在浏览器里打开界面](#如何在浏览器里打开界面)
+  - [如何确认 Docker 重建已生效](#如何确认-docker-重建已生效)
+  - [访问不了？先检查这几项](#访问不了先检查这几项)
+    - [1. 安全组 / 防火墙没有放行端口](#1-安全组--防火墙没有放行端口)
+    - [2. 服务器系统防火墙拦截了](#2-服务器系统防火墙拦截了)
+    - [3. 直接部署时 .env 里的 WEBUI\_HOST 没改](#3-直接部署时-env-里的-webui_host-没改)
+    - [4. 端口号对不上](#4-端口号对不上)
+    - [5. 页面能打开，但 UI 元素异常变大 / 布局错乱](#5-页面能打开但-ui-元素异常变大--布局错乱)
+  - [可选：Nginx 反向代理（绑定域名 / 80 端口）](#可选nginx-反向代理绑定域名--80-端口)
+    - [安装 Nginx](#安装-nginx)
+    - [配置文件示例](#配置文件示例)
+    - [启用配置并重启 Nginx](#启用配置并重启-nginx)
+  - [安全建议](#安全建议)
 
 ---
 
@@ -114,10 +130,10 @@ docker-compose -f ./docker/docker-compose.yml ps
 
 ### 修改端口（可选）
 
-默认端口是 8000。如果想改用其他端口，在 `.env` 里设置：
+Docker 的宿主机发布端口由 `WEBUI_DOCKER_PORT` 控制（默认 8888 `.env` 里设置：
 
 ```env
-WEBUI_PORT=8888
+WEBUI_DOCKER_PORT=8888
 ```
 
 然后重新启动容器：
@@ -126,6 +142,8 @@ WEBUI_PORT=8888
 docker-compose -f ./docker/docker-compose.yml down
 docker-compose -f ./docker/docker-compose.yml up -d
 ```
+
+> **迁移说明**：此前 Docker 宿主机端口由 `WEBUI_PORT` 控制（默认 8000）。现已改为专用变量 `WEBUI_DOCKER_PORT`（默认 8001），与本地开发监听端口（`WEBUI_PORT`）分离。如果你曾在 `.env` 中设置 `WEBUI_PORT=xxxx` 来控制 Docker 端口，请将其改为 `WEBUI_DOCKER_PORT=xxxx`。若希望保持原有 8000 端口行为，设置 `WEBUI_DOCKER_PORT=8000` 即可。
 
 ---
 
@@ -238,7 +256,7 @@ sudo firewall-cmd --reload
 检查访问地址里的端口是否和 `.env` / 启动命令里设置的端口一致。
 
 - 直接部署：默认 8000，可通过 `WEBUI_PORT=xxxx` 修改
-- Docker：默认 8000，可通过 `WEBUI_PORT=xxxx` 修改
+- Docker：默认 8001，可通过 `WEBUI_DOCKER_PORT=xxxx` 修改
 
 ### 5. 页面能打开，但 UI 元素异常变大 / 布局错乱
 
