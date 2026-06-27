@@ -27,6 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [改进] 将 Docker Compose 宿主机发布端口从 WEBUI_PORT 分离为专用变量 WEBUI_DOCKER_PORT（默认 8001），避免本地 dev 与 Docker 同时运行时端口冲突。此前通过 WEBUI_PORT 控制 Docker 宿主机端口的用户需迁移至 WEBUI_DOCKER_PORT（breaking），如需保持原 8000 端口可设置 WEBUI_DOCKER_PORT=8000。
 - [修复] 放宽 Longbridge SDK 最低版本约束，避免 Debian bookworm Docker 镜像因当前平台只能解析到 0.2.75 而构建失败；OAuth 能力继续在运行时检测并降级。
 - [修复] 修复 Docker Compose 中 `.env` 的 `WEBUI_PORT` 与容器内监听端口互相覆盖导致 WebUI 无法访问的问题。
+- [修复] 修复通知 Markdown 表格转换在空单元格后将后续内容错配到错误表头的问题。
+- [修复] 将 Docker 可安装的 Longbridge SDK 版本固定为 0.2.75，避免 `longbridge>=0.2.77` 从包索引消失后导致 docker-build 失败。
+
 - [改进] Web 设置页新增首次启动配置检查卡，串联基础配置状态、自选股入口、模型配置入口和一次简短试跑。
 - [修复] Web 设置页韩文 UI 下本地化通知测试失败消息与飞书通知选项标签，避免中文状态文案混入 알림 채널 설정。
 - [修复] Web 持仓页在韩文 UI 下本地化 CSV 导入、流水分页、账户校验等残留中文文案，并让持仓分析提交携带当前界面语言以生成对应语言的 AI 建议信号。
