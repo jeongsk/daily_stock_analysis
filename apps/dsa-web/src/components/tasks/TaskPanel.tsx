@@ -204,13 +204,13 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({
             <div className="flex items-center gap-2 text-xs text-muted-text">
               {processingCount > 0 && (
                 <span className="flex items-center gap-1">
-                  <StatusDot tone="info" pulse className="h-1.5 w-1.5" aria-label="进行中任务" />
+                  <StatusDot tone="info" pulse className="h-1.5 w-1.5" aria-label={t('taskPanel.processingAria')} />
                   {t('taskPanel.processingTasks', { count: processingCount })}
                 </span>
               )}
               {pendingCount > 0 ? (
                 <span className="flex items-center gap-1">
-                  <StatusDot tone="neutral" className="h-1.5 w-1.5" aria-label="等待中任务" />
+                  <StatusDot tone="neutral" className="h-1.5 w-1.5" aria-label={t('taskPanel.pendingAria')} />
                   {t('taskPanel.pendingTasks', { count: pendingCount })}
                 </span>
               ) : null}
