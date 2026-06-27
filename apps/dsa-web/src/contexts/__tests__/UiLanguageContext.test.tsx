@@ -102,7 +102,7 @@ describe('UiLanguageContext', () => {
     }
   });
 
-  it('switches UI language immediately and persists the explicit choice', () => {
+  it('opens a dropdown menu to switch UI language and persists the explicit choice', () => {
     localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'zh');
 
     render(
@@ -112,12 +112,19 @@ describe('UiLanguageContext', () => {
     );
 
     const toggle = screen.getByRole('button', { name: '切换界面语言' });
-    expect(screen.getByText('界面语言')).toBeInTheDocument();
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.getByText('中文')).toBeInTheDocument();
 
     fireEvent.click(toggle);
 
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+
+    const englishOption = screen.getByRole('menuitemradio', { name: 'English' });
+    fireEvent.click(englishOption);
+
     expect(localStorage.getItem(UI_LANGUAGE_STORAGE_KEY)).toBe('en');
-    expect(screen.getByRole('button', { name: 'Switch UI language' })).toBeInTheDocument();
+    const updatedToggle = screen.getByRole('button', { name: 'Switch UI language' });
+    expect(updatedToggle.getAttribute('aria-expanded')).toBe('false');
     expect(screen.getByText('English')).toBeInTheDocument();
   });
 });
