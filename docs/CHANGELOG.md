@@ -29,6 +29,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [改进] 将 Docker Compose 宿主机发布端口从 WEBUI_PORT 分离为专用变量 WEBUI_DOCKER_PORT（默认 8001），避免本地 dev 与 Docker 同时运行时端口冲突。此前通过 WEBUI_PORT 控制 Docker 宿主机端口的用户需迁移至 WEBUI_DOCKER_PORT（breaking），如需保持原 8000 端口可设置 WEBUI_DOCKER_PORT=8000。
 - [修复] 放宽 Longbridge SDK 最低版本约束，避免 Debian bookworm Docker 镜像因当前平台只能解析到 0.2.75 而构建失败；OAuth 能力继续在运行时检测并降级。
 - [修复] 修复 Docker Compose 中 `.env` 的 `WEBUI_PORT` 与容器内监听端口互相覆盖导致 WebUI 无法访问的问题。
+- [改进] TickFlow 扩展为可选 A 股日 K、实时行情、股票列表/名称数据源，并为日 K 请求增加 count、完整性校验和批量预取缓存保护。
+- [新功能] #1777 新增台股三大法人（institutional flows）资料层 fetcher `TwInstitutionalFetcher`：上市走 TWSE T86 legacy `rwd` 端点、上柜走 TPEx OpenAPI，正规化外资/投信/自营商/三大法人每日买卖超（单位股数，民国↔西元日期转换有单测），按日期+市场单日缓存，失败/限流/空响应一律 fail-open；仅 `.TW`/`.TWO` 生效、严格 additive，不改动现有市场流程、不接报告/Web/评分/`capital_flow_signal`。资料来源为政府开放资料（OGDL v1）。
+- [修复] API 异步批量分析共享概念板块排行缓存，避免同批多股重复拉取全市场概念排行。
+- [文档] 补齐概念板块排行字段契约与通知报告行业/概念类型列展示说明。
+- [新功能] #1742 新增信号归因分析功能（dashboard.signal_attribution），解释推荐理由的构成（技术指标、新闻舆情、基本面、市场环境的贡献度，以及最强看多/看空信号）。支持默认通知报告和 Jinja2 模板渲染，包含中英文国际化标签。归一化函数在 _parse_response() 和 parse_dashboard_json() 中显式调用，确保有效非零贡献度归一化到 100，all-zero 保留为 0（表示无有效信号）。
+- [改进] Agent 路径同步：更新 executor.py 和 decision_agent.py 的 prompt，确保 agent/multi-agent 分析时也生成 signal_attribution 字段。
+- [新功能] #1815 Phase 2 大盘复盘新增 `jp`/`kr` 市场：支持日经225/TOPIX、KOSPI/KOSDAQ 指数复盘，扩展 `MARKET_REVIEW_REGION`、交易日过滤、Web 设置枚举、市场 profile/strategy、文档与回归测试。
+- [改进] #1815 Phase 1 硬化日本/韩国 suffix-only 个股 MVP：集中 JP/KR/TW suffix 识别规则，扩充日韩股票种子索引，并为 yfinance 报价/基本面上下文补充市场、币种与数据质量元数据。
+- [文档] #1815 补充 JP/KR/TW suffix-only MVP 在外部 API、provider/model/base URL 与运行时配置上的边界说明：当前为结构化字段兼容验证且可回退到旧链路。
+- [文档] #1815 细化 PR 提交流程约束：.github/PULL_REQUEST_TEMPLATE.md 补充 Head CI 一致性、Web 设置变更可视证据、第三方兼容性声明与回滚说明要求，避免描述与验证状态/变更影响不一致。
 - [修复] 修复通知 Markdown 表格转换在空单元格后将后续内容错配到错误表头的问题。
 - [修复] 将 Docker 可安装的 Longbridge SDK 版本固定为 0.2.75，避免 `longbridge>=0.2.77` 从包索引消失后导致 docker-build 失败。
 - [修复] 持仓快照今日估值改为受限并发预取多只持仓实时价，减少持仓较多时 Web 组合页面刷新超时。
