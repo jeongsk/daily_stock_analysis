@@ -84,26 +84,30 @@ python scripts/check_ai_assets.py
 ### 运行应用
 
 ```bash
-python main.py
-python main.py --debug
-python main.py --dry-run
-python main.py --stocks 600519,hk00700,AAPL
-python main.py --market-review
-python main.py --schedule
-python main.py --serve
-python main.py --serve-only
-uvicorn server:app --reload --host 0.0.0.0 --port 8000
+uv sync
+uv run python main.py
+uv run python main.py --debug
+uv run python main.py --dry-run
+uv run python main.py --stocks 600519,hk00700,AAPL
+uv run python main.py --market-review
+uv run python main.py --schedule
+uv run python main.py --serve
+uv run python main.py --serve-only
+uv run uvicorn server:app --reload --host 0.0.0.0 --port 8000
 ```
+
+> 若未安装 uv，也可使用 pip 回退：`pip install -r requirements.txt && pip install flake8 pytest && python main.py`
 
 ### 后端验证
 
 ```bash
-pip install -r requirements.txt
-pip install flake8 pytest
-./scripts/ci_gate.sh
-python -m pytest -m "not network"
-python -m py_compile <changed_python_files>
+uv sync
+uv run ./scripts/ci_gate.sh
+uv run pytest -m "not network"
+uv run python -m py_compile <changed_python_files>
 ```
+
+> pip 回退：`pip install -r requirements.txt && pip install flake8 pytest && ./scripts/ci_gate.sh`
 
 ### Web / Desktop
 

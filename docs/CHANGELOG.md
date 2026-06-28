@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [改进] 本地开发环境 uv 导入（pyproject.toml 单源依赖 + uv.lock 锁定, CI/Docker 保持 pip 消费 requirements.txt）
 - [文档] 新增 `.env.example.ko` 韩文环境变量模板，并将韩文 README 的本地配置示例切换为该模板。
 - [文档] 新增韩文 README，并在现有 README 语言切换入口中补充韩文链接。
 - [改进] 将 Docker Compose 宿主机发布端口从 WEBUI_PORT 分离为专用变量 WEBUI_DOCKER_PORT（默认 8001），避免本地 dev 与 Docker 同时运行时端口冲突。此前通过 WEBUI_PORT 控制 Docker 宿主机端口的用户需迁移至 WEBUI_DOCKER_PORT（breaking），如需保持原 8000 端口可设置 WEBUI_DOCKER_PORT=8000。
@@ -52,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [文档] 补充回测请求链路说明：`analysis_date_from/analysis_date_to` 与 `code` 的输入边界、归一化与筛选顺序，以及历史行情不足或候选集为空时回测返回成功响应，在 `message` 与 `diagnostics`（含 `empty_reason`）中提供可诊断信息，并同步更新 `docs/full-guide.md`、`docs/full-guide_EN.md` 示例。
 - [修复] 回测代码匹配新增非法市场后缀/长度兜底：如 `600519.HK`、`600519.SZ`、`SH000001` 不再静默回落到其它有效代码，并在日期筛选重跑时对齐旧回测结果的分析日期，避免历史快照日期命中但结果列表仍为空。
 - [改进] UI 언어 선택을 순환 버튼에서 드롭다운(셀렉트박스)으로 변경
+- [修复] Web 个股报告详情在韩文 UI 下按当前界面语言展示阶段、摘要卡片、策略点位、资讯、数据上下文、运行诊断和透明度标签，并对既有中文结构化字段做显示层韩文转换。
 
 ## [3.23.0] - 2026-06-20
 

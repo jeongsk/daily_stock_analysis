@@ -22,6 +22,7 @@
 | [README](../README.md) | 项目定位、核心能力、快速开始、推送效果 |
 | [小白客户端安装与配置](beginner-client-setup.md) | 面向不会代码用户的客户端下载、Anspire Open / AIHubMix 模型配置、新闻源配置和常见问题 |
 | [完整配置与部署指南](full-guide.md) | 环境准备、运行方式、配置说明、部署路径和常见问题 |
+| [本地开发指南](local-development.md) | uv 本地开发环境设置、安装、运行、测试和 pip 回退 |
 | [FAQ](FAQ.md) | 常见配置、模型、通知、部署和运行问题 |
 | [更新日志](CHANGELOG.md) | 版本变化、能力调整和迁移说明 |
 

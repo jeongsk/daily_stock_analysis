@@ -143,25 +143,29 @@
 # 克隆项目
 git clone https://github.com/ZhuLinsen/daily_stock_analysis.git && cd daily_stock_analysis
 
-# 安装依赖
-pip install -r requirements.txt
+# 安装依赖 (推荐使用 uv)
+uv sync
+
+# 或使用 pip
+# pip install -r requirements.txt
 
 # 配置环境变量
 cp .env.example .env && vim .env
 
 # 运行分析
-python main.py
+uv run python main.py
+# 或 python main.py (已激活 .venv 时)
 ```
 
 常用命令：
 
 ```bash
-python main.py --debug
-python main.py --dry-run
-python main.py --stocks 600519,hk00700,AAPL
-python main.py --market-review
-python main.py --schedule
-python main.py --serve-only
+uv run python main.py --debug
+uv run python main.py --dry-run
+uv run python main.py --stocks 600519,hk00700,AAPL
+uv run python main.py --market-review
+uv run python main.py --schedule
+uv run python main.py --serve-only
 ```
 
 > Docker 部署、定时任务、云服务器访问请参考 [完整指南](docs/full-guide.md)；桌面客户端打包请参考 [桌面端打包说明](docs/desktop-package.md)。

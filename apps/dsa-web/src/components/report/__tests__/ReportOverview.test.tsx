@@ -79,6 +79,60 @@ describe('ReportOverview', () => {
     expect(screen.getByLabelText('Partial bar')).toBeInTheDocument();
   });
 
+  it('uses the requested Korean display language for persisted Chinese report values', () => {
+    render(
+      <ReportOverview
+        meta={{
+          ...baseMeta,
+          stockCode: 'AMD',
+          stockName: 'AMD',
+          marketPhaseSummary: {
+            market: 'us',
+            phase: 'postmarket',
+            marketLocalTime: '2026-03-21T16:30:00-04:00',
+            sessionDate: '2026-03-21',
+            effectiveDailyBarDate: '2026-03-21',
+            isTradingDay: true,
+            isMarketOpenNow: false,
+            isPartialBar: false,
+            minutesToOpen: null,
+            minutesToClose: null,
+            triggerSource: 'api',
+            analysisIntent: 'auto',
+            warnings: [],
+          },
+        }}
+        summary={{
+          analysisSummary: 'AMD处于中长期多头趋势中，均线多头排列。',
+          operationAdvice: '观望',
+          action: 'watch',
+          trendPrediction: '震荡',
+          sentimentScore: 55,
+        }}
+        details={{
+          belongBoards: [
+            { name: 'Technology', type: '行业' },
+            { name: 'Semiconductors', type: '概念' },
+          ],
+        }}
+        language="ko"
+      />,
+    );
+
+    expect(screen.getByText('시장 단계: US · 장후')).toBeVisible();
+    expect(screen.getByText('핵심 인사이트')).toBeVisible();
+    expect(screen.getByText(/AMD는 중장기 상승 추세/)).toBeVisible();
+    expect(screen.getByText('매매 제안')).toBeVisible();
+    expect(screen.getByText('관망')).toBeVisible();
+    expect(screen.getByText('추세 전망')).toBeVisible();
+    expect(screen.getByText('박스권')).toBeVisible();
+    expect(screen.getByText('관련 테마')).toBeVisible();
+    expect(screen.getByText('업종')).toBeVisible();
+    expect(screen.getByText('테마')).toBeVisible();
+    expect(screen.getByText('공포 탐욕 지수')).toBeVisible();
+    expect(screen.getByText('중립')).toBeVisible();
+  });
+
   it('renders unknown final phase without partial-bar label', () => {
     render(
       <ReportOverview

@@ -1,5 +1,5 @@
 import React from 'react';
-import type { AnalysisResult, AnalysisReport } from '../../types/analysis';
+import type { AnalysisResult, AnalysisReport, ReportLanguage } from '../../types/analysis';
 import { ReportOverview } from './ReportOverview';
 import { ReportStrategy } from './ReportStrategy';
 import { ReportNews } from './ReportNews';
@@ -20,6 +20,7 @@ interface ReportSummaryProps {
     actionMessage: string | null;
   };
   onOpenRunFlow?: (recordId: number) => void;
+  language?: ReportLanguage;
 }
 
 /**
@@ -31,6 +32,7 @@ export const ReportSummary: React.FC<ReportSummaryProps> = ({
   isHistory = false,
   watchlist,
   onOpenRunFlow,
+  language,
 }) => {
   // 兼容 AnalysisResult 和 AnalysisReport 两种数据格式
   const report: AnalysisReport = 'report' in data ? data.report : data;
@@ -39,7 +41,7 @@ export const ReportSummary: React.FC<ReportSummaryProps> = ({
   const diagnosticSummary = 'diagnosticSummary' in data ? data.diagnosticSummary : undefined;
 
   const { meta, summary, strategy, details } = report;
-  const reportLanguage = normalizeReportLanguage(meta.reportLanguage);
+  const reportLanguage = normalizeReportLanguage(language || meta.reportLanguage);
   const text = getReportText(reportLanguage);
   const modelUsed = (meta.modelUsed || '').trim();
   const shouldShowModel = Boolean(
@@ -64,6 +66,7 @@ export const ReportSummary: React.FC<ReportSummaryProps> = ({
         meta={meta}
         summary={summary}
         details={details}
+        language={reportLanguage}
         isHistory={isHistory}
         watchlist={watchlist}
       />

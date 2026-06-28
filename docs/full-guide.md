@@ -628,25 +628,32 @@ docker run -d \
 ### 安装依赖
 
 ```bash
-# Python 3.10+ 推荐
+# Python 3.11+ 推荐使用 uv
+uv sync
+
+# 或使用 pip
 pip install -r requirements.txt
 
 # 或使用 conda
-conda create -n stock python=3.10
+conda create -n stock python=3.11
 conda activate stock
 pip install -r requirements.txt
 ```
+
+> uv 安装方式与本地开发细节见 [本地开发指南](local-development.md)。
 
 Windows PowerShell 若仍使用系统默认代码页，首次安装依赖或运行环境检查前建议先启用 UTF-8，避免第三方工具或终端输出在中文字符上失败：
 
 ```powershell
 $env:PYTHONUTF8='1'
 $env:PYTHONIOENCODING='utf-8'
-python -m pip install -r requirements.txt
-python scripts/check_env.py --config
+uv run python scripts/check_env.py --config
+# 或
+# python -m pip install -r requirements.txt
+# python scripts/check_env.py --config
 ```
 
-**智能导入依赖**：`pypinyin`（名称→代码拼音匹配）和 `openpyxl`（Excel .xlsx 解析）已包含在 `requirements.txt` 中，执行上述 `pip install -r requirements.txt` 时会自动安装。若使用智能导入（图片/CSV/Excel/剪贴板）功能，请确保依赖已正确安装；缺失时可能报 `ModuleNotFoundError`。
+**智能导入依赖**：`pypinyin`（名称→代码拼音匹配）和 `openpyxl`（Excel .xlsx 解析）已包含在 `requirements.txt` 中，执行上述安装命令时会自动安装。若使用智能导入（图片/CSV/Excel/剪贴板）功能，请确保依赖已正确安装；缺失时可能报 `ModuleNotFoundError`。
 
 ### 命令行参数
 

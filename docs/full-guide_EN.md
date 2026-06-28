@@ -559,22 +559,29 @@ docker run -d \
 ### Install Dependencies
 
 ```bash
-# Python 3.10+ recommended
+# Python 3.11+ recommended, use uv for faster setup
+uv sync
+
+# Or use pip
 pip install -r requirements.txt
 
 # Or use conda
-conda create -n stock python=3.10
+conda create -n stock python=3.11
 conda activate stock
 pip install -r requirements.txt
 ```
+
+> See [Local Development Guide](local-development.md) for uv installation and development workflow details.
 
 On Windows PowerShell, if Python or pip still uses the system default code page, enable UTF-8 before the first dependency install or environment check. This keeps terminal output and third-party tooling from failing on non-ASCII text:
 
 ```powershell
 $env:PYTHONUTF8='1'
 $env:PYTHONIOENCODING='utf-8'
-python -m pip install -r requirements.txt
-python scripts/check_env.py --config
+uv run python scripts/check_env.py --config
+# Or
+# python -m pip install -r requirements.txt
+# python scripts/check_env.py --config
 ```
 
 ### Command Line Arguments

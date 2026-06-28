@@ -23,6 +23,7 @@ This is the entry point for project documentation. The README covers the project
 | --- | --- |
 | [README (EN)](README_EN.md) | Project overview, key features, quick start, sample output |
 | [Full Guide (EN)](full-guide_EN.md) | Environment setup, run modes, configuration, deployment paths, and common issues |
+| [Local Development Guide](local-development.md) | uv-based local dev environment setup, install, run, test, and pip fallback |
 | [FAQ (EN)](FAQ_EN.md) | Common configuration, model, notification, deployment, and runtime issues |
 | [Changelog](CHANGELOG.md) | Release notes, capability changes, and migration notes |
 
@@ -62,6 +63,7 @@ This is the entry point for project documentation. The README covers the project
 | Document | Contents |
 | --- | --- |
 | [API Spec](architecture/api_spec.json) | FastAPI OpenAPI artifact |
+| [Local Development Guide](local-development.md) | uv-based local dev environment setup, install, run, test, and pip fallback |
 | [Contributing Guide (EN)](CONTRIBUTING_EN.md) | Issues, pull requests, tests, documentation sync, and collaboration expectations |
 
 ## Languages

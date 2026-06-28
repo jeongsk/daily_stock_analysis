@@ -1024,6 +1024,7 @@ const HomePage: React.FC = () => {
                   <ReportSummary
                     data={selectedReport}
                     isHistory
+                    language={uiLanguage}
                     onOpenRunFlow={openHistoryRunFlow}
                     watchlist={{
                       isInWatchlist: watchlistState.isInWatchlist,

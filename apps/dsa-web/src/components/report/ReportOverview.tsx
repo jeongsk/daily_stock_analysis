@@ -8,12 +8,14 @@ import { Badge, Button, Card, ScoreGauge } from '../common';
 import { formatDateTime } from '../../utils/format';
 import { getMarketPhaseSummaryLabel, getPartialBarLabel } from '../../utils/marketPhase';
 import { getReportText, normalizeReportLanguage } from '../../utils/reportLanguage';
+import { formatReportDisplayText, getDecisionActionDisplayLabel } from '../../utils/reportDisplayText';
 import { useUiLanguage } from '../../contexts/UiLanguageContext';
 
 interface ReportOverviewProps {
   meta: ReportMeta;
   summary: ReportSummaryType;
   details?: ReportDetailsType;
+  language?: ReportMeta['reportLanguage'];
   isHistory?: boolean;
   watchlist?: {
     isInWatchlist: (code: string) => boolean;
@@ -85,10 +87,11 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
   meta,
   summary,
   details,
+  language,
   watchlist,
 }) => {
   const { t } = useUiLanguage();
-  const reportLanguage = normalizeReportLanguage(meta.reportLanguage);
+  const reportLanguage = normalizeReportLanguage(language || meta.reportLanguage);
   const text = getReportText(reportLanguage);
   const marketPhaseLabel = getMarketPhaseSummaryLabel(meta.marketPhaseSummary, reportLanguage);
   const partialBarLabel = meta.marketPhaseSummary?.isPartialBar === true
@@ -133,6 +136,11 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
     }
     return 'danger';
   };
+  const analysisSummary = formatReportDisplayText(summary.analysisSummary, reportLanguage);
+  const operationAdvice = getDecisionActionDisplayLabel(summary.action, reportLanguage)
+    || formatReportDisplayText(summary.actionLabel, reportLanguage)
+    || formatReportDisplayText(summary.operationAdvice, reportLanguage);
+  const trendPrediction = formatReportDisplayText(summary.trendPrediction, reportLanguage);
 
   return (
     <div className="space-y-5">
@@ -188,7 +196,7 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
             <div className="home-divider border-t pt-5">
               <span className="label-uppercase">{text.keyInsights}</span>
               <p className="mt-2 max-w-[62ch] whitespace-pre-wrap text-left text-[15px] leading-7 text-foreground">
-                {summary.analysisSummary || text.noAnalysisSummary}
+                {analysisSummary || text.noAnalysisSummary}
               </p>
             </div>
           </Card>
@@ -212,7 +220,7 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
                   <div className="space-y-1.5">
                     <h4 className="home-insight-title text-[11px] font-medium uppercase tracking-[0.16em]">{text.actionAdvice}</h4>
                     <p className="home-insight-body text-sm leading-6">
-                      {summary.operationAdvice || text.noAdvice}
+                      {operationAdvice || text.noAdvice}
                     </p>
                   </div>
                 </div>
@@ -240,7 +248,7 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
                             </span>
                             {board.type && (
                               <span className="home-board-pill rounded-full px-2 py-0.5 text-xs">
-                                {board.type}
+                                {formatReportDisplayText(board.type, reportLanguage)}
                               </span>
                             )}
                             {signal && (
@@ -285,7 +293,7 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
                 <div className="space-y-1.5">
                   <h4 className="home-insight-title text-[11px] font-medium uppercase tracking-[0.16em]">{text.trendPrediction}</h4>
                   <p className="home-insight-body text-sm leading-6">
-                    {summary.trendPrediction || text.noPrediction}
+                    {trendPrediction || text.noPrediction}
                   </p>
                 </div>
               </div>
