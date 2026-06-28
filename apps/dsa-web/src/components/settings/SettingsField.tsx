@@ -4,7 +4,7 @@ import { Badge, Button, Select, Input } from '../common';
 import type { ConfigValidationIssue, SystemConfigFieldSchema, SystemConfigItem } from '../../types/systemConfig';
 import { useUiLanguage } from '../../contexts/UiLanguageContext';
 import { getSettingsHelpContent } from '../../locales/settingsHelp';
-import { getFieldDescriptionZh, getFieldOptionLabel, getFieldTitleZh } from '../../utils/systemConfigI18n';
+import { getFieldDescription, getFieldOptionLabel, getFieldTitle } from '../../utils/systemConfigI18n';
 import type { UiLanguage, UiTextKey } from '../../i18n/uiText';
 import { cn } from '../../utils/cn';
 import { SettingsHelpButton } from './SettingsHelpButton';
@@ -225,10 +225,10 @@ export const SettingsField: React.FC<SettingsFieldProps> = ({
   const isMultiValue = isMultiValueField(item);
   const helpContent = getSettingsHelpContent(schema?.helpKey, schema?.description, language);
   const fallbackTitle = schema?.title ?? item.key;
-  const title = language === 'zh' ? getFieldTitleZh(item.key, fallbackTitle) : fallbackTitle;
+  const title = getFieldTitle(item.key, fallbackTitle, language);
   const description = language === 'en'
     ? helpContent?.summary ?? schema?.description ?? ''
-    : getFieldDescriptionZh(item.key, schema?.description);
+    : getFieldDescription(item.key, schema?.description, language);
   const hasError = issues.some((issue) => issue.severity === 'error');
   const [isPasswordEditable, setIsPasswordEditable] = useState(false);
   const controlId = `setting-${item.key}`;

@@ -273,6 +273,183 @@ function getSetupCheckStatusLabel(
   return t('settings.setupStatusOptional');
 }
 
+const setupCheckTitleMap: Partial<Record<UiLanguage, Record<string, string>>> = {
+  en: {
+    llm_primary: 'LLM primary channel',
+    llm_agent: 'Agent channel',
+    stock_list: 'Watchlist',
+    notification: 'Notification channel',
+    storage: 'Database / local storage',
+  },
+  ko: {
+    llm_primary: 'LLM 주 채널',
+    llm_agent: 'Agent 채널',
+    stock_list: '관심 종목',
+    notification: '알림 채널',
+    storage: '데이터베이스 / 로컬 저장소',
+  },
+};
+
+const setupMessageMap: Partial<Record<UiLanguage, Record<string, string>>> = {
+  en: {
+    '已启用 Codex CLI 本地生成 Backend（experimental/limited）。': 'Codex CLI local generation backend is enabled (experimental/limited).',
+    '已选择 codex_cli，但未找到 codex 可执行文件。': 'codex_cli is selected, but the codex executable was not found.',
+    '主模型未出现在当前 LiteLLM YAML model_list 中': 'The primary model is not in the current LiteLLM YAML model_list.',
+    '主模型未出现在当前启用渠道模型列表中': 'The primary model is not in the enabled channel model list.',
+    '主模型缺少可用渠道或匹配的 API Key': 'The primary model has no available channel or matching API key.',
+    '尚未检测到主模型配置': 'No primary model configuration was detected.',
+    'Agent 工具调用暂不支持 codex_cli text-only backend。': 'Agent tool calls do not support the codex_cli text-only backend yet.',
+    'Agent 工具调用将继续使用 LiteLLM 渠道。': 'Agent tool calls will continue using the LiteLLM channel.',
+    'AGENT_GENERATION_BACKEND 已选择 litellm，但未检测到可用 LiteLLM 模型配置。': 'AGENT_GENERATION_BACKEND is set to litellm, but no available LiteLLM model configuration was detected.',
+    'Agent 工具调用需要 LiteLLM 模型配置；codex_cli 主生成方式不会被自动继承。': 'Agent tool calls require a LiteLLM model configuration; the codex_cli primary generation backend is not inherited automatically.',
+    '未单独配置 Agent 主模型，将继承 LLM 主渠道。': 'No separate Agent primary model is configured; it will inherit the LLM primary channel.',
+    'Agent 未配置独立模型，且 LLM 主渠道尚不可用。': 'No separate Agent model is configured, and the LLM primary channel is not available yet.',
+    '当前 STOCK_LIST 为空。': 'STOCK_LIST is currently empty.',
+    '已检测到至少一个通知渠道配置。': 'At least one notification channel configuration was detected.',
+    '通知为可选项，未配置也不影响首次跑通。': 'Notifications are optional; leaving them unconfigured does not block the first run.',
+  },
+  ko: {
+    '已启用 Codex CLI 本地生成 Backend（experimental/limited）。': 'Codex CLI 로컬 생성 백엔드가 활성화되었습니다(실험/제한 기능).',
+    '已选择 codex_cli，但未找到 codex 可执行文件。': 'codex_cli가 선택되었지만 codex 실행 파일을 찾을 수 없습니다.',
+    '主模型未出现在当前 LiteLLM YAML model_list 中': '주 모델이 현재 LiteLLM YAML model_list에 없습니다.',
+    '主模型未出现在当前启用渠道模型列表中': '주 모델이 현재 활성화된 채널 모델 목록에 없습니다.',
+    '主模型缺少可用渠道或匹配的 API Key': '주 모델에 사용할 수 있는 채널 또는 일치하는 API Key가 없습니다.',
+    '尚未检测到主模型配置': '주 모델 설정이 아직 감지되지 않았습니다.',
+    'Agent 工具调用暂不支持 codex_cli text-only backend。': 'Agent 도구 호출은 아직 codex_cli text-only 백엔드를 지원하지 않습니다.',
+    'Agent 工具调用将继续使用 LiteLLM 渠道。': 'Agent 도구 호출은 계속 LiteLLM 채널을 사용합니다.',
+    'AGENT_GENERATION_BACKEND 已选择 litellm，但未检测到可用 LiteLLM 模型配置。': 'AGENT_GENERATION_BACKEND가 litellm으로 설정되었지만 사용할 수 있는 LiteLLM 모델 설정을 감지하지 못했습니다.',
+    'Agent 工具调用需要 LiteLLM 模型配置；codex_cli 主生成方式不会被自动继承。': 'Agent 도구 호출에는 LiteLLM 모델 설정이 필요합니다. codex_cli 주 생성 방식은 자동으로 상속되지 않습니다.',
+    '未单独配置 Agent 主模型，将继承 LLM 主渠道。': 'Agent 주 모델을 별도로 설정하지 않아 LLM 주 채널을 상속합니다.',
+    'Agent 未配置独立模型，且 LLM 主渠道尚不可用。': 'Agent 독립 모델이 설정되지 않았고 LLM 주 채널도 아직 사용할 수 없습니다.',
+    '当前 STOCK_LIST 为空。': '현재 STOCK_LIST가 비어 있습니다.',
+    '已检测到至少一个通知渠道配置。': '최소 하나 이상의 알림 채널 설정이 감지되었습니다.',
+    '通知为可选项，未配置也不影响首次跑通。': '알림은 선택 사항이며, 설정하지 않아도 최초 실행에는 영향이 없습니다.',
+  },
+};
+
+const setupNextStepMap: Partial<Record<UiLanguage, Record<string, string>>> = {
+  en: {
+    '请先安装并登录 Codex CLI，或将 GENERATION_BACKEND 设回 litellm。': 'Install and sign in to Codex CLI first, or set GENERATION_BACKEND back to litellm.',
+    '请配置 LITELLM_MODEL、LLM_CHANNELS、LITELLM_CONFIG 或 legacy provider API Key。': 'Configure LITELLM_MODEL, LLM_CHANNELS, LITELLM_CONFIG, or a legacy provider API key.',
+    '请将 AGENT_GENERATION_BACKEND 设为 auto 或 litellm，并配置 LiteLLM 工具调用渠道。': 'Set AGENT_GENERATION_BACKEND to auto or litellm, then configure a LiteLLM tool-calling channel.',
+    '如需使用 Ask-Stock Agent，请配置 AGENT_LITELLM_MODEL、LITELLM_MODEL、LLM_CHANNELS 或 LITELLM_CONFIG。': 'To use the Ask-Stock Agent, configure AGENT_LITELLM_MODEL, LITELLM_MODEL, LLM_CHANNELS, or LITELLM_CONFIG.',
+    '如需使用 Ask-Stock Agent，请配置 LiteLLM 模型，或将 AGENT_GENERATION_BACKEND 固定为 litellm 后补齐模型配置。': 'To use the Ask-Stock Agent, configure a LiteLLM model or set AGENT_GENERATION_BACKEND to litellm and complete the model setup.',
+    '请先补齐 LLM 主渠道配置。': 'Complete the LLM primary channel configuration first.',
+    '请调整 AGENT_LITELLM_MODEL 或补齐对应渠道配置。': 'Adjust AGENT_LITELLM_MODEL or complete the matching channel configuration.',
+    '请至少添加 1 只股票用于首次试跑。': 'Add at least one stock for the first smoke run.',
+    '需要推送时可稍后配置飞书、Telegram、邮件或其他通知渠道。': 'Configure Feishu, Telegram, email, or another notification channel later if delivery is needed.',
+    '请检查 DATABASE_PATH 或上级目录权限。': 'Check DATABASE_PATH or parent directory permissions.',
+    '请调整 DATABASE_PATH 或目录权限。': 'Adjust DATABASE_PATH or directory permissions.',
+  },
+  ko: {
+    '请先安装并登录 Codex CLI，或将 GENERATION_BACKEND 设回 litellm。': '먼저 Codex CLI를 설치하고 로그인하거나 GENERATION_BACKEND를 litellm으로 되돌리세요.',
+    '请配置 LITELLM_MODEL、LLM_CHANNELS、LITELLM_CONFIG 或 legacy provider API Key。': 'LITELLM_MODEL, LLM_CHANNELS, LITELLM_CONFIG 또는 legacy provider API Key를 설정하세요.',
+    '请将 AGENT_GENERATION_BACKEND 设为 auto 或 litellm，并配置 LiteLLM 工具调用渠道。': 'AGENT_GENERATION_BACKEND를 auto 또는 litellm으로 설정하고 LiteLLM 도구 호출 채널을 설정하세요.',
+    '如需使用 Ask-Stock Agent，请配置 AGENT_LITELLM_MODEL、LITELLM_MODEL、LLM_CHANNELS 或 LITELLM_CONFIG。': 'Ask-Stock Agent를 사용하려면 AGENT_LITELLM_MODEL, LITELLM_MODEL, LLM_CHANNELS 또는 LITELLM_CONFIG를 설정하세요.',
+    '如需使用 Ask-Stock Agent，请配置 LiteLLM 模型，或将 AGENT_GENERATION_BACKEND 固定为 litellm 后补齐模型配置。': 'Ask-Stock Agent를 사용하려면 LiteLLM 모델을 설정하거나 AGENT_GENERATION_BACKEND를 litellm으로 고정한 뒤 모델 설정을 완료하세요.',
+    '请先补齐 LLM 主渠道配置。': '먼저 LLM 주 채널 설정을 완료하세요.',
+    '请调整 AGENT_LITELLM_MODEL 或补齐对应渠道配置。': 'AGENT_LITELLM_MODEL을 조정하거나 해당 채널 설정을 완료하세요.',
+    '请至少添加 1 只股票用于首次试跑。': '최초 테스트 실행을 위해 최소 1개 종목을 추가하세요.',
+    '需要推送时可稍后配置飞书、Telegram、邮件或其他通知渠道。': '전송이 필요하면 나중에 Feishu, Telegram, 이메일 또는 기타 알림 채널을 설정하세요.',
+    '请检查 DATABASE_PATH 或上级目录权限。': 'DATABASE_PATH 또는 상위 디렉터리 권한을 확인하세요.',
+    '请调整 DATABASE_PATH 或目录权限。': 'DATABASE_PATH 또는 디렉터리 권한을 조정하세요.',
+  },
+};
+
+function getSetupCheckTitle(check: SetupStatusCheck, language: UiLanguage) {
+  return setupCheckTitleMap[language]?.[check.key] || check.title;
+}
+
+function getSetupSourceLabel(source: string, language: UiLanguage) {
+  const labels: Partial<Record<UiLanguage, Record<string, string>>> = {
+    en: {
+      显式主模型: 'explicit primary model',
+      'LiteLLM YAML': 'LiteLLM YAML',
+      'LLM 渠道': 'LLM channel',
+      'legacy provider': 'legacy provider',
+    },
+    ko: {
+      显式主模型: '명시적 주 모델',
+      'LiteLLM YAML': 'LiteLLM YAML',
+      'LLM 渠道': 'LLM 채널',
+      'legacy provider': 'legacy provider',
+    },
+  };
+  return labels[language]?.[source] || source;
+}
+
+function getSetupCheckMessage(check: SetupStatusCheck, language: UiLanguage) {
+  if (language === 'zh') {
+    return check.message;
+  }
+
+  const detectedModel = check.message.match(/^已检测到 (.+): (.+)$/);
+  if (detectedModel) {
+    const source = getSetupSourceLabel(detectedModel[1], language);
+    return language === 'ko'
+      ? `${source} 감지됨: ${detectedModel[2]}`
+      : `Detected ${source}: ${detectedModel[2]}`;
+  }
+
+  const agentModel = check.message.match(/^已配置 Agent 主模型: (.+)$/);
+  if (agentModel) {
+    return language === 'ko'
+      ? `Agent 주 모델 설정됨: ${agentModel[1]}`
+      : `Agent primary model configured: ${agentModel[1]}`;
+  }
+
+  const agentModelMissing = check.message.match(/^Agent 主模型 (.+) 缺少可用渠道或匹配的 API Key。$/);
+  if (agentModelMissing) {
+    return language === 'ko'
+      ? `Agent 주 모델 ${agentModelMissing[1]}에 사용할 수 있는 채널 또는 일치하는 API Key가 없습니다.`
+      : `Agent primary model ${agentModelMissing[1]} has no available channel or matching API key.`;
+  }
+
+  const stockCount = check.message.match(/^已配置 (\d+) 只股票。$/);
+  if (stockCount) {
+    return language === 'ko'
+      ? `${stockCount[1]}개 종목이 설정되었습니다.`
+      : `${stockCount[1]} stock(s) configured.`;
+  }
+
+  const dbAvailable = check.message.match(/^数据库路径可用: (.+)$/);
+  if (dbAvailable) {
+    return language === 'ko'
+      ? `데이터베이스 경로 사용 가능: ${dbAvailable[1]}`
+      : `Database path available: ${dbAvailable[1]}`;
+  }
+
+  const dbParentCreatable = check.message.match(/^数据库上级目录可创建: (.+)$/);
+  if (dbParentCreatable) {
+    return language === 'ko'
+      ? `데이터베이스 상위 디렉터리 생성 가능: ${dbParentCreatable[1]}`
+      : `Database parent directory can be created: ${dbParentCreatable[1]}`;
+  }
+
+  const dbParentUnavailable = check.message.match(/^数据库路径父目录不可用: (.+)$/);
+  if (dbParentUnavailable) {
+    return language === 'ko'
+      ? `데이터베이스 경로의 상위 디렉터리를 사용할 수 없습니다: ${dbParentUnavailable[1]}`
+      : `Database parent directory is unavailable: ${dbParentUnavailable[1]}`;
+  }
+
+  const dbParentNotWritable = check.message.match(/^数据库路径上级目录不可写: (.+)$/);
+  if (dbParentNotWritable) {
+    return language === 'ko'
+      ? `데이터베이스 경로의 상위 디렉터리에 쓸 수 없습니다: ${dbParentNotWritable[1]}`
+      : `Database parent directory is not writable: ${dbParentNotWritable[1]}`;
+  }
+
+  return setupMessageMap[language]?.[check.message] || check.message;
+}
+
+function getSetupCheckNextStep(check: SetupStatusCheck, language: UiLanguage) {
+  if (!check.nextStep || language === 'zh') {
+    return check.nextStep;
+  }
+  return setupNextStepMap[language]?.[check.nextStep] || check.nextStep;
+}
+
 type FirstRunSetupCardProps = {
   status: SetupStatusResponse | null;
   isLoading: boolean;
@@ -287,6 +464,7 @@ type FirstRunSetupCardProps = {
   onRunSmoke: () => void | Promise<void>;
   listSeparator: string;
   t: (key: UiTextKey, params?: Record<string, string | number>) => string;
+  language: UiLanguage;
 };
 
 const FirstRunSetupCard: React.FC<FirstRunSetupCardProps> = ({
@@ -303,6 +481,7 @@ const FirstRunSetupCard: React.FC<FirstRunSetupCardProps> = ({
   onRunSmoke,
   listSeparator,
   t,
+  language,
 }) => {
   const [isHidden, setIsHidden] = useState(false);
   const requiredMissing = status?.checks.filter((check) => check.required && check.status === 'needs_action') || [];
@@ -322,7 +501,7 @@ const FirstRunSetupCard: React.FC<FirstRunSetupCardProps> = ({
     : requiredMissing.length
       ? t('settings.setupGuideMissingSummary', {
         count: requiredMissing.length,
-        labels: requiredMissing.slice(0, 3).map((check) => check.title).join(listSeparator),
+        labels: requiredMissing.slice(0, 3).map((check) => getSetupCheckTitle(check, language)).join(listSeparator),
       })
       : t('settings.setupGuideReadySummary');
 
@@ -393,14 +572,14 @@ const FirstRunSetupCard: React.FC<FirstRunSetupCardProps> = ({
                   {getSetupCheckIcon(check)}
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
-                      <p className="text-sm font-semibold text-foreground">{check.title}</p>
+                      <p className="text-sm font-semibold text-foreground">{getSetupCheckTitle(check, language)}</p>
                       <span className="rounded-full border settings-border bg-background/60 px-2 py-0.5 text-[11px] font-medium text-muted-text">
                         {getSetupCheckStatusLabel(check, t)}
                       </span>
                     </div>
-                    <p className="mt-1 text-xs leading-5 text-muted-text">{check.message}</p>
+                    <p className="mt-1 text-xs leading-5 text-muted-text">{getSetupCheckMessage(check, language)}</p>
                     {check.nextStep ? (
-                      <p className="mt-2 text-xs leading-5 text-secondary-text">{check.nextStep}</p>
+                      <p className="mt-2 text-xs leading-5 text-secondary-text">{getSetupCheckNextStep(check, language)}</p>
                     ) : null}
                   </div>
                 </div>
@@ -1418,6 +1597,7 @@ const SettingsPage: React.FC = () => {
               onRunSmoke={handleRunSetupSmoke}
               listSeparator={uiLanguage === 'en' ? ', ' : '、'}
               t={t}
+              language={uiLanguage}
             />
             {alphasiftItem ? (
               <SettingsSectionCard

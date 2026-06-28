@@ -55,6 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [改进] UI 언어 선택을 순환 버튼에서 드롭다운(셀렉트박스)으로 변경
 - [修复] Web 个股报告详情在韩文 UI 下按当前界面语言展示阶段、摘要卡片、策略点位、资讯、数据上下文、运行诊断和透明度标签，并对既有中文结构化字段做显示层韩文转换。
 - [修复] Web 问股页在韩文 UI 下本地化快速问题示例与策略 skill 标签，避免中文策略名称混入韩文界面。
+- [修复] Web 设置页在韩文 UI 下本地化首次启动配置检查卡片和 `STOCK_LIST` 帮助说明，避免中文状态消息混入韩文界面。
 - [修复] Docker 与 CI 安装 hash-pinned `requirements.txt` 时，pip `--require-hashes` 模式无法校验 alphasift 这类 git 依赖导致构建失败；新增 `scripts/pip-install-requirements.sh` 将 git 依赖拆出单独安装，保留其余依赖的 hash 校验。
 - [修复] Docker bookworm 镜像（glibc 2.36）无法安装 longbridge 4.3.3（wheel 仅 manylinux_2_39），Docker 构建改用 bookworm 兼容的 0.2.75 并经安装脚本 `--exclude` 跳过其 hash 块；longbridge 为 Priority 5 可选数据源，CI（ubuntu-24.04）与本地 uv 不受影响仍用 4.3.3。
 

@@ -37,6 +37,43 @@ describe('SettingsField', () => {
     expect(screen.queryByLabelText('Stock List')).not.toBeInTheDocument();
   });
 
+  it('renders Korean title and description for stock list fields', () => {
+    localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'ko');
+
+    render(
+      <UiLanguageProvider>
+        <SettingsField
+          item={{
+            key: 'STOCK_LIST',
+            value: '600519',
+            rawValueExists: true,
+            isMasked: false,
+            schema: {
+              key: 'STOCK_LIST',
+              title: 'Stock List',
+              description: '使用逗号分隔股票代码，例如：600519,300750。',
+              category: 'base',
+              dataType: 'string',
+              uiControl: 'textarea',
+              isSensitive: false,
+              isRequired: false,
+              isEditable: true,
+              options: [],
+              validation: {},
+              displayOrder: 1,
+            },
+          }}
+          value="600519"
+          onChange={vi.fn()}
+        />
+      </UiLanguageProvider>
+    );
+
+    expect(screen.getByLabelText('관심 종목 목록')).toBeInTheDocument();
+    expect(screen.getByText('종목 코드는 쉼표로 구분하세요. 예: 600519,300750.')).toBeInTheDocument();
+    expect(screen.queryByText('使用逗号分隔股票代码，例如：600519,300750。')).not.toBeInTheDocument();
+  });
+
   it('renders sensitive field metadata and validation errors', () => {
     const onChange = vi.fn();
 

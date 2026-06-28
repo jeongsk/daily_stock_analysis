@@ -3,6 +3,8 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { resolveWebBuildInfo } from '../../utils/constants';
 import type { SetupStatusResponse } from '../../types/systemConfig';
+import { UiLanguageProvider } from '../../contexts/UiLanguageContext';
+import { UI_LANGUAGE_STORAGE_KEY } from '../../utils/uiLanguage';
 import SettingsPage from '../SettingsPage';
 
 const {
@@ -436,6 +438,7 @@ describe('SettingsPage', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.clearAllMocks();
+    localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'zh');
     Object.assign(webBuildInfoMock, {
       version: '3.11.0',
       rawVersion: '3.11.0',
@@ -574,6 +577,82 @@ describe('SettingsPage', () => {
     expect(setActiveCategory).toHaveBeenNthCalledWith(1, 'ai_model');
     expect(setActiveCategory).toHaveBeenNthCalledWith(2, 'base');
     expect(setActiveCategory).toHaveBeenNthCalledWith(3, 'notification');
+  });
+
+  it('renders first-run setup check titles and messages in Korean UI mode', async () => {
+    localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'ko');
+    getSetupStatus.mockResolvedValue({
+      isComplete: true,
+      readyForSmoke: true,
+      requiredMissingKeys: [],
+      nextStepKey: null,
+      checks: [
+        {
+          key: 'llm_primary',
+          title: 'LLM 主渠道',
+          category: 'ai_model',
+          required: true,
+          status: 'configured',
+          message: '已检测到 显式主模型: deepseek/deepseek-v4-flash',
+          nextStep: null,
+        },
+        {
+          key: 'llm_agent',
+          title: 'Agent 渠道',
+          category: 'agent',
+          required: true,
+          status: 'inherited',
+          message: '未单独配置 Agent 主模型，将继承 LLM 主渠道。',
+          nextStep: null,
+        },
+        {
+          key: 'stock_list',
+          title: '自选股',
+          category: 'base',
+          required: true,
+          status: 'configured',
+          message: '已配置 10 只股票。',
+          nextStep: null,
+        },
+        {
+          key: 'notification',
+          title: '通知渠道',
+          category: 'notification',
+          required: false,
+          status: 'configured',
+          message: '已检测到至少一个通知渠道配置。',
+          nextStep: null,
+        },
+        {
+          key: 'storage',
+          title: '数据库 / 本地存储',
+          category: 'system',
+          required: true,
+          status: 'configured',
+          message: '数据库路径可用: data/stock_analysis.db',
+          nextStep: null,
+        },
+      ],
+    });
+
+    render(
+      <UiLanguageProvider>
+        <SettingsPage />
+      </UiLanguageProvider>
+    );
+
+    expect(await screen.findByText('LLM 주 채널')).toBeInTheDocument();
+    expect(screen.getByText('명시적 주 모델 감지됨: deepseek/deepseek-v4-flash')).toBeInTheDocument();
+    expect(screen.getByText('Agent 채널')).toBeInTheDocument();
+    expect(screen.getByText('Agent 주 모델을 별도로 설정하지 않아 LLM 주 채널을 상속합니다.')).toBeInTheDocument();
+    expect(screen.getByText('관심 종목')).toBeInTheDocument();
+    expect(screen.getByText('10개 종목이 설정되었습니다.')).toBeInTheDocument();
+    expect(screen.getByText('알림 채널')).toBeInTheDocument();
+    expect(screen.getByText('최소 하나 이상의 알림 채널 설정이 감지되었습니다.')).toBeInTheDocument();
+    expect(screen.getByText('데이터베이스 / 로컬 저장소')).toBeInTheDocument();
+    expect(screen.getByText('데이터베이스 경로 사용 가능: data/stock_analysis.db')).toBeInTheDocument();
+    expect(screen.queryByText('LLM 主渠道')).not.toBeInTheDocument();
+    expect(screen.queryByText('已检测到 显式主模型: deepseek/deepseek-v4-flash')).not.toBeInTheDocument();
   });
 
   it('keeps first-run setup summary neutral while setup status is loading', async () => {

@@ -389,6 +389,24 @@ const fieldDescriptionMap: Record<string, string> = {
   BACKTEST_NEUTRAL_BAND_PCT: '中性区间阈值百分比，例如 2 表示 -2%~+2%。',
 };
 
+const fieldTitleLocaleMap: Partial<Record<UiLanguage, Record<string, string>>> = {
+  en: {
+    STOCK_LIST: 'Watchlist',
+  },
+  ko: {
+    STOCK_LIST: '관심 종목 목록',
+  },
+};
+
+const fieldDescriptionLocaleMap: Partial<Record<UiLanguage, Record<string, string>>> = {
+  en: {
+    STOCK_LIST: 'Separate stock codes with commas, for example: 600519,300750.',
+  },
+  ko: {
+    STOCK_LIST: '종목 코드는 쉼표로 구분하세요. 예: 600519,300750.',
+  },
+};
+
 const fieldOptionLabelMap: Record<string, Record<string, string>> = {
   NEWS_STRATEGY_PROFILE: {
     ultra_short: '超短线（1天）',
@@ -576,11 +594,19 @@ export function getCategoryDescription(category: SystemConfigCategory, fallback?
 }
 
 export function getFieldTitleZh(key: string, fallback?: string): string {
-  return fieldTitleMap[key] || fallback || key;
+  return getFieldTitle(key, fallback, 'zh');
 }
 
 export function getFieldDescriptionZh(key: string, fallback?: string): string {
-  return fieldDescriptionMap[key] || fallback || '';
+  return getFieldDescription(key, fallback, 'zh');
+}
+
+export function getFieldTitle(key: string, fallback?: string, locale: UiLanguage = 'zh'): string {
+  return fieldTitleLocaleMap[locale]?.[key] || fieldTitleMap[key] || fallback || key;
+}
+
+export function getFieldDescription(key: string, fallback?: string, locale: UiLanguage = 'zh'): string {
+  return fieldDescriptionLocaleMap[locale]?.[key] || fieldDescriptionMap[key] || fallback || '';
 }
 
 export function getFieldOptionLabelZh(key: string, value: string, fallbackLabel?: string): string {
