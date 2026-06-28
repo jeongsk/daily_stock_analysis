@@ -39,6 +39,18 @@ from src.config import (
     resolve_litellm_wire_model,
     resolve_news_window_days,
 )
+from src.llm.hermes import (
+    HERMES_CHANNEL_NAME,
+    build_hermes_redaction_values,
+    canonicalize_hermes_model_ref,
+    filter_non_hermes_deployments,
+    hermes_blocked_route_candidates,
+    is_masked_secret_placeholder,
+    open_hermes_no_proxy_client,
+    route_deployment_origins,
+    route_has_hermes,
+    sanitize_hermes_error_text,
+)
 from src.llm.generation_params import apply_litellm_generation_params
 from src.llm.errors import call_litellm_with_param_recovery
 from src.llm.backend_registry import (
@@ -2376,6 +2388,9 @@ class GeminiAnalyzer:
     def _init_litellm(self) -> None:
         """Initialize litellm Router from channels / YAML / legacy keys."""
         config = self._get_runtime_config()
+        if self._get_hermes_config_error(config) is not None:
+            logger.error("Analyzer LLM: Hermes channel configuration blocks legacy fallback")
+            return
         litellm_model = config.litellm_model
         if not litellm_model:
             backend_id = ""
@@ -2397,9 +2412,23 @@ class GeminiAnalyzer:
         # --- Channel / YAML path: build Router from pre-built model_list ---
         if self._has_channel_config(config):
             model_list = config.llm_model_list
+            if self._get_mixed_hermes_route_error(config, litellm_model) is not None:
+                self._litellm_available = False
+                logger.error("Analyzer LLM: mixed Hermes/non-Hermes route requires deployment-level no-proxy support")
+                return
+            router_model_list = model_list
+            if route_has_hermes(model_list, litellm_model):
+                # Hermes-only routes are dispatched directly with a request-scoped
+                # no-proxy OpenAI client. Keeping them out of Router prevents the
+                # default proxy-aware transport from seeing the Hermes bearer key.
+                router_model_list = filter_non_hermes_deployments(model_list)
+                if not router_model_list:
+                    self._litellm_available = True
+                    logger.info("Analyzer LLM: Hermes-only route will use direct no-proxy completion")
+                    return
             try:
                 self._router = Router(
-                    model_list=model_list,
+                    model_list=router_model_list,
                     routing_strategy="simple-shuffle",
                     num_retries=2,
                 )
@@ -2412,7 +2441,7 @@ class GeminiAnalyzer:
                 ))
                 logger.info(
                     f"Analyzer LLM: Router initialized from channels/YAML — "
-                    f"{len(model_list)} deployment(s), models: {unique_models}"
+                    f"{len(router_model_list)} deployment(s), models: {unique_models}"
                 )
                 return
 
@@ -2502,6 +2531,14 @@ class GeminiAnalyzer:
         """Return a structured backend config error, if the backend cannot run."""
         try:
             backend_id, _fallback_backend_id = self._resolve_generation_backend_config()
+            config = self._get_runtime_config()
+            hermes_error = self._get_hermes_config_error(config)
+            if hermes_error is not None:
+                return hermes_error
+            for model in [getattr(config, "litellm_model", "")] + list(getattr(config, "litellm_fallback_models", []) or []):
+                mixed_error = self._get_mixed_hermes_route_error(config, model)
+                if mixed_error is not None:
+                    return mixed_error
             if backend_id == CODEX_CLI_BACKEND_ID:
                 backend = self._get_generation_backend(backend_id)
                 get_config_error = getattr(backend, "get_config_error", None)
@@ -2510,6 +2547,113 @@ class GeminiAnalyzer:
         except GenerationError as exc:
             return exc
         return None
+
+    def _get_hermes_config_error(self, config: Config) -> Optional[GenerationError]:
+        issues = list(getattr(config, "llm_channel_config_issues", []) or [])
+        if not getattr(config, "llm_blocks_legacy_fallback", False) or not issues:
+            return None
+        blocked_routes = set(getattr(config, "llm_blocked_hermes_routes", []) or [])
+        selected_models = [
+            ("LITELLM_MODEL", getattr(config, "litellm_model", "") or ""),
+            *[
+                ("LITELLM_FALLBACK_MODELS", fallback_model)
+                for fallback_model in list(getattr(config, "litellm_fallback_models", []) or [])
+            ],
+        ]
+        selected_blocked_route = ""
+        selected_field = ""
+        for field_name, model in selected_models:
+            raw_model = str(model or "").strip()
+            if not raw_model:
+                continue
+            candidates = hermes_blocked_route_candidates(raw_model)
+            candidates.add(raw_model)
+            try:
+                candidates.add(canonicalize_hermes_model_ref(raw_model).route_model)
+            except (TypeError, ValueError) as exc:
+                logger.debug("Failed to canonicalize selected Hermes route candidate %r: %s", raw_model, exc)
+            matched = candidates & blocked_routes
+            if matched:
+                selected_blocked_route = sorted(matched)[0]
+                selected_field = field_name
+                break
+        if blocked_routes and not selected_blocked_route and getattr(config, "llm_model_list", None):
+            return None
+        first = issues[0]
+        code = (
+            "explicit_hermes_route_invalid"
+            if selected_blocked_route
+            else first.get("code", "invalid_hermes_channel")
+        )
+        return GenerationError(
+            error_code=GenerationErrorCode.UNSAFE_CONFIG,
+            stage="configuration",
+            retryable=False,
+            fallbackable=False,
+            backend=LITELLM_BACKEND_ID,
+            provider=HERMES_CHANNEL_NAME,
+            details={
+                "field": selected_field or first.get("field", "LLM_HERMES_API_KEY"),
+                "code": code,
+                "reason": code,
+                "message": first.get("message", "Hermes channel configuration is invalid"),
+                "issues": issues,
+                "route_name": selected_blocked_route or None,
+            },
+        )
+
+    def _get_mixed_hermes_route_error(self, config: Config, model: str) -> Optional[GenerationError]:
+        if not model:
+            return None
+        origins = route_deployment_origins(getattr(config, "llm_model_list", []) or [], model)
+        if not origins.is_mixed:
+            return None
+        return GenerationError(
+            error_code=GenerationErrorCode.UNSAFE_CONFIG,
+            stage="configuration",
+            retryable=False,
+            fallbackable=False,
+            backend=LITELLM_BACKEND_ID,
+            provider=HERMES_CHANNEL_NAME,
+            details={
+                "field": "LLM_CHANNELS",
+                "code": "mixed_hermes_route_unsupported",
+                "reason": "router_deployment_no_proxy_unavailable",
+                "route_name": model,
+            },
+        )
+
+    def _hermes_redaction_values_for_model(self, config: Config, model: str = "") -> set[str]:
+        redactions: set[str] = set()
+        deployments = list(getattr(config, "llm_model_list", []) or [])
+        selected_deployments = deployments
+        if model:
+            origins = route_deployment_origins(deployments, model)
+            selected_deployments = list(origins.hermes_deployments or [])
+            if not selected_deployments and not origins.has_hermes:
+                return redactions
+        for deployment in selected_deployments:
+            if not isinstance(deployment, dict):
+                continue
+            if not route_has_hermes([deployment], str(deployment.get("model_name") or "")):
+                continue
+            params = deployment.get("litellm_params") or {}
+            if isinstance(params, dict):
+                redactions.update(build_hermes_redaction_values(params.get("api_key")))
+        return redactions
+
+    def _sanitize_hermes_exception_text(
+        self,
+        exc: Any,
+        *,
+        config: Optional[Config] = None,
+        model: str = "",
+    ) -> str:
+        runtime_config = config or self._get_runtime_config()
+        redactions = self._hermes_redaction_values_for_model(runtime_config, model)
+        if not redactions:
+            return str(exc)
+        return sanitize_hermes_error_text(exc, redaction_values=redactions)
 
     def _dispatch_litellm_completion(
         self,
@@ -2521,6 +2665,26 @@ class GeminiAnalyzer:
         router_model_names: set[str],
     ) -> Any:
         """Dispatch a LiteLLM completion through router or direct fallback."""
+        origins = route_deployment_origins(config.llm_model_list, model)
+        if origins.is_mixed:
+            raise RuntimeError("Hermes/non-Hermes mixed generation route is not supported without deployment-level no-proxy client support")
+        if origins.is_hermes_only:
+            deployment = origins.hermes_deployments[0]
+            params = dict(deployment.get("litellm_params") or {})
+            api_key = str(params.get("api_key") or "").strip()
+            base_url = str(params.get("api_base") or "").strip()
+            if is_masked_secret_placeholder(api_key):
+                raise RuntimeError("Hermes API key is a masked placeholder and cannot be used for generation")
+            timeout = float(call_kwargs.get("timeout") or 30.0)
+            hermes_kwargs = dict(call_kwargs)
+            hermes_kwargs["model"] = str(params.get("model") or model)
+            hermes_kwargs["stream"] = False
+            hermes_kwargs.pop("api_key", None)
+            hermes_kwargs.pop("api_base", None)
+            with open_hermes_no_proxy_client(api_key=api_key, base_url=base_url, timeout=timeout) as client:
+                hermes_kwargs["client"] = client
+                return litellm.completion(**hermes_kwargs)
+
         wire_models = resolve_fallback_litellm_wire_models(model, config.llm_model_list)
         register_fallback_model_pricing(wire_models)
         effective_kwargs = dict(call_kwargs)
@@ -2725,6 +2889,9 @@ class GeminiAnalyzer:
         audit_context: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, str, Dict[str, Any]]:
         """Compatibility wrapper around the configured generation backend."""
+        preflight_error = self.get_generation_backend_config_error()
+        if preflight_error is not None and not self._can_use_generation_fallback(preflight_error):
+            raise preflight_error
         backend_id, fallback_backend_id = self._resolve_generation_backend_config()
         try:
             result = self._get_generation_backend(backend_id).generate(
@@ -2871,6 +3038,8 @@ class GeminiAnalyzer:
         effective_system_prompt = system_prompt or self.TEXT_SYSTEM_PROMPT
         router_model_names = set(get_configured_llm_models(config.llm_model_list))
         for model in models_to_try:
+            origins = route_deployment_origins(config.llm_model_list, model)
+            model_stream = bool(stream and not origins.has_hermes)
             recovery_model_list = config.llm_model_list
             legacy_router_model_list = getattr(self, "_legacy_router_model_list", None) or []
             if legacy_router_model_list and model == config.litellm_model and not use_channel_router:
@@ -2949,7 +3118,7 @@ class GeminiAnalyzer:
                 _stream_text: Optional[str] = None
                 _stream_usage: Dict[str, Any] = {}
 
-                if stream:
+                if model_stream:
                     try:
                         stream_response = call_litellm_with_param_recovery(
                             lambda kwargs: self._dispatch_litellm_completion(
@@ -3036,8 +3205,9 @@ class GeminiAnalyzer:
                 raise ValueError("LLM returned empty response")
 
             except Exception as e:
-                logger.warning(f"[LiteLLM] {model} failed: {e}")
-                last_error = e
+                safe_error = self._sanitize_hermes_exception_text(e, config=config, model=model)
+                logger.warning("[LiteLLM] %s failed: %s", model, safe_error)
+                last_error = RuntimeError(safe_error) if safe_error != str(e) else e
                 continue
 
         raise _AllModelsFailedError(
@@ -3366,7 +3536,8 @@ class GeminiAnalyzer:
             return result
             
         except Exception as e:
-            logger.error(f"AI 分析 {name}({code}) 失败: {e}")
+            safe_error = self._sanitize_hermes_exception_text(e)
+            logger.error("AI 分析 %s(%s) 失败: %s", name, code, safe_error)
             return AnalysisResult(
                 code=code,
                 name=name,
@@ -3374,10 +3545,10 @@ class GeminiAnalyzer:
                 trend_prediction=localize_trend_prediction("sideways", report_language),
                 operation_advice=localize_operation_advice("hold", report_language),
                 confidence_level=localize_confidence_level("low", report_language),
-                analysis_summary=(f'Analysis failed: {str(e)[:100]}' if report_language == "en" else f'분석 중 오류 발생: {str(e)[:100]}' if report_language == "ko" else f'分析过程出错: {str(e)[:100]}'),
+                analysis_summary=(f'Analysis failed: {safe_error[:100]}' if report_language == "en" else f'분석 중 오류 발생: {safe_error[:100]}' if report_language == "ko" else f'分析过程出错: {safe_error[:100]}'),
                 risk_warning='Analysis failed. Please retry later or review manually.' if report_language == "en" else '분석에 실패했습니다. 잠시 후 다시 시도하거나 수동으로 확인해 주세요.' if report_language == "ko" else '分析失败，请稍后重试或手动分析',
                 success=False,
-                error_message=str(e),
+                error_message=safe_error,
                 model_used=None,
                 report_language=report_language,
             )
