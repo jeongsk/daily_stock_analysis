@@ -341,6 +341,15 @@ describe('PortfolioPage FX refresh', () => {
     );
   }
 
+  function renderKoreanPage() {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'ko');
+    render(
+      <UiLanguageProvider>
+        <PortfolioPage />
+      </UiLanguageProvider>,
+    );
+  }
+
   it('renders stale FX status with a manual refresh button', async () => {
     render(<PortfolioPage />);
 
@@ -364,6 +373,37 @@ describe('PortfolioPage FX refresh', () => {
     expect(screen.getByText('AI risk signals')).toBeInTheDocument();
     expect(screen.getByText('No defensive signals')).toBeInTheDocument();
     expect(screen.queryByText('回撤监控')).not.toBeInTheDocument();
+  });
+
+  it('renders manual entry, CSV import, and event controls in Korean UI mode', async () => {
+    renderKoreanPage();
+
+    await waitForInitialLoad();
+
+    expect(screen.getByPlaceholderText('통화(선택, 기본값 계좌 기준 통화)')).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'huatai (화타이)' })).toBeInTheDocument();
+    expect(screen.getByText('CSV 선택')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '파일 파싱' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '가져오기 제출' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '원장 새로고침' })).toBeInTheDocument();
+    expect(screen.getByText('삭제 수정은 단일 계좌 보기에서만 사용할 수 있습니다. 오류 내역을 삭제하기 전에 특정 계좌를 선택하세요.')).toBeInTheDocument();
+    expect(screen.getByText('필터 조건을 조정하거나 거래, 자금 흐름 또는 기업 이벤트를 먼저 입력하세요.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '이전' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '다음' })).toBeInTheDocument();
+    expect(screen.queryByText('选择 CSV')).not.toBeInTheDocument();
+    expect(screen.queryByText('刷新流水')).not.toBeInTheDocument();
+  });
+
+  it('renders account-name validation in Korean UI mode', async () => {
+    getAccounts.mockResolvedValueOnce(makeAccounts([]));
+    renderKoreanPage();
+
+    await waitForInitialLoad();
+
+    fireEvent.click(screen.getByRole('button', { name: '계좌 생성' }));
+
+    expect(await screen.findByText('계좌명을 입력하세요.')).toBeInTheDocument();
+    expect(screen.queryByText('账户名称不能为空。')).not.toBeInTheDocument();
   });
 
   it('renders portfolio decision signal risk summary', async () => {
@@ -837,6 +877,7 @@ describe('PortfolioPage FX refresh', () => {
         accountId: 1,
         analysisPhase: 'auto',
         force: false,
+        reportLanguage: 'zh',
       });
     });
     expect(await screen.findByText('已提交 HK00700 分析任务：task-portfolio-1')).toBeInTheDocument();

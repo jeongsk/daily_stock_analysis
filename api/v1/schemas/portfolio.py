@@ -172,6 +172,7 @@ class PortfolioPositionAnalysisRequest(BaseModel):
     account_id: Optional[int] = Field(None, description="Optional account id; required when a symbol is held in multiple accounts")
     analysis_phase: Literal["auto", "premarket", "intraday", "postmarket"] = "auto"
     force: bool = Field(False, description="Force refresh analysis inputs without bypassing duplicate in-flight tasks")
+    report_language: Optional[Literal["zh", "en", "ko"]] = Field(None, description="Optional report language override for generated analysis output")
 
 
 class PortfolioAccountSnapshot(BaseModel):

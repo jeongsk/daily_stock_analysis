@@ -63,6 +63,19 @@ const LOCALE_BY_LANGUAGE: Record<UiLanguage, string> = {
   ko: 'ko-KR',
 };
 
+const STOCK_NAME_DISPLAY_MAP: Record<string, Partial<Record<UiLanguage, string>>> = {
+  科创芯片ETF: {
+    en: 'STAR Market Chip ETF',
+    ko: 'STAR Market 칩 ETF',
+  },
+};
+
+function getStockNameDisplayText(value: string | null | undefined, language: UiLanguage): string | null {
+  const normalized = value?.trim();
+  if (!normalized) return null;
+  return STOCK_NAME_DISPLAY_MAP[normalized]?.[language] ?? normalized;
+}
+
 function formatDateTime(value: string | null | undefined, language: UiLanguage): string {
   const date = parseDecisionSignalDate(value);
   if (!date) return '-';
@@ -209,6 +222,7 @@ type DecisionSignalCardProps = {
 
 export const DecisionSignalCard: React.FC<DecisionSignalCardProps> = ({ item, onSelect, selected = false }) => {
   const { language, t } = useUiLanguage();
+  const stockNameDisplay = getStockNameDisplayText(item.stockName, language) || item.stockCode;
   const actionLabel = getActionLabel(item, t);
   const interactive = Boolean(onSelect);
   const entryRange = formatEntryRange(item);
@@ -232,7 +246,7 @@ export const DecisionSignalCard: React.FC<DecisionSignalCardProps> = ({ item, on
             <span className="font-mono text-sm text-secondary-text">{item.stockCode}</span>
           </div>
           <h3 className="mt-2 text-base font-semibold text-foreground">
-            {item.stockName || item.stockCode}
+            {stockNameDisplay}
           </h3>
         </div>
         <div className="text-right text-xs text-secondary-text">
@@ -291,7 +305,7 @@ export const DecisionSignalCard: React.FC<DecisionSignalCardProps> = ({ item, on
           type="button"
           onClick={() => onSelect?.(item)}
           className="btn-secondary inline-flex items-center gap-1.5 !px-3 !py-1.5 !text-xs"
-          aria-label={t('decisionSignals.viewDetailsFor', { stock: item.stockName || item.stockCode })}
+          aria-label={t('decisionSignals.viewDetailsFor', { stock: stockNameDisplay })}
         >
           <PanelRightOpen className="h-3.5 w-3.5" />
           {t('common.details')}
@@ -339,6 +353,7 @@ export const DecisionSignalDetails: React.FC<DecisionSignalDetailsProps> = ({
   onFeedbackSubmit,
 }) => {
   const { language, t } = useUiLanguage();
+  const stockNameDisplay = getStockNameDisplayText(item.stockName, language) || item.stockCode;
   const actionLabel = getActionLabel(item, t);
   const entryRange = formatEntryRange(item);
   const evidenceData = asJsonViewerData(item.evidence);
@@ -353,7 +368,7 @@ export const DecisionSignalDetails: React.FC<DecisionSignalDetailsProps> = ({
             <Badge variant={getActionVariant(item)} size="md">{actionLabel}</Badge>
             <Badge variant={STATUS_VARIANTS[item.status]} size="md">{t(STATUS_LABEL_KEYS[item.status])}</Badge>
           </div>
-          <h3 className="mt-3 text-xl font-semibold text-foreground">{item.stockName || item.stockCode}</h3>
+          <h3 className="mt-3 text-xl font-semibold text-foreground">{stockNameDisplay}</h3>
           <p className="mt-1 font-mono text-sm text-secondary-text">{item.stockCode} · {getDecisionSignalMarketLabel(item.market, t)}</p>
         </div>
         {actions ? <div className="flex flex-wrap gap-2">{actions}</div> : null}

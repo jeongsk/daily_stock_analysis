@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type React from 'react';
 import { Send } from 'lucide-react';
 import { useUiLanguage } from '../../contexts/UiLanguageContext';
-import type { UiLanguage } from '../../i18n/uiText';
+import type { UiLanguage, UiTextKey, UiTextParams } from '../../i18n/uiText';
 import { getParsedApiError, type ParsedApiError } from '../../api/error';
 import { systemConfigApi } from '../../api/systemConfig';
 import type {
@@ -34,6 +34,44 @@ function getChannelOptions(language: UiLanguage): Array<{ value: NotificationTes
     { value: 'slack', label: 'Slack' },
     { value: 'astrbot', label: 'AstrBot' },
   ];
+}
+
+function getChannelDisplayName(
+  channel: string,
+  options: Array<{ value: NotificationTestChannel; label: string }>,
+): string {
+  return options.find((option) => option.value === channel.toLowerCase())?.label ?? channel;
+}
+
+function formatBackendNotificationMessage(
+  message: string,
+  language: UiLanguage,
+  channelOptions: Array<{ value: NotificationTestChannel; label: string }>,
+  t: (key: UiTextKey, params?: UiTextParams) => string,
+): string {
+  if (language === 'zh') {
+    return message;
+  }
+
+  const trimmed = message.trim();
+  if (trimmed === '通知测试发送失败') {
+    return t('settings.notificationTestSendFailed');
+  }
+
+  const exceptionPrefix = '通知测试异常: ';
+  if (trimmed.startsWith(exceptionPrefix)) {
+    return t('settings.notificationTestException', { reason: trimmed.slice(exceptionPrefix.length) });
+  }
+
+  const failureSuffix = ' 通知测试失败';
+  if (trimmed.endsWith(failureSuffix)) {
+    const channelName = trimmed.slice(0, -failureSuffix.length);
+    return t('settings.notificationTestChannelFailure', {
+      channel: getChannelDisplayName(channelName, channelOptions),
+    });
+  }
+
+  return message;
 }
 
 interface NotificationTestPanelProps {
@@ -68,6 +106,7 @@ export const NotificationTestPanel: React.FC<NotificationTestPanelProps> = ({
     () => items.map((item) => ({ key: item.key, value: String(item.value ?? '') })),
     [items],
   );
+  const channelOptions = useMemo(() => getChannelOptions(language), [language]);
 
   useEffect(() => {
     if (!isTitleEdited) {
@@ -122,7 +161,7 @@ export const NotificationTestPanel: React.FC<NotificationTestPanelProps> = ({
         <Select
           label={t('settings.notificationTestChannel')}
           value={channel}
-          options={getChannelOptions(language)}
+          options={channelOptions}
           disabled={disabled || isTesting}
           onChange={(value) => setChannel(value as NotificationTestChannel)}
         />
@@ -172,7 +211,7 @@ export const NotificationTestPanel: React.FC<NotificationTestPanelProps> = ({
             title={result.success ? t('settings.notificationTestSuccess') : t('settings.notificationTestFailure')}
             message={(
               <span>
-                {result.message}
+                {formatBackendNotificationMessage(result.message, language, channelOptions, t)}
                 {typeof result.latencyMs === 'number' ? ` · ${result.latencyMs} ms` : ''}
                 {result.errorCode ? ` · ${result.errorCode}` : ''}
               </span>
@@ -193,7 +232,7 @@ export const NotificationTestPanel: React.FC<NotificationTestPanelProps> = ({
                           {attempt.success ? t('common.success') : t('common.failure')}
                         </Badge>
                         <span className="text-sm font-medium text-foreground">
-                          Attempt {index + 1}
+                          {t('settings.notificationTestAttempt')} {index + 1}
                         </span>
                         {typeof attempt.httpStatus === 'number' ? (
                           <span className="text-xs text-muted-text">HTTP {attempt.httpStatus}</span>
@@ -212,7 +251,9 @@ export const NotificationTestPanel: React.FC<NotificationTestPanelProps> = ({
                       </Badge>
                     ) : null}
                   </div>
-                  <p className="mt-2 text-xs leading-5 text-secondary-text">{attempt.message}</p>
+                  <p className="mt-2 text-xs leading-5 text-secondary-text">
+                    {formatBackendNotificationMessage(attempt.message, language, channelOptions, t)}
+                  </p>
                 </div>
               ))}
             </div>

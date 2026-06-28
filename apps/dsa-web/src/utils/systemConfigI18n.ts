@@ -395,6 +395,12 @@ const fieldTitleLocaleMap: Partial<Record<UiLanguage, Record<string, string>>> =
   },
   ko: {
     STOCK_LIST: '관심 종목 목록',
+    GENERATION_BACKEND: '분석 생성 방식',
+    GENERATION_FALLBACK_BACKEND: '대체 생성 방식',
+    GENERATION_BACKEND_TIMEOUT_SECONDS: '생성 백엔드 타임아웃',
+    GENERATION_BACKEND_MAX_OUTPUT_BYTES: '생성 백엔드 최대 출력 바이트',
+    GENERATION_BACKEND_MAX_CONCURRENCY: '생성 백엔드 최대 동시 실행',
+    LOCAL_CLI_BACKEND_MAX_CONCURRENCY: '로컬 명령줄 최대 동시 실행',
   },
 };
 
@@ -404,6 +410,12 @@ const fieldDescriptionLocaleMap: Partial<Record<UiLanguage, Record<string, strin
   },
   ko: {
     STOCK_LIST: '종목 코드는 쉼표로 구분하세요. 예: 600519,300750.',
+    GENERATION_BACKEND: '개별 종목 분석, 시장 리뷰 및 일반 텍스트 생성에 사용됩니다. Codex CLI는 로컬에 설치 및 로그인되어 있어야 하며, 해당 클라우드 서비스를 호출할 수 있는 로컬 명령줄 프로그램입니다. 오프라인 모델이 아닙니다.',
+    GENERATION_FALLBACK_BACKEND: '로컬 Codex 생성 실패 후 처리 방식입니다. 비활성화는 바로 오류를 반환하고, 기본 모델 설정은 일반 모델을 다시 시도합니다.',
+    GENERATION_BACKEND_TIMEOUT_SECONDS: '단일 생성 요청이 최대 몇 초까지 기다릴지입니다. 기본값은 300이며 Codex CLI 같은 로컬 명령줄 방식에 주로 사용됩니다.',
+    GENERATION_BACKEND_MAX_OUTPUT_BYTES: '단일 로컬 명령줄 생성에서 읽을 수 있는 출력 크기 상한입니다. 기본값은 1048576바이트입니다.',
+    GENERATION_BACKEND_MAX_CONCURRENCY: '동시에 실행할 수 있는 모델 생성 작업 수입니다. 기본값은 1이며, 기본 모델 설정 사용 시 분석 작업 스레드 수는 변경하지 않습니다.',
+    LOCAL_CLI_BACKEND_MAX_CONCURRENCY: '동시에 시작할 수 있는 로컬 명령줄 생성 프로세스 수입니다. 기본값은 1이며 최종적으로는 모델 생성 최대 동시 실행 값을 넘지 않습니다.',
   },
 };
 
@@ -451,6 +463,14 @@ const fieldOptionLabelMap: Record<string, Record<string, string>> = {
     auto: '自动',
     litellm: '默认模型配置',
     codex_cli: 'Codex CLI（不支持工具）',
+  },
+  FEISHU_RECEIVE_ID_TYPE: {
+    chat_id: 'chat_id（群聊）',
+    open_id: 'open_id（私聊）',
+  },
+  FEISHU_DOMAIN: {
+    feishu: 'feishu（飞书国内）',
+    lark: 'lark（国际版）',
   },
   LOG_LEVEL: {
     debug: '调试',
@@ -535,6 +555,14 @@ const fieldOptionLabelMapEn: Record<string, Record<string, string>> = {
     litellm: 'Default model settings',
     codex_cli: 'Codex CLI (tools unsupported)',
   },
+  FEISHU_RECEIVE_ID_TYPE: {
+    chat_id: 'chat_id (group chat)',
+    open_id: 'open_id (private chat)',
+  },
+  FEISHU_DOMAIN: {
+    feishu: 'feishu (mainland China)',
+    lark: 'lark (international)',
+  },
   LOG_LEVEL: {
     debug: 'Debug',
     info: 'Info',
@@ -573,6 +601,30 @@ const fieldOptionLabelMapEn: Record<string, Record<string, string>> = {
   },
 };
 
+const fieldOptionLabelMapKo: Record<string, Record<string, string>> = {
+  GENERATION_BACKEND: {
+    litellm: '기본 모델 설정',
+    codex_cli: 'Codex CLI(실험)',
+  },
+  GENERATION_FALLBACK_BACKEND: {
+    '': '비활성화',
+    litellm: '기본 모델 설정',
+  },
+  AGENT_GENERATION_BACKEND: {
+    auto: '자동',
+    litellm: '기본 모델 설정',
+    codex_cli: 'Codex CLI(도구 미지원)',
+  },
+  FEISHU_RECEIVE_ID_TYPE: {
+    chat_id: 'chat_id(단체 채팅)',
+    open_id: 'open_id(개인 채팅)',
+  },
+  FEISHU_DOMAIN: {
+    feishu: 'feishu(중국 본토)',
+    lark: 'lark(국제판)',
+  },
+};
+
 function normalizeOptionToken(raw: string): string {
   return raw.trim().toLowerCase();
 }
@@ -602,11 +654,17 @@ export function getFieldDescriptionZh(key: string, fallback?: string): string {
 }
 
 export function getFieldTitle(key: string, fallback?: string, locale: UiLanguage = 'zh'): string {
-  return fieldTitleLocaleMap[locale]?.[key] || fieldTitleMap[key] || fallback || key;
+  if (locale !== 'zh') {
+    return fieldTitleLocaleMap[locale]?.[key] || fallback || fieldTitleMap[key] || key;
+  }
+  return fieldTitleMap[key] || fallback || key;
 }
 
 export function getFieldDescription(key: string, fallback?: string, locale: UiLanguage = 'zh'): string {
-  return fieldDescriptionLocaleMap[locale]?.[key] || fieldDescriptionMap[key] || fallback || '';
+  if (locale !== 'zh') {
+    return fieldDescriptionLocaleMap[locale]?.[key] || fallback || fieldDescriptionMap[key] || '';
+  }
+  return fieldDescriptionMap[key] || fallback || '';
 }
 
 export function getFieldOptionLabelZh(key: string, value: string, fallbackLabel?: string): string {
@@ -619,7 +677,11 @@ export function getFieldOptionLabel(
   fallbackLabel?: string,
   locale: UiLanguage = 'zh',
 ): string {
-  const map = locale === 'en' ? fieldOptionLabelMapEn[key] : fieldOptionLabelMap[key];
+  const map = locale === 'en'
+    ? fieldOptionLabelMapEn[key]
+    : locale === 'ko'
+      ? fieldOptionLabelMapKo[key]
+      : fieldOptionLabelMap[key];
   if (!map) {
     return fallbackLabel ?? value;
   }

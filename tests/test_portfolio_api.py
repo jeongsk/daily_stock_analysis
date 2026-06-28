@@ -355,7 +355,7 @@ class PortfolioApiTestCase(unittest.TestCase):
         ), patch("api.v1.endpoints.portfolio.get_task_queue", return_value=queue):
             resp = self.client.post(
                 "/api/v1/portfolio/positions/600519/analysis",
-                json={"account_id": account_id, "analysis_phase": "intraday", "force": True},
+                json={"account_id": account_id, "analysis_phase": "intraday", "force": True, "report_language": "ko"},
             )
 
         self.assertEqual(resp.status_code, 202, resp.text)
@@ -369,6 +369,7 @@ class PortfolioApiTestCase(unittest.TestCase):
         self.assertEqual(kwargs["selection_source"], "manual")
         self.assertEqual(kwargs["query_source"], "portfolio")
         self.assertEqual(kwargs["analysis_phase"], "intraday")
+        self.assertEqual(kwargs["report_language"], "ko")
         self.assertTrue(kwargs["force_refresh"])
         self.assertEqual(kwargs["portfolio_context"]["account_id"], account_id)
         self.assertEqual(kwargs["portfolio_context"]["quantity"], 10.0)

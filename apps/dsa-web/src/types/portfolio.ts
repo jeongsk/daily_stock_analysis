@@ -52,6 +52,7 @@ export interface PortfolioPositionAnalysisRequest {
   accountId?: number;
   analysisPhase?: 'auto' | 'premarket' | 'intraday' | 'postmarket';
   force?: boolean;
+  reportLanguage?: 'zh' | 'en' | 'ko';
 }
 
 export interface PortfolioAccountSnapshot {

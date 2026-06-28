@@ -15,6 +15,7 @@ vi.mock('../../../api/systemConfig', () => ({
 
 describe('NotificationTestPanel', () => {
   beforeEach(() => {
+    localStorage.removeItem(UI_LANGUAGE_STORAGE_KEY);
     testNotificationChannel.mockReset();
     testNotificationChannel.mockResolvedValue({
       success: true,
@@ -61,6 +62,49 @@ describe('NotificationTestPanel', () => {
     expect(await screen.findByText('测试成功')).toBeInTheDocument();
     expect(screen.getByText('HTTP 200')).toBeInTheDocument();
     expect(screen.getByText('https://example.com/hook?token=***')).toBeInTheDocument();
+  });
+
+  it('localizes backend notification failure messages in Korean UI mode', async () => {
+    localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'ko');
+    testNotificationChannel.mockResolvedValueOnce({
+      success: false,
+      message: 'telegram 通知测试失败',
+      errorCode: 'send_failed',
+      stage: 'notification_send',
+      retryable: false,
+      latencyMs: 4792,
+      attempts: [
+        {
+          channel: 'telegram',
+          success: false,
+          message: '通知测试发送失败',
+          target: '***',
+          errorCode: 'send_failed',
+          stage: 'notification_send',
+          retryable: false,
+          latencyMs: 4792,
+          httpStatus: null,
+        },
+      ],
+    });
+
+    render(
+      <UiLanguageProvider>
+        <NotificationTestPanel
+          items={[{ key: 'TELEGRAM_CHAT_ID', value: '462899939' }]}
+          maskToken="******"
+        />
+      </UiLanguageProvider>
+    );
+
+    fireEvent.change(screen.getByLabelText('채널'), { target: { value: 'telegram' } });
+    fireEvent.click(screen.getByRole('button', { name: /테스트 전송/ }));
+
+    expect(await screen.findByText('테스트 실패')).toBeInTheDocument();
+    expect(screen.getByText(/Telegram 알림 테스트 실패 · 4792 ms · send_failed/)).toBeInTheDocument();
+    expect(screen.getByText('시도 1')).toBeInTheDocument();
+    expect(screen.getByText('알림 테스트 전송 실패')).toBeInTheDocument();
+    expect(screen.queryByText(/通知测试/)).not.toBeInTheDocument();
   });
 
   it('uses translated defaults when UI language changes and user has not edited fields', async () => {

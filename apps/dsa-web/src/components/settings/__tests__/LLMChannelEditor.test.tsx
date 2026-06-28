@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { LLMChannelEditor } from '../LLMChannelEditor';
+import { UiLanguageProvider } from '../../../contexts/UiLanguageContext';
+import { UI_LANGUAGE_STORAGE_KEY } from '../../../utils/uiLanguage';
 
 const {
   update,
@@ -26,6 +28,36 @@ describe('LLMChannelEditor', () => {
     update.mockReset();
     testLLMChannel.mockReset();
     discoverLLMChannelModels.mockReset();
+    localStorage.removeItem(UI_LANGUAGE_STORAGE_KEY);
+  });
+
+  it('renders the channel manager copy in Korean UI mode', () => {
+    localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'ko');
+
+    render(
+      <UiLanguageProvider>
+        <LLMChannelEditor
+          items={[]}
+          configVersion="v1"
+          maskToken="******"
+          onSaved={() => {}}
+        />
+      </UiLanguageProvider>
+    );
+
+    expect(screen.getByText('AI 모델 설정')).toBeInTheDocument();
+    expect(screen.getByText('채널 관리')).toBeInTheDocument();
+    expect(screen.getByText(/서비스 제공자 채널을 추가하면/)).toBeInTheDocument();
+    expect(screen.getByText('빠른 채널 추가')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '+ 채널 추가' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'DeepSeek 공식' })).toBeInTheDocument();
+    expect(screen.getByText('채널 목록')).toBeInTheDocument();
+    expect(screen.getByText('채널 없음')).toBeInTheDocument();
+    expect(screen.getByText('런타임 파라미터')).toBeInTheDocument();
+    expect(screen.getByText(/주 모델, 대체 모델, Vision, Temperature/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'AI 설정 저장' })).toBeInTheDocument();
+    expect(screen.queryByText('AI 模型配置')).not.toBeInTheDocument();
+    expect(screen.queryByText('快速添加渠道')).not.toBeInTheDocument();
   });
 
   it('renders API Key input with controlled visibility', async () => {

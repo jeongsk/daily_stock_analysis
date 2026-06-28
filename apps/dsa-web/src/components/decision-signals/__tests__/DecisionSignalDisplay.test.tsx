@@ -74,6 +74,24 @@ describe('DecisionSignalCard', () => {
     expect(screen.queryByRole('button', { name: '查看 贵州茅台 AI 建议详情' })).not.toBeInTheDocument();
   });
 
+  it('localizes known ETF stock names in Korean UI mode', () => {
+    window.localStorage.setItem('dsa.uiLanguage', 'ko');
+    render(
+      <UiLanguageProvider>
+        <DecisionSignalCard
+          item={{
+            ...signal,
+            stockCode: '588200',
+            stockName: '科创芯片ETF',
+          }}
+        />
+      </UiLanguageProvider>,
+    );
+
+    expect(screen.getByText('STAR Market 칩 ETF')).toBeInTheDocument();
+    expect(screen.queryByText('科创芯片ETF')).not.toBeInTheDocument();
+  });
+
   it('hides missing optional plan text for sparse legacy signals', () => {
     window.localStorage.setItem('dsa.uiLanguage', 'zh');
     render(

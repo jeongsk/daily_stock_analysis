@@ -8,19 +8,15 @@ import { getParsedApiError } from '../api/error';
 import { ApiErrorAlert, Card, Badge, ConfirmDialog, EmptyState, InlineAlert } from '../components/common';
 import { PortfolioSignalSummary } from '../components/decision-signals/DecisionSignalDisplay';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
-import { formatUiText } from '../i18n/uiText';
+import { formatUiText, type UiLanguage } from '../i18n/uiText';
 import { PORTFOLIO_TEXT, PORTFOLIO_SIDE_LABELS, PORTFOLIO_CASH_DIRECTION_LABELS, PORTFOLIO_CORPORATE_ACTION_LABELS } from '../locales/featureText';
 import type { FxRefreshFeedback } from '../utils/portfolioFormat';
 import {
   buildFxRefreshFeedback,
-  formatBrokerLabel,
-  formatCashDirectionLabel,
-  formatCorporateActionLabel,
   formatMoney,
   formatPct,
   formatPositionMoney,
   formatPositionPrice,
-  formatSideLabel,
   formatSignedPct,
   getCsvCommitVariant,
   getCsvParseVariant,
@@ -62,6 +58,150 @@ const FALLBACK_BROKERS: PortfolioImportBrokerItem[] = [
   { broker: 'cmb', aliases: ['cmbchina', 'zhaoshang'], displayName: '招商' },
 ];
 
+const PORTFOLIO_EXTRA_TEXT: Record<UiLanguage, {
+  accountBaseCurrencyFallback: string;
+  accountDeleteSelectWarning: string;
+  accountCreateDefaultFailure: string;
+  accountCreateSuccessMessage: string;
+  accountCreating: string;
+  accountNameRequired: string;
+  brokerFallbackEmpty: string;
+  brokerFallbackUnavailable: string;
+  cashFlowCurrencyPlaceholder: string;
+  confirmDelete: string;
+  confirmDeleteGeneric: string;
+  csvCommitPrefixDryRun: string;
+  csvCommitPrefixSubmit: string;
+  csvCommitSummary: string;
+  csvCommitting: string;
+  csvParseSummary: string;
+  csvParsing: string;
+  deleteButton: string;
+  deleteCashMessage: string;
+  deleteCorporateMessage: string;
+  deleteHint: string;
+  deleteSelectAccountWarning: string;
+  deleteTradeMessage: string;
+  deleting: string;
+  eventEmptyDescription: string;
+  nextPage: string;
+  parseCsv: string;
+  positionAnalysisSubmitted: string;
+  prevPage: string;
+  refreshEvents: string;
+  selectCsv: string;
+  submitCsv: string;
+}> = {
+  zh: {
+    accountBaseCurrencyFallback: '账户基准币',
+    accountDeleteSelectWarning: '请先选择具体账户，再删除持仓账户。',
+    accountCreateDefaultFailure: '创建账户失败，请稍后重试。',
+    accountCreateSuccessMessage: '账户创建成功，已自动切换到该账户。',
+    accountCreating: '创建中...',
+    accountNameRequired: '账户名称不能为空。',
+    brokerFallbackEmpty: '券商列表接口返回为空，已回退为内置券商列表（华泰/中信/招商）。',
+    brokerFallbackUnavailable: '券商列表接口不可用，已回退为内置券商列表（华泰/中信/招商）。',
+    cashFlowCurrencyPlaceholder: '币种（可选，默认 {currency}）',
+    confirmDelete: '确认删除',
+    confirmDeleteGeneric: '确认删除这条流水吗？',
+    csvCommitPrefixDryRun: '预演检查',
+    csvCommitPrefixSubmit: '实际写入',
+    csvCommitSummary: '{prefix}：写入 {inserted} 条，重复 {duplicate} 条，失败 {failed} 条。',
+    csvCommitting: '提交中...',
+    csvParseSummary: '有效 {valid} 条，跳过 {skipped} 条，错误 {errors} 条。',
+    csvParsing: '解析中...',
+    deleteButton: '删除',
+    deleteCashMessage: '确认删除 {date} 的资金流水（{direction} {amount} {currency}）吗？',
+    deleteCorporateMessage: '确认删除 {date} 的公司行为 {action}（{symbol}）吗？',
+    deleteHint: '如有错误流水，可直接删除后重新录入。',
+    deleteSelectAccountWarning: '删除修正仅在单账户视图可用。请先选择具体账户后再删除错误流水。',
+    deleteTradeMessage: '确认删除 {date} 的{side}流水 {symbol}（数量 {quantity}，价格 {price}）吗？',
+    deleting: '删除中...',
+    eventEmptyDescription: '调整筛选条件或先录入一笔交易、资金流水或公司行为。',
+    nextPage: '下一页',
+    parseCsv: '解析文件',
+    positionAnalysisSubmitted: '已提交 {symbol} 分析任务：{taskId}',
+    prevPage: '上一页',
+    refreshEvents: '刷新流水',
+    selectCsv: '选择 CSV',
+    submitCsv: '提交导入',
+  },
+  en: {
+    accountBaseCurrencyFallback: 'account base currency',
+    accountDeleteSelectWarning: 'Select a specific account before deleting a portfolio account.',
+    accountCreateDefaultFailure: 'Account creation failed. Try again later.',
+    accountCreateSuccessMessage: 'Account created and selected.',
+    accountCreating: 'Creating...',
+    accountNameRequired: 'Account name is required.',
+    brokerFallbackEmpty: 'Broker list API returned empty. Built-in brokers are being used.',
+    brokerFallbackUnavailable: 'Broker list API is unavailable. Built-in brokers are being used.',
+    cashFlowCurrencyPlaceholder: 'Currency (optional, default {currency})',
+    confirmDelete: 'Confirm delete',
+    confirmDeleteGeneric: 'Delete this ledger entry?',
+    csvCommitPrefixDryRun: 'Dry-run check',
+    csvCommitPrefixSubmit: 'Actual write',
+    csvCommitSummary: '{prefix}: inserted {inserted}, duplicates {duplicate}, failed {failed}.',
+    csvCommitting: 'Submitting...',
+    csvParseSummary: '{valid} valid, {skipped} skipped, {errors} errors.',
+    csvParsing: 'Parsing...',
+    deleteButton: 'Delete',
+    deleteCashMessage: 'Delete the cash flow on {date} ({direction} {amount} {currency})?',
+    deleteCorporateMessage: 'Delete the corporate action on {date}: {action} ({symbol})?',
+    deleteHint: 'If a ledger entry is wrong, delete it and enter it again.',
+    deleteSelectAccountWarning: 'Delete correction is available only in a single-account view. Select an account before deleting erroneous entries.',
+    deleteTradeMessage: 'Delete the {side} trade on {date} for {symbol} (quantity {quantity}, price {price})?',
+    deleting: 'Deleting...',
+    eventEmptyDescription: 'Adjust filters or enter a trade, cash flow, or corporate action first.',
+    nextPage: 'Next',
+    parseCsv: 'Parse file',
+    positionAnalysisSubmitted: 'Submitted {symbol} analysis task: {taskId}',
+    prevPage: 'Previous',
+    refreshEvents: 'Refresh entries',
+    selectCsv: 'Choose CSV',
+    submitCsv: 'Submit import',
+  },
+  ko: {
+    accountBaseCurrencyFallback: '계좌 기준 통화',
+    accountDeleteSelectWarning: '포트폴리오 계좌를 삭제하기 전에 특정 계좌를 선택하세요.',
+    accountCreateDefaultFailure: '계좌 생성에 실패했습니다. 잠시 후 다시 시도하세요.',
+    accountCreateSuccessMessage: '계좌가 생성되었고 해당 계좌로 자동 전환되었습니다.',
+    accountCreating: '생성 중...',
+    accountNameRequired: '계좌명을 입력하세요.',
+    brokerFallbackEmpty: '증권사 목록 API가 비어 있어 내장 증권사 목록을 사용합니다.',
+    brokerFallbackUnavailable: '증권사 목록 API를 사용할 수 없어 내장 증권사 목록을 사용합니다.',
+    cashFlowCurrencyPlaceholder: '통화(선택, 기본값 {currency})',
+    confirmDelete: '삭제 확인',
+    confirmDeleteGeneric: '이 원장 내역을 삭제하시겠습니까?',
+    csvCommitPrefixDryRun: '시뮬레이션 검사',
+    csvCommitPrefixSubmit: '실제 저장',
+    csvCommitSummary: '{prefix}: 저장 {inserted}건, 중복 {duplicate}건, 실패 {failed}건.',
+    csvCommitting: '제출 중...',
+    csvParseSummary: '유효 {valid}건, 건너뜀 {skipped}건, 오류 {errors}건.',
+    csvParsing: '파싱 중...',
+    deleteButton: '삭제',
+    deleteCashMessage: '{date} 자금 흐름({direction} {amount} {currency})을 삭제하시겠습니까?',
+    deleteCorporateMessage: '{date} 기업 이벤트 {action}({symbol})을 삭제하시겠습니까?',
+    deleteHint: '잘못된 원장 내역은 삭제한 뒤 다시 입력할 수 있습니다.',
+    deleteSelectAccountWarning: '삭제 수정은 단일 계좌 보기에서만 사용할 수 있습니다. 오류 내역을 삭제하기 전에 특정 계좌를 선택하세요.',
+    deleteTradeMessage: '{date} {symbol} {side} 내역(수량 {quantity}, 가격 {price})을 삭제하시겠습니까?',
+    deleting: '삭제 중...',
+    eventEmptyDescription: '필터 조건을 조정하거나 거래, 자금 흐름 또는 기업 이벤트를 먼저 입력하세요.',
+    nextPage: '다음',
+    parseCsv: '파일 파싱',
+    positionAnalysisSubmitted: '{symbol} 분석 작업을 제출했습니다: {taskId}',
+    prevPage: '이전',
+    refreshEvents: '원장 새로고침',
+    selectCsv: 'CSV 선택',
+    submitCsv: '가져오기 제출',
+  },
+};
+
+const BROKER_NAME_BY_LANGUAGE: Record<UiLanguage, Record<string, string>> = {
+  zh: { huatai: '华泰', citic: '中信', cmb: '招商' },
+  en: { huatai: 'Huatai', citic: 'CITIC', cmb: 'CMB' },
+  ko: { huatai: '화타이', citic: '중신', cmb: '초상은행' },
+};
+
 type AccountOption = 'all' | number;
 type EventType = 'trade' | 'cash' | 'corporate';
 
@@ -100,6 +240,17 @@ const PORTFOLIO_INPUT_CLASS =
 const PORTFOLIO_SELECT_CLASS = `${PORTFOLIO_INPUT_CLASS} appearance-none pr-10`;
 const PORTFOLIO_FILE_PICKER_CLASS =
   'input-surface input-focus-glow flex h-11 w-full cursor-pointer items-center justify-center rounded-xl border bg-transparent px-4 text-sm transition-all focus:outline-none disabled:cursor-not-allowed disabled:opacity-60';
+
+function formatPortfolioBrokerLabel(value: string, displayName: string | undefined, language: UiLanguage): string {
+  const knownName = BROKER_NAME_BY_LANGUAGE[language][value];
+  if (knownName) {
+    return language === 'zh' ? `${value}（${knownName}）` : `${value} (${knownName})`;
+  }
+  if (displayName && displayName.trim()) {
+    return language === 'zh' ? `${value}（${displayName.trim()}）` : `${value} (${displayName.trim()})`;
+  }
+  return value;
+}
 
 function getSignalTime(item: DecisionSignalItem): number {
   return parseDecisionSignalDate(item.createdAt)?.getTime()
@@ -161,6 +312,7 @@ async function loadPortfolioSignalLookup(lookup: PortfolioSignalLookup): Promise
 const PortfolioPage: React.FC = () => {
   const { language, t } = useUiLanguage();
   const text = PORTFOLIO_TEXT[language];
+  const extraText = PORTFOLIO_EXTRA_TEXT[language];
   const sideLabels = PORTFOLIO_SIDE_LABELS[language];
   const cashDirectionLabels = PORTFOLIO_CASH_DIRECTION_LABELS[language];
   const corpActionLabels = PORTFOLIO_CORPORATE_ACTION_LABELS[language];
@@ -299,7 +451,7 @@ const PortfolioPage: React.FC = () => {
       const brokerItems = response.brokers || [];
       if (brokerItems.length === 0) {
         setBrokers(FALLBACK_BROKERS);
-        setBrokerLoadWarning('券商列表接口返回为空，已回退为内置券商列表（华泰/中信/招商）。');
+        setBrokerLoadWarning(extraText.brokerFallbackEmpty);
         if (!FALLBACK_BROKERS.some((item) => item.broker === selectedBroker)) {
           setSelectedBroker(FALLBACK_BROKERS[0].broker);
         }
@@ -312,12 +464,12 @@ const PortfolioPage: React.FC = () => {
       }
     } catch {
       setBrokers(FALLBACK_BROKERS);
-      setBrokerLoadWarning('券商列表接口不可用，已回退为内置券商列表（华泰/中信/招商）。');
+      setBrokerLoadWarning(extraText.brokerFallbackUnavailable);
       if (!FALLBACK_BROKERS.some((item) => item.broker === selectedBroker)) {
         setSelectedBroker(FALLBACK_BROKERS[0].broker);
       }
     }
-  }, [selectedBroker]);
+  }, [extraText.brokerFallbackEmpty, extraText.brokerFallbackUnavailable, selectedBroker]);
 
   const loadSnapshotAndRisk = useCallback(async () => {
     setIsLoading(true);
@@ -562,8 +714,12 @@ const PortfolioPage: React.FC = () => {
         accountId: row.accountId,
         analysisPhase: 'auto',
         force: false,
+        reportLanguage: language,
       });
-      setPositionAnalysisMessage(`已提交 ${row.symbol} 分析任务：${task.taskId}`);
+      setPositionAnalysisMessage(formatUiText(extraText.positionAnalysisSubmitted, {
+        symbol: row.symbol,
+        taskId: task.taskId,
+      }));
     } catch (err) {
       setError(getParsedApiError(err));
     } finally {
@@ -601,7 +757,7 @@ const PortfolioPage: React.FC = () => {
   const handleTradeSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!writableAccountId) {
-      setWriteWarning('请先在右上角选择具体账户，再进行录入或导入提交。');
+      setWriteWarning(text.writeBlocked);
       return;
     }
     try {
@@ -628,7 +784,7 @@ const PortfolioPage: React.FC = () => {
   const handleCashSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!writableAccountId) {
-      setWriteWarning('请先在右上角选择具体账户，再进行录入或导入提交。');
+      setWriteWarning(text.writeBlocked);
       return;
     }
     try {
@@ -651,7 +807,7 @@ const PortfolioPage: React.FC = () => {
   const handleCorporateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!writableAccountId) {
-      setWriteWarning('请先在右上角选择具体账户，再进行录入或导入提交。');
+      setWriteWarning(text.writeBlocked);
       return;
     }
     try {
@@ -689,7 +845,7 @@ const PortfolioPage: React.FC = () => {
   const handleCommitCsv = async () => {
     if (!csvFile) return;
     if (!writableAccountId) {
-      setWriteWarning('请先在右上角选择具体账户，再进行录入或导入提交。');
+      setWriteWarning(text.writeBlocked);
       return;
     }
     try {
@@ -709,7 +865,7 @@ const PortfolioPage: React.FC = () => {
 
   const openDeleteDialog = (item: PendingDelete) => {
     if (!writableAccountId) {
-      setWriteWarning('请先在右上角选择具体账户，再进行删除修正。');
+      setWriteWarning(extraText.deleteSelectAccountWarning);
       return;
     }
     setPendingDelete(item);
@@ -717,7 +873,7 @@ const PortfolioPage: React.FC = () => {
 
   const openAccountDeleteDialog = () => {
     if (!writableAccount) {
-      setWriteWarning('请先选择具体账户，再删除持仓账户。');
+      setWriteWarning(extraText.accountDeleteSelectWarning);
       return;
     }
     setPendingAccountDelete({
@@ -749,7 +905,7 @@ const PortfolioPage: React.FC = () => {
   const handleConfirmDelete = async () => {
     if (!pendingDelete || deleteLoading) return;
     if (!writableAccountId) {
-      setWriteWarning('请先在右上角选择具体账户，再进行删除修正。');
+      setWriteWarning(extraText.deleteSelectAccountWarning);
       setPendingDelete(null);
       return;
     }
@@ -781,7 +937,7 @@ const PortfolioPage: React.FC = () => {
     e.preventDefault();
     const name = accountForm.name.trim();
     if (!name) {
-      setAccountCreateError('账户名称不能为空。');
+      setAccountCreateError(extraText.accountNameRequired);
       setAccountCreateSuccess(null);
       return;
     }
@@ -805,10 +961,10 @@ const PortfolioPage: React.FC = () => {
         market: accountForm.market,
         baseCurrency: accountForm.baseCurrency,
       });
-      setAccountCreateSuccess('账户创建成功，已自动切换到该账户。');
+      setAccountCreateSuccess(extraText.accountCreateSuccessMessage);
     } catch (err) {
       const parsed = getParsedApiError(err);
-      setAccountCreateError(parsed.message || '创建账户失败，请稍后重试。');
+      setAccountCreateError(parsed.message || extraText.accountCreateDefaultFailure);
       setAccountCreateSuccess(null);
     } finally {
       setAccountCreating(false);
@@ -1098,7 +1254,7 @@ const PortfolioPage: React.FC = () => {
               <option value="tw">{text.marketTwOption}</option>
             </select>
             <button type="submit" className="btn-secondary text-sm" disabled={accountCreating}>
-              {accountCreating ? '创建中...' : '创建账户'}
+              {accountCreating ? extraText.accountCreating : text.createAccount}
             </button>
           </form>
         </Card>
@@ -1380,7 +1536,12 @@ const PortfolioPage: React.FC = () => {
             </div>
             <input className={PORTFOLIO_INPUT_CLASS} type="number" min="0" step="0.0001" placeholder={text.cashFlowAmountPlaceholder}
               value={cashForm.amount} onChange={(e) => setCashForm((prev) => ({ ...prev, amount: e.target.value }))} required />
-            <input className={PORTFOLIO_INPUT_CLASS} placeholder={`币种（可选，默认 ${writableAccount?.baseCurrency || '账户基准币'}）`} value={cashForm.currency}
+            <input
+              className={PORTFOLIO_INPUT_CLASS}
+              placeholder={formatUiText(extraText.cashFlowCurrencyPlaceholder, {
+                currency: writableAccount?.baseCurrency || extraText.accountBaseCurrencyFallback,
+              })}
+              value={cashForm.currency}
               onChange={(e) => setCashForm((prev) => ({ ...prev, currency: e.target.value }))} />
             <button type="submit" className="btn-secondary w-full" disabled={!writableAccountId}>{text.submitCashFlow}</button>
           </form>
@@ -1428,13 +1589,13 @@ const PortfolioPage: React.FC = () => {
             <div className="grid grid-cols-2 gap-2">
               <select className={PORTFOLIO_SELECT_CLASS} value={selectedBroker} onChange={(e) => setSelectedBroker(e.target.value)}>
                 {brokers.length > 0 ? (
-                  brokers.map((item) => <option key={item.broker} value={item.broker}>{formatBrokerLabel(item.broker, item.displayName)}</option>)
+                  brokers.map((item) => <option key={item.broker} value={item.broker}>{formatPortfolioBrokerLabel(item.broker, item.displayName, language)}</option>)
                 ) : (
-                  <option value="huatai">huatai（华泰）</option>
+                  <option value="huatai">{formatPortfolioBrokerLabel('huatai', '华泰', language)}</option>
                 )}
               </select>
               <label className={PORTFOLIO_FILE_PICKER_CLASS}>
-                选择 CSV
+                {extraText.selectCsv}
                 <input type="file" accept=".csv" className="hidden"
                   onChange={(e) => setCsvFile(e.target.files && e.target.files[0] ? e.target.files[0] : null)} />
               </label>
@@ -1445,18 +1606,22 @@ const PortfolioPage: React.FC = () => {
             </div>
             <div className="flex gap-2">
               <button type="button" className="btn-secondary flex-1" disabled={!csvFile || csvParsing} onClick={() => void handleParseCsv()}>
-                {csvParsing ? '解析中...' : '解析文件'}
+                {csvParsing ? extraText.csvParsing : extraText.parseCsv}
               </button>
               <button type="button" className="btn-secondary flex-1"
                 disabled={!csvFile || !writableAccountId || csvCommitting} onClick={() => void handleCommitCsv()}>
-                {csvCommitting ? '提交中...' : '提交导入'}
+                {csvCommitting ? extraText.csvCommitting : extraText.submitCsv}
               </button>
             </div>
             {csvParseResult ? (
               <InlineAlert
                 variant={getCsvParseVariant(csvParseResult)}
                 title={text.csvParseResultTitle}
-                message={`有效 ${csvParseResult.recordCount} 条，跳过 ${csvParseResult.skippedCount} 条，错误 ${csvParseResult.errorCount} 条。`}
+                message={formatUiText(extraText.csvParseSummary, {
+                  valid: String(csvParseResult.recordCount),
+                  skipped: String(csvParseResult.skippedCount),
+                  errors: String(csvParseResult.errorCount),
+                })}
                 className="rounded-lg px-3 py-2 text-xs shadow-none"
               />
             ) : null}
@@ -1464,7 +1629,12 @@ const PortfolioPage: React.FC = () => {
               <InlineAlert
                 variant={getCsvCommitVariant(csvCommitResult, csvDryRun)}
                 title={csvDryRun ? text.csvDryRunResultTitle : text.csvSubmitResultTitle}
-                message={`${csvDryRun ? '预演检查' : '实际写入'}：写入 ${csvCommitResult.insertedCount} 条，重复 ${csvCommitResult.duplicateCount} 条，失败 ${csvCommitResult.failedCount} 条。`}
+                message={formatUiText(extraText.csvCommitSummary, {
+                  prefix: csvDryRun ? extraText.csvCommitPrefixDryRun : extraText.csvCommitPrefixSubmit,
+                  inserted: String(csvCommitResult.insertedCount),
+                  duplicate: String(csvCommitResult.duplicateCount),
+                  failed: String(csvCommitResult.failedCount),
+                })}
                 className="rounded-lg px-3 py-2 text-xs shadow-none"
               />
             ) : null}
@@ -1481,7 +1651,7 @@ const PortfolioPage: React.FC = () => {
                 <option value="corporate">{text.eventCorpLabel}</option>
               </select>
               <button type="button" className="btn-secondary text-sm" onClick={() => void loadEvents()} disabled={eventLoading}>
-                {eventLoading ? '加载中...' : '刷新流水'}
+                {eventLoading ? `${t('common.loading')}...` : extraText.refreshEvents}
               </button>
             </div>
             <div className="grid grid-cols-2 gap-2">
@@ -1516,13 +1686,13 @@ const PortfolioPage: React.FC = () => {
               </select>
             ) : null}
             <div className="text-[11px] text-secondary">
-              {writeBlocked ? '删除修正仅在单账户视图可用。请先选择具体账户后再删除错误流水。' : '如有错误流水，可直接删除后重新录入。'}
+              {writeBlocked ? extraText.deleteSelectAccountWarning : extraText.deleteHint}
             </div>
             <div className="max-h-64 overflow-auto rounded-lg border border-white/10 p-2">
               {eventType === 'trade' && tradeEvents.map((item) => (
                 <div key={`t-${item.id}`} className="flex items-start justify-between gap-3 border-b border-white/5 py-2 text-xs text-secondary">
                   <div className="min-w-0">
-                    {item.tradeDate} {formatSideLabel(item.side)} {item.symbol} 数量={item.quantity} 价格={item.price}
+                    {item.tradeDate} {sideLabels[item.side]} {item.symbol} {text.quantity}={item.quantity} {text.lastPrice}={item.price}
                   </div>
                   {!writeBlocked ? (
                     <button
@@ -1531,10 +1701,16 @@ const PortfolioPage: React.FC = () => {
                       onClick={() => openDeleteDialog({
                         eventType: 'trade',
                         id: item.id,
-                        message: `确认删除 ${item.tradeDate} 的${formatSideLabel(item.side)}流水 ${item.symbol}（数量 ${item.quantity}，价格 ${item.price}）吗？`,
+                        message: formatUiText(extraText.deleteTradeMessage, {
+                          date: item.tradeDate,
+                          side: sideLabels[item.side],
+                          symbol: item.symbol,
+                          quantity: String(item.quantity),
+                          price: String(item.price),
+                        }),
                       })}
                     >
-                      删除
+                      {extraText.deleteButton}
                     </button>
                   ) : null}
                 </div>
@@ -1542,7 +1718,7 @@ const PortfolioPage: React.FC = () => {
               {eventType === 'cash' && cashEvents.map((item) => (
                 <div key={`c-${item.id}`} className="flex items-start justify-between gap-3 border-b border-white/5 py-2 text-xs text-secondary">
                   <div className="min-w-0">
-                    {item.eventDate} {formatCashDirectionLabel(item.direction)} {item.amount} {item.currency}
+                    {item.eventDate} {cashDirectionLabels[item.direction]} {item.amount} {item.currency}
                   </div>
                   {!writeBlocked ? (
                     <button
@@ -1551,10 +1727,15 @@ const PortfolioPage: React.FC = () => {
                       onClick={() => openDeleteDialog({
                         eventType: 'cash',
                         id: item.id,
-                        message: `确认删除 ${item.eventDate} 的资金流水（${formatCashDirectionLabel(item.direction)} ${item.amount} ${item.currency}）吗？`,
+                        message: formatUiText(extraText.deleteCashMessage, {
+                          date: item.eventDate,
+                          direction: cashDirectionLabels[item.direction],
+                          amount: String(item.amount),
+                          currency: item.currency,
+                        }),
                       })}
                     >
-                      删除
+                      {extraText.deleteButton}
                     </button>
                   ) : null}
                 </div>
@@ -1562,7 +1743,7 @@ const PortfolioPage: React.FC = () => {
               {eventType === 'corporate' && corporateEvents.map((item) => (
                 <div key={`ca-${item.id}`} className="flex items-start justify-between gap-3 border-b border-white/5 py-2 text-xs text-secondary">
                   <div className="min-w-0">
-                    {item.effectiveDate} {formatCorporateActionLabel(item.actionType)} {item.symbol}
+                    {item.effectiveDate} {corpActionLabels[item.actionType]} {item.symbol}
                   </div>
                   {!writeBlocked ? (
                     <button
@@ -1571,10 +1752,14 @@ const PortfolioPage: React.FC = () => {
                       onClick={() => openDeleteDialog({
                         eventType: 'corporate',
                         id: item.id,
-                        message: `确认删除 ${item.effectiveDate} 的公司行为 ${formatCorporateActionLabel(item.actionType)}（${item.symbol}）吗？`,
+                        message: formatUiText(extraText.deleteCorporateMessage, {
+                          date: item.effectiveDate,
+                          action: corpActionLabels[item.actionType],
+                          symbol: item.symbol,
+                        }),
                       })}
                     >
-                      删除
+                      {extraText.deleteButton}
                     </button>
                   ) : null}
                 </div>
@@ -1585,7 +1770,7 @@ const PortfolioPage: React.FC = () => {
                   || (eventType === 'corporate' && corporateEvents.length === 0)) ? (
                     <EmptyState
                       title={text.eventNoEventsTitle}
-                      description="调整筛选条件或先录入一笔交易、资金流水或公司行为。"
+                      description={extraText.eventEmptyDescription}
                       className="border-none bg-transparent px-3 py-6 shadow-none"
                     />
                   ) : null}
@@ -1595,11 +1780,11 @@ const PortfolioPage: React.FC = () => {
               <div className="flex gap-2">
                 <button type="button" className="btn-secondary text-xs px-3 py-1" disabled={eventPage <= 1}
                   onClick={() => setEventPage((prev) => Math.max(1, prev - 1))}>
-                  上一页
+                  {extraText.prevPage}
                 </button>
                 <button type="button" className="btn-secondary text-xs px-3 py-1" disabled={eventPage >= totalEventPages}
                   onClick={() => setEventPage((prev) => Math.min(totalEventPages, prev + 1))}>
-                  下一页
+                  {extraText.nextPage}
                 </button>
               </div>
             </div>
@@ -1609,9 +1794,9 @@ const PortfolioPage: React.FC = () => {
       <ConfirmDialog
         isOpen={Boolean(pendingDelete)}
         title={text.eventDeleteTitle}
-        message={pendingDelete?.message || '确认删除这条流水吗？'}
-        confirmText={deleteLoading ? '删除中...' : '确认删除'}
-        cancelText="取消"
+        message={pendingDelete?.message || extraText.confirmDeleteGeneric}
+        confirmText={deleteLoading ? extraText.deleting : extraText.confirmDelete}
+        cancelText={t('common.cancel')}
         isDanger
         onConfirm={() => void handleConfirmDelete()}
         onCancel={() => {

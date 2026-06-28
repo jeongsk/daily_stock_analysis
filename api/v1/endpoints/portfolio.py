@@ -465,6 +465,7 @@ def analyze_position(symbol: str, request: PortfolioPositionAnalysisRequest) -> 
         report_type="detailed",
         analysis_phase=request.analysis_phase,
         force_refresh=bool(request.force),
+        report_language=request.report_language,
         notify=True,
     )
     if duplicates:

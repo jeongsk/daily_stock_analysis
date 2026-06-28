@@ -1,11 +1,15 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import { UiLanguageProvider, useUiLanguage } from '../../../contexts/UiLanguageContext';
 import { UI_LANGUAGE_STORAGE_KEY } from '../../../utils/uiLanguage';
 import { SettingsField } from '../SettingsField';
 
 describe('SettingsField', () => {
+  beforeEach(() => {
+    localStorage.removeItem(UI_LANGUAGE_STORAGE_KEY);
+  });
+
   it('prefers localized Chinese field titles over backend schema titles', () => {
     render(
       <SettingsField
@@ -72,6 +76,119 @@ describe('SettingsField', () => {
     expect(screen.getByLabelText('관심 종목 목록')).toBeInTheDocument();
     expect(screen.getByText('종목 코드는 쉼표로 구분하세요. 예: 600519,300750.')).toBeInTheDocument();
     expect(screen.queryByText('使用逗号分隔股票代码，例如：600519,300750。')).not.toBeInTheDocument();
+  });
+
+  it('renders Korean title, description, and options for generation backend fields', () => {
+    localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'ko');
+
+    render(
+      <UiLanguageProvider>
+        <SettingsField
+          item={{
+            key: 'GENERATION_BACKEND',
+            value: 'litellm',
+            rawValueExists: true,
+            isMasked: false,
+            schema: {
+              key: 'GENERATION_BACKEND',
+              title: 'Analysis Generation Method',
+              description: '用于个股分析、大盘复盘和普通文本生成。',
+              category: 'ai_model',
+              dataType: 'string',
+              uiControl: 'select',
+              isSensitive: false,
+              isRequired: false,
+              isEditable: true,
+              options: [
+                { label: '默认模型配置', value: 'litellm' },
+                { label: 'Codex CLI（实验）', value: 'codex_cli' },
+              ],
+              validation: { enum: ['litellm', 'codex_cli'] },
+              displayOrder: 1,
+            },
+          }}
+          value="litellm"
+          onChange={vi.fn()}
+        />
+      </UiLanguageProvider>
+    );
+
+    expect(screen.getByLabelText('분석 생성 방식')).toBeInTheDocument();
+    expect(screen.getByText(/개별 종목 분석, 시장 리뷰 및 일반 텍스트 생성/)).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: '기본 모델 설정' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Codex CLI(실험)' })).toBeInTheDocument();
+    expect(screen.queryByText('Analysis Generation Method')).not.toBeInTheDocument();
+    expect(screen.queryByText('用于个股分析、大盘复盘和普通文本生成。')).not.toBeInTheDocument();
+  });
+
+  it('renders Korean labels for Feishu notification select options', () => {
+    localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'ko');
+
+    render(
+      <UiLanguageProvider>
+        <>
+          <SettingsField
+            item={{
+              key: 'FEISHU_RECEIVE_ID_TYPE',
+              value: 'chat_id',
+              rawValueExists: true,
+              isMasked: false,
+              schema: {
+                key: 'FEISHU_RECEIVE_ID_TYPE',
+                title: 'Feishu Receive ID Type',
+                category: 'notification',
+                dataType: 'string',
+                uiControl: 'select',
+                isSensitive: false,
+                isRequired: false,
+                isEditable: true,
+                options: [
+                  { label: 'chat_id (群聊)', value: 'chat_id' },
+                  { label: 'open_id (私聊)', value: 'open_id' },
+                ],
+                validation: { enum: ['chat_id', 'open_id'] },
+                displayOrder: 1,
+              },
+            }}
+            value="chat_id"
+            onChange={vi.fn()}
+          />
+          <SettingsField
+            item={{
+              key: 'FEISHU_DOMAIN',
+              value: 'feishu',
+              rawValueExists: true,
+              isMasked: false,
+              schema: {
+                key: 'FEISHU_DOMAIN',
+                title: 'Feishu Domain',
+                category: 'notification',
+                dataType: 'string',
+                uiControl: 'select',
+                isSensitive: false,
+                isRequired: false,
+                isEditable: true,
+                options: [
+                  { label: 'feishu (飞书国内)', value: 'feishu' },
+                  { label: 'lark (国际版)', value: 'lark' },
+                ],
+                validation: { enum: ['feishu', 'lark'] },
+                displayOrder: 2,
+              },
+            }}
+            value="feishu"
+            onChange={vi.fn()}
+          />
+        </>
+      </UiLanguageProvider>
+    );
+
+    expect(screen.getByRole('option', { name: 'chat_id(단체 채팅)' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'open_id(개인 채팅)' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'feishu(중국 본토)' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'lark(국제판)' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'chat_id (群聊)' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'feishu (飞书国内)' })).not.toBeInTheDocument();
   });
 
   it('renders sensitive field metadata and validation errors', () => {

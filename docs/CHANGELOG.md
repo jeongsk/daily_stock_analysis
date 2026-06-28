@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修复] 放宽 Longbridge SDK 最低版本约束，避免 Debian bookworm Docker 镜像因当前平台只能解析到 0.2.75 而构建失败；OAuth 能力继续在运行时检测并降级。
 - [修复] 修复 Docker Compose 中 `.env` 的 `WEBUI_PORT` 与容器内监听端口互相覆盖导致 WebUI 无法访问的问题。
 - [改进] Web 设置页新增首次启动配置检查卡，串联基础配置状态、自选股入口、模型配置入口和一次简短试跑。
+- [修复] Web 设置页韩文 UI 下本地化通知测试失败消息与飞书通知选项标签，避免中文状态文案混入 알림 채널 설정。
+- [修复] Web 持仓页在韩文 UI 下本地化 CSV 导入、流水分页、账户校验等残留中文文案，并让持仓分析提交携带当前界面语言以生成对应语言的 AI 建议信号。
 - [改进] 通知报告的分析结果摘要不再展开 AI 决策信号明细，完整信号保留在个股详情和单股报告中。
 - [新功能] #1595 P1.5 新增 Provider Cache Capability Registry，按 provider、api surface、gateway 和 verification status 建模 prompt cache 能力，未知 OpenAI-compatible route 默认 telemetry only。
 - [改进] #1595 P1 新增 prompt cache telemetry / analysis-path hints / diagnostics 最小配置，默认不改变 provider 请求 shape，并复用 LLM usage HMAC secret 做 domain-separated cache hint 派生。
@@ -56,6 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修复] Web 个股报告详情在韩文 UI 下按当前界面语言展示阶段、摘要卡片、策略点位、资讯、数据上下文、运行诊断和透明度标签，并对既有中文结构化字段做显示层韩文转换。
 - [修复] Web 问股页在韩文 UI 下本地化快速问题示例与策略 skill 标签，避免中文策略名称混入韩文界面。
 - [修复] Web 设置页在韩文 UI 下本地化首次启动配置检查卡片和 `STOCK_LIST` 帮助说明，避免中文状态消息混入韩文界面。
+- [修复] Web 设置页在韩文 UI 下本地化 AI 模型渠道编辑器与生成 backend 配置字段，避免中文/英文配置说明混入韩文界面。
 - [修复] Docker 与 CI 安装 hash-pinned `requirements.txt` 时，pip `--require-hashes` 模式无法校验 alphasift 这类 git 依赖导致构建失败；新增 `scripts/pip-install-requirements.sh` 将 git 依赖拆出单独安装，保留其余依赖的 hash 校验。
 - [修复] Docker bookworm 镜像（glibc 2.36）无法安装 longbridge 4.3.3（wheel 仅 manylinux_2_39），Docker 构建改用 bookworm 兼容的 0.2.75 并经安装脚本 `--exclude` 跳过其 hash 块；longbridge 为 Priority 5 可选数据源，CI（ubuntu-24.04）与本地 uv 不受影响仍用 4.3.3。
 

@@ -139,6 +139,7 @@ export const portfolioApi = {
         account_id: payload.accountId,
         analysis_phase: payload.analysisPhase ?? 'auto',
         force: payload.force ?? false,
+        report_language: payload.reportLanguage,
       },
     );
     return toCamelCase<TaskAccepted>(response.data);
