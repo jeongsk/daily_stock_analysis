@@ -28,6 +28,7 @@ from src.services.run_diagnostics import (
     record_history_run,
     record_notification_run,
 )
+from src.schemas.market_light import MARKET_LIGHT_REGIONS
 
 
 logger = logging.getLogger(__name__)
@@ -91,6 +92,19 @@ def _record_market_review_notification_run(
         error_message=error_message,
     )
     _refresh_market_review_history_diagnostics(query_id=query_id)
+
+
+def _collect_market_light_snapshot(
+    snapshots: Dict[str, Dict[str, Any]],
+    *,
+    region: str,
+    review_result: Any,
+) -> None:
+    if region not in MARKET_LIGHT_REGIONS:
+        return
+    snapshot = getattr(review_result, "market_light_snapshot", None)
+    if isinstance(snapshot, dict) and snapshot:
+        snapshots[region] = snapshot
 
 
 def _get_market_review_text(language: str) -> dict[str, str]:
@@ -229,7 +243,11 @@ def run_market_review(
                 )
                 review_result = mkt_analyzer.run_daily_review_with_snapshot()
                 mkt_report = review_result.report
-                market_light_snapshots[mkt] = review_result.market_light_snapshot
+                _collect_market_light_snapshot(
+                    market_light_snapshots,
+                    region=mkt,
+                    review_result=review_result,
+                )
                 market_review_payloads[mkt] = _coerce_market_review_payload(
                     review_result,
                     region=mkt,
@@ -263,7 +281,12 @@ def run_market_review(
             )
             review_result = market_analyzer.run_daily_review_with_snapshot()
             review_report = review_result.report
-            market_light_snapshots = {run_region: review_result.market_light_snapshot}
+            market_light_snapshots = {}
+            _collect_market_light_snapshot(
+                market_light_snapshots,
+                region=run_region,
+                review_result=review_result,
+            )
             market_review_payloads = {
                 run_region: _coerce_market_review_payload(
                     review_result,

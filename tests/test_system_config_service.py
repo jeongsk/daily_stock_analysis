@@ -2274,6 +2274,12 @@ class SystemConfigServiceTestCase(unittest.TestCase):
             context_profile_schema["validation"]["enum"],
             ["cost", "balanced", "long_context_raw_first"],
         )
+        market_review_schema = items["MARKET_REVIEW_REGION"]["schema"]
+        self.assertEqual(
+            market_review_schema["validation"]["allowed_values"],
+            ["cn", "hk", "us", "jp", "kr", "both"],
+        )
+        self.assertEqual(market_review_schema["validation"]["delimiter"], ",")
         self.assertEqual(
             items["AGENT_CONTEXT_COMPRESSION_TRIGGER_TOKENS"]["schema"]["default_value"],
             "",
@@ -2308,6 +2314,14 @@ class SystemConfigServiceTestCase(unittest.TestCase):
 
     def test_validate_accepts_report_language_english(self) -> None:
         validation = self.service.validate(items=[{"key": "REPORT_LANGUAGE", "value": "en"}])
+
+        self.assertTrue(validation["valid"])
+        self.assertEqual(validation["issues"], [])
+
+    def test_validate_accepts_comma_separated_market_review_region(self) -> None:
+        validation = self.service.validate(
+            items=[{"key": "MARKET_REVIEW_REGION", "value": "cn,jp,us"}]
+        )
 
         self.assertTrue(validation["valid"])
         self.assertEqual(validation["issues"], [])
@@ -4014,6 +4028,80 @@ class SystemConfigServiceTestCase(unittest.TestCase):
         self.assertIn("主模型 / Agent 主模型 / Vision 模型 / 备选模型中的失效项", warning)
         self.assertIn("桌面端导出备份", warning)
 
+    def test_update_market_review_region_does_not_trigger_runtime_model_cleanup(self) -> None:
+        litellm_config_path = Path(self.temp_dir.name) / "litellm_config.yaml"
+        litellm_config_path.write_text("model_list: []\n", encoding="utf-8")
+
+        self._rewrite_env(
+            "MARKET_REVIEW_REGION=cn",
+            "LITELLM_MODEL=openai/gpt-4o-mini",
+            "AGENT_LITELLM_MODEL=openai/gpt-4o",
+            "LITELLM_FALLBACK_MODELS=openai/gpt-4o-mini,openai/gpt-4o",
+            "VISION_MODEL=openai/gpt-4o",
+            f"LITELLM_CONFIG={litellm_config_path}",
+            "LLM_CHANNELS=openai",
+            "LLM_OPENAI_PROTOCOL=openai",
+            "LLM_OPENAI_BASE_URL=https://llm-openai.example.com/v1",
+            "LLM_OPENAI_API_KEYS=legacy-openai-secret",
+            "LLM_OPENAI_MODELS=openai/gpt-4o-mini,openai/gpt-4o",
+            "OPENAI_BASE_URL=https://openai.example.com/v1",
+            "OPENAI_API_KEY=sk-openai",
+            "OPENAI_MODEL=gpt-4.1",
+            "ANTHROPIC_MODEL=claude-sonnet-4-6",
+        )
+
+        response = self.service.update(
+            config_version=self.manager.get_config_version(),
+            items=[{"key": "MARKET_REVIEW_REGION", "value": "both"}],
+            reload_now=False,
+        )
+
+        self.assertTrue(response["success"])
+        self.assertIn("MARKET_REVIEW_REGION", response["updated_keys"])
+        current_map = self.manager.read_config_map()
+        self.assertEqual(current_map["MARKET_REVIEW_REGION"], "both")
+        self.assertEqual(current_map["LITELLM_MODEL"], "openai/gpt-4o-mini")
+        self.assertEqual(current_map["AGENT_LITELLM_MODEL"], "openai/gpt-4o")
+        self.assertEqual(current_map["LITELLM_FALLBACK_MODELS"], "openai/gpt-4o-mini,openai/gpt-4o")
+        self.assertEqual(current_map["VISION_MODEL"], "openai/gpt-4o")
+        self.assertEqual(current_map["LITELLM_CONFIG"], str(litellm_config_path))
+        self.assertEqual(current_map["LLM_CHANNELS"], "openai")
+        self.assertEqual(current_map["LLM_OPENAI_PROTOCOL"], "openai")
+        self.assertEqual(current_map["LLM_OPENAI_BASE_URL"], "https://llm-openai.example.com/v1")
+        self.assertEqual(current_map["LLM_OPENAI_API_KEYS"], "legacy-openai-secret")
+        self.assertEqual(current_map["LLM_OPENAI_MODELS"], "openai/gpt-4o-mini,openai/gpt-4o")
+        self.assertEqual(current_map["OPENAI_BASE_URL"], "https://openai.example.com/v1")
+        self.assertEqual(current_map["OPENAI_API_KEY"], "sk-openai")
+        self.assertEqual(current_map["OPENAI_MODEL"], "gpt-4.1")
+        self.assertEqual(current_map["ANTHROPIC_MODEL"], "claude-sonnet-4-6")
+        self.assertFalse(
+            any("已同步清理失效的运行时模型引用" in warning for warning in response["warnings"]),
+            response["warnings"],
+        )
+
+    def test_update_market_review_region_accepts_comma_separated_regions(self) -> None:
+        response = self.service.update(
+            config_version=self.manager.get_config_version(),
+            items=[{"key": "MARKET_REVIEW_REGION", "value": "cn,jp,us"}],
+            reload_now=False,
+        )
+
+        self.assertTrue(response["success"])
+        self.assertIn("MARKET_REVIEW_REGION", response["updated_keys"])
+        current_map = self.manager.read_config_map()
+        self.assertEqual(current_map["MARKET_REVIEW_REGION"], "cn,jp,us")
+
+    def test_import_env_market_review_region_accepts_comma_separated_regions(self) -> None:
+        response = self.service.import_env(
+            config_version=self.manager.get_config_version(),
+            content="MARKET_REVIEW_REGION=jp,kr\n",
+            reload_now=False,
+        )
+
+        self.assertTrue(response["success"])
+        current_map = self.manager.read_config_map()
+        self.assertEqual(current_map["MARKET_REVIEW_REGION"], "jp,kr")
+
     def test_import_desktop_env_restores_runtime_models_after_cleanup(self) -> None:
         self._rewrite_env(
             "STOCK_LIST=600519,000001",
@@ -4063,6 +4151,48 @@ class SystemConfigServiceTestCase(unittest.TestCase):
         self.assertEqual(restored_map["VISION_MODEL"], pre_clear_map["VISION_MODEL"])
         self.assertEqual(restored_map["LITELLM_FALLBACK_MODELS"], pre_clear_map["LITELLM_FALLBACK_MODELS"])
 
+    def test_import_desktop_env_restores_provider_and_base_url_after_provider_cleanup(self) -> None:
+        self._rewrite_env(
+            "STOCK_LIST=600519,000001",
+            "LITELLM_MODEL=openai/gpt-4o-mini",
+            "OPENAI_MODEL=gpt-4.1",
+            "OPENAI_BASE_URL=https://openai.example.com/v1",
+            "OPENAI_API_KEY=legacy-openai-key",
+        )
+
+        backup_content = self.service.export_desktop_env()["content"]
+        pre_clear_map = dict(self.manager.read_config_map())
+
+        clear_response = self.service.update(
+            config_version=self.manager.get_config_version(),
+            items=[
+                {"key": "LITELLM_MODEL", "value": ""},
+                {"key": "OPENAI_MODEL", "value": ""},
+                {"key": "OPENAI_BASE_URL", "value": ""},
+                {"key": "OPENAI_API_KEY", "value": ""},
+            ],
+            reload_now=False,
+        )
+        self.assertTrue(clear_response["success"])
+
+        cleared_map = self.manager.read_config_map()
+        self.assertEqual(cleared_map["LITELLM_MODEL"], "")
+        self.assertEqual(cleared_map["OPENAI_MODEL"], "")
+        self.assertEqual(cleared_map["OPENAI_BASE_URL"], "")
+        self.assertEqual(cleared_map["OPENAI_API_KEY"], "")
+
+        restore_payload = self.service.import_desktop_env(
+            config_version=self.manager.get_config_version(),
+            content=backup_content,
+            reload_now=False,
+        )
+        self.assertTrue(restore_payload["success"])
+
+        restored_map = self.manager.read_config_map()
+        self.assertEqual(restored_map["LITELLM_MODEL"], pre_clear_map["LITELLM_MODEL"])
+        self.assertEqual(restored_map["OPENAI_MODEL"], pre_clear_map["OPENAI_MODEL"])
+        self.assertEqual(restored_map["OPENAI_BASE_URL"], pre_clear_map["OPENAI_BASE_URL"])
+        self.assertEqual(restored_map["OPENAI_API_KEY"], pre_clear_map["OPENAI_API_KEY"])
 
     def test_validate_rejects_comma_only_api_key(self) -> None:
         """Whitespace/comma-only api_key must fail validation (P2: parsed-segment check)."""

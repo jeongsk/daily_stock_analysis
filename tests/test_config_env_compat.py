@@ -313,6 +313,38 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
         self.assertEqual(with_news_intel.news_intel_retention_days, 45)
         self.assertEqual(with_news_intel.newsnow_base_url, "https://newsnow.example.com")
 
+    @patch("src.config.setup_env")
+    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
+    def test_market_review_region_updates_do_not_change_llm_provider_model_contract(
+        self,
+        _mock_parse_litellm_yaml,
+        _mock_setup_env,
+    ) -> None:
+        base_env = {
+            "STOCK_LIST": "600519",
+            "MARKET_REVIEW_REGION": "cn",
+            "LITELLM_MODEL": "openai/gpt-4.1",
+            "OPENAI_MODEL": "gpt-4.1",
+            "OPENAI_BASE_URL": "https://openai.example.com/v1",
+            "OPENAI_API_KEY": "base-key-12345",
+            "LITELLM_FALLBACK_MODELS": "openai/gpt-5.5,openai/gpt-4o-mini",
+            "VISION_MODEL": "openai/gpt-4o-mini",
+        }
+        with patch.dict(os.environ, base_env, clear=True):
+            baseline = Config._load_from_env()
+
+        with_jpkr_env = dict(base_env)
+        with_jpkr_env["MARKET_REVIEW_REGION"] = "both"
+        with patch.dict(os.environ, with_jpkr_env, clear=True):
+            with_jpkr = Config._load_from_env()
+
+        self.assertEqual(with_jpkr.litellm_model, baseline.litellm_model)
+        self.assertEqual(with_jpkr.litellm_fallback_models, baseline.litellm_fallback_models)
+        self.assertEqual(with_jpkr.vision_model, baseline.vision_model)
+        self.assertEqual(with_jpkr.openai_model, baseline.openai_model)
+        self.assertEqual(with_jpkr.openai_api_key, baseline.openai_api_key)
+        self.assertEqual(with_jpkr.openai_base_url, baseline.openai_base_url)
+
     def test_env_example_alphasift_install_spec_matches_trusted_default(self):
         env_example = Path(__file__).resolve().parents[1] / ".env.example"
 
@@ -837,6 +869,22 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
             parsed = Config._parse_report_language("zh-cn")
 
         self.assertEqual(parsed, "zh")
+
+    def test_parse_market_review_region_accepts_jp_kr_values_and_comma_lists(self) -> None:
+        self.assertEqual(Config._parse_market_review_region("jp"), "jp")
+        self.assertEqual(Config._parse_market_review_region("KR"), "kr")
+        self.assertEqual(
+            Config._parse_market_review_region("kr,jp,us"),
+            "us,jp,kr",
+        )
+        self.assertEqual(
+            Config._parse_market_review_region("cn,eu,us"),
+            "cn,us",
+        )
+        self.assertEqual(
+            Config._parse_market_review_region("both"),
+            "cn,hk,us,jp,kr",
+        )
 
     @patch("src.config.setup_env")
     @patch.object(Config, "_parse_litellm_yaml", return_value=[])

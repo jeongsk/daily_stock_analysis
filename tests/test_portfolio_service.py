@@ -469,6 +469,74 @@ class PortfolioServiceTestCase(unittest.TestCase):
                 self.assertAlmostEqual(position["market_value_base"], close * 10, places=6)
                 self.assertAlmostEqual(position["unrealized_pnl_base"], close * 10 - 1000, places=6)
                 self.assertAlmostEqual(position["unrealized_pnl_pct"], (close * 10 - 1000) / 1000 * 100, places=6)
+                self.assertEqual(position["data_quality"], "ok")
+                self.assertEqual(position["limitations"], [])
+
+    def test_jp_kr_portfolio_snapshot_marks_partial_valuation_boundaries(self) -> None:
+        for market, currency, symbol, close in [
+            ("jp", "JPY", "7203.T", 3000.0),
+            ("kr", "KRW", "005930.KS", 70000.0),
+        ]:
+            with self.subTest(market=market):
+                aid = self._create_account_with_position(
+                    market=market,
+                    currency=currency,
+                    symbol=symbol,
+                    close=close,
+                )
+
+                snapshot = self.service.get_portfolio_snapshot(
+                    account_id=aid,
+                    as_of=date(2026, 1, 3),
+                    cost_method="fifo",
+                )
+                account = snapshot["accounts"][0]
+                position = account["positions"][0]
+
+                self.assertEqual(account["market"], market)
+                self.assertEqual(account["base_currency"], currency)
+                self.assertEqual(account["data_quality"], "partial")
+                self.assertEqual(
+                    account["limitations"],
+                    [
+                        "realtime_quote_best_effort",
+                        "fx_and_cost_basis_partial",
+                        "sector_and_risk_metrics_limited",
+                    ],
+                )
+                self.assertEqual(position["symbol"], symbol)
+                self.assertEqual(position["data_quality"], "partial")
+                self.assertIn("fx_and_cost_basis_partial", position["limitations"])
+
+    def test_aggregate_snapshot_marks_partial_when_any_account_has_limitations(self) -> None:
+        self._create_account_with_position(
+            market="cn",
+            currency="CNY",
+            symbol="600519",
+            close=120.0,
+        )
+        self._create_account_with_position(
+            market="jp",
+            currency="JPY",
+            symbol="7203.T",
+            close=3000.0,
+        )
+
+        snapshot = self.service.get_portfolio_snapshot(
+            as_of=date(2026, 1, 3),
+            cost_method="fifo",
+        )
+
+        self.assertEqual(snapshot["account_count"], 2)
+        self.assertEqual(snapshot["data_quality"], "partial")
+        self.assertEqual(
+            snapshot["limitations"],
+            [
+                "realtime_quote_best_effort",
+                "fx_and_cost_basis_partial",
+                "sector_and_risk_metrics_limited",
+            ],
+        )
 
     def test_snapshot_marks_stale_close_and_missing_price(self) -> None:
         aid = self._create_account_with_position(

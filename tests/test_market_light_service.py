@@ -57,6 +57,12 @@ class MarketLightServiceTestCase(unittest.TestCase):
         os.environ.pop("DATABASE_PATH", None)
         self.temp_dir.cleanup()
 
+    def test_normalize_market_region_rejects_jp_kr_until_market_light_supported(self) -> None:
+        for region in ("jp", "kr"):
+            with self.subTest(region=region):
+                with self.assertRaisesRegex(ValueError, "supports cn, hk, us only"):
+                    normalize_market_region(region)
+
     def _add_history(self, *, created_at: datetime, context_snapshot: dict | None) -> None:
         with self.db.get_session() as session:
             session.add(
