@@ -339,9 +339,10 @@ class YfinanceFetcher(BaseFetcher):
 
     def get_main_indices(self, region: str = "cn") -> Optional[List[Dict[str, Any]]]:
         """
-        获取主要指数行情 (Yahoo Finance)，支持 A 股、美股与港股。
+        获取主要指数行情 (Yahoo Finance)，支持 A 股、美股、港股、日股、韩股与台股。
         region=us 时委托给 _get_us_main_indices。
         region=hk 时委托给 _get_hk_main_indices。
+        region=jp/kr/tw 时分别委托给对应市场指数方法。
         """
         import yfinance as yf
 

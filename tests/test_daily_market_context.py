@@ -1076,3 +1076,40 @@ def test_yellow_market_light_status_marks_context_conservative() -> None:
 
     assert context is not None
     assert "conservative" in context.to_safe_dict()["risk_tags"]
+
+
+def test_daily_market_context_keeps_jp_kr_regions_and_labels() -> None:
+    service = DailyMarketContextService(
+        db_manager=MagicMock(),
+        today_fn=lambda: date(2026, 6, 6),
+    )
+
+    jp_context = service._build_context_from_payload(
+        region="jp",
+        trade_date=date(2026, 6, 6),
+        payload={"summary": "日经225震荡，风险偏好谨慎。"},
+        source="analysis_history",
+    )
+    kr_context = service._build_context_from_payload(
+        region="kr",
+        trade_date=date(2026, 6, 6),
+        payload={"summary": "KOSPI震荡，等待确认。"},
+        source="analysis_history",
+    )
+
+    assert jp_context is not None
+    assert jp_context.region == "jp"
+    assert kr_context is not None
+    assert kr_context.region == "kr"
+
+    jp_section = format_daily_market_context_prompt_section(
+        jp_context.to_safe_dict(),
+        report_language="zh",
+    )
+    kr_section = format_daily_market_context_prompt_section(
+        kr_context.to_safe_dict(),
+        report_language="en",
+    )
+
+    assert "市场：日股（jp）" in jp_section
+    assert "Region: Korea (kr)" in kr_section

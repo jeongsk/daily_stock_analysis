@@ -1109,6 +1109,28 @@ class MainScheduleModeTestCase(unittest.TestCase):
         refresh.assert_called_once_with(config)
         pipeline.run.assert_called_once()
 
+    def test_resolve_daily_market_context_target_date_passes_jp_kr_to_trading_calendar(self) -> None:
+        current_time = datetime(2026, 3, 26, 12, 0, tzinfo=timezone.utc)
+        target_date = date(2026, 3, 25)
+
+        with patch("src.core.trading_calendar.get_effective_trading_date", return_value=target_date) as get_date:
+            self.assertEqual(
+                main._resolve_daily_market_context_target_date("jp", current_time),
+                target_date,
+            )
+            self.assertEqual(
+                main._resolve_daily_market_context_target_date("kr", current_time),
+                target_date,
+            )
+
+        self.assertEqual(
+            get_date.call_args_list,
+            [
+                unittest.mock.call("jp", current_time=current_time),
+                unittest.mock.call("kr", current_time=current_time),
+            ],
+        )
+
     def test_run_full_analysis_does_not_reuse_single_context_for_multi_market_review(self) -> None:
         args = self._make_args()
         target_date = date(2026, 3, 26)

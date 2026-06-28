@@ -369,12 +369,6 @@ describe('SettingsField', () => {
         options: ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
         expectedLabels: ['调试', '信息', '警告', '错误', '严重'],
       },
-      {
-        key: 'MARKET_REVIEW_REGION',
-        category: 'system',
-        options: ['cn', 'hk', 'us', 'both'],
-        expectedLabels: ['A 股', '港股', '美股', '全部市场'],
-      },
     ] as const;
 
     selectCases.forEach(({ key, category, options, expectedLabels }) => {
@@ -414,6 +408,45 @@ describe('SettingsField', () => {
 
       unmount();
     });
+  });
+
+  it('renders MARKET_REVIEW_REGION as free-text field with comma-separated defaults', () => {
+    const onChange = vi.fn();
+
+    render(
+      <SettingsField
+        item={{
+          key: 'MARKET_REVIEW_REGION',
+          value: 'cn,jp',
+          rawValueExists: true,
+          isMasked: false,
+          schema: {
+            key: 'MARKET_REVIEW_REGION',
+            category: 'system',
+            dataType: 'string',
+            uiControl: 'text',
+            isSensitive: false,
+            isRequired: false,
+            isEditable: true,
+            options: [],
+            validation: {},
+            displayOrder: 1,
+          },
+        }}
+        value="cn,jp"
+        onChange={onChange}
+      />
+    );
+
+    const input = screen.getByLabelText('大盘复盘市场') as HTMLInputElement;
+    expect(input).toHaveValue('cn,jp');
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+
+    fireEvent.change(input, {
+      target: { value: 'cn,jp,kr' },
+    });
+
+    expect(onChange).toHaveBeenCalledWith('MARKET_REVIEW_REGION', 'cn,jp,kr');
   });
 
   it('renders context compression profile options with Chinese labels', () => {

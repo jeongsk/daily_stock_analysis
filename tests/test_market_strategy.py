@@ -71,6 +71,65 @@ class TestMarketAnalyzerStrategyPrompt(unittest.TestCase):
         self.assertNotIn("### 一、市场总结", prompt)
         self.assertNotIn("A股市场三段式复盘策略", prompt)
 
+    def test_jp_kr_strategy_blocks_are_localized_when_report_language_is_en(self):
+        cases = [
+            ("jp", "Japan Market Regime Strategy", "Macro & FX", "日本市场三段式复盘策略"),
+            ("kr", "Korea Market Regime Strategy", "Technology Cycle", "韩国市场三段式复盘策略"),
+        ]
+
+        for region, title, dimension, chinese_title in cases:
+            with self.subTest(region=region):
+                with patch(
+                    "src.market_analyzer.get_config",
+                    return_value=SimpleNamespace(report_language="en"),
+                ):
+                    analyzer = MarketAnalyzer(region=region)
+
+                prompt_block = analyzer._get_strategy_prompt_block()
+                markdown_block = analyzer._get_strategy_markdown_block("en")
+
+                self.assertIn(title, prompt_block)
+                self.assertIn(dimension, prompt_block)
+                self.assertNotIn(chinese_title, prompt_block)
+                self.assertNotIn("只基于可得指数", prompt_block)
+                self.assertIn("### 6. Strategy Framework", markdown_block)
+                self.assertIn(dimension, markdown_block)
+                self.assertNotIn("### 六、策略框架", markdown_block)
+
+    def test_jp_kr_review_prompt_roles_are_market_aware(self):
+        cases = [
+            ("jp", "Japan market", "日本市场"),
+            ("kr", "Korea market", "韩国市场"),
+        ]
+
+        for region, english_market, chinese_market in cases:
+            with self.subTest(region=region, language="en"):
+                with patch(
+                    "src.market_analyzer.get_config",
+                    return_value=SimpleNamespace(report_language="en"),
+                ):
+                    analyzer = MarketAnalyzer(region=region)
+
+                prompt = analyzer._build_review_prompt(MarketOverview(date="2026-02-24"), [])
+
+                self.assertIn(
+                    f"You are a professional {english_market} analyst.",
+                    prompt,
+                )
+                self.assertNotIn("US/A/H market analyst", prompt)
+
+            with self.subTest(region=region, language="zh"):
+                with patch(
+                    "src.market_analyzer.get_config",
+                    return_value=SimpleNamespace(report_language="zh"),
+                ):
+                    analyzer = MarketAnalyzer(region=region)
+
+                prompt = analyzer._build_review_prompt(MarketOverview(date="2026-02-24"), [])
+
+                self.assertIn(f"你是一位专业的{chinese_market}分析师", prompt)
+                self.assertNotIn("A/H/美股市场分析师", prompt)
+
     def test_market_stats_passes_market_review_purpose(self):
         analyzer = MarketAnalyzer.__new__(MarketAnalyzer)
         analyzer.region = "hk"

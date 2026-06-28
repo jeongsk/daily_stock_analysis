@@ -43,6 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [文档] #1815 细化 PR 提交流程约束：.github/PULL_REQUEST_TEMPLATE.md 补充 Head CI 一致性、Web 设置变更可视证据、第三方兼容性声明与回滚说明要求，避免描述与验证状态/变更影响不一致。
 - [改进] #1815 Phase 1 硬化日本/韩国 suffix-only 个股 MVP：集中 JP/KR/TW suffix 识别规则，扩充日韩股票种子索引，并为 yfinance 报价/基本面上下文补充市场、币种与数据质量元数据。
 - [文档] #1815 补充 JP/KR/TW suffix-only MVP 在外部 API、provider/model/base URL 与运行时配置上的边界说明：当前为结构化字段兼容验证且可回退到旧链路。
+- [文档] #1815 细化 PR 提交流程约束：.github/PULL_REQUEST_TEMPLATE.md 补充 Head CI 一致性、Web 设置变更可视证据、第三方兼容性声明与回滚说明要求，避免描述与验证状态/变更影响不一致。
 - [修复] 修复通知 Markdown 表格转换在空单元格后将后续内容错配到错误表头的问题。
 - [修复] 将 Docker 可安装的 Longbridge SDK 版本固定为 0.2.75，避免 `longbridge>=0.2.77` 从包索引消失后导致 docker-build 失败。
 - [修复] 持仓快照今日估值改为受限并发预取多只持仓实时价，减少持仓较多时 Web 组合页面刷新超时。
