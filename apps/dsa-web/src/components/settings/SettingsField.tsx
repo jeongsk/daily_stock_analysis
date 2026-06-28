@@ -224,6 +224,7 @@ export const SettingsField: React.FC<SettingsFieldProps> = ({
   const schema = item.schema;
   const isMultiValue = isMultiValueField(item);
   const helpContent = getSettingsHelpContent(schema?.helpKey, schema?.description, language);
+  const localizationKey = schema?.key ?? item.key;
   const fallbackTitle = schema?.title ?? item.key;
   const title = getFieldTitle(item.key, fallbackTitle, language);
   const description = language === 'en'
@@ -247,7 +248,7 @@ export const SettingsField: React.FC<SettingsFieldProps> = ({
           {title}
         </label>
         <SettingsHelpButton
-          fieldKey={item.key}
+          fieldKey={localizationKey}
           title={title}
           schema={schema}
           description={description}
