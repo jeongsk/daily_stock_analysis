@@ -29,16 +29,63 @@ import { useUiLanguage } from '../contexts/UiLanguageContext';
 import { CHAT_TEXT } from '../locales/featureText';
 import { extractStockCodesFromMessage } from '../utils/chatStockCode';
 import { findMatchingStockCode, includesStockCode, normalizeStockCode } from '../utils/stockCode';
+import type { UiLanguage } from '../i18n/uiText';
 
 // Quick question examples shown on empty state
 const QUICK_QUESTIONS = [
-  { label: '用缠论分析茅台', skill: 'chan_theory' },
-  { label: '波浪理论看宁德时代', skill: 'wave_theory' },
-  { label: '分析比亚迪趋势', skill: 'bull_trend' },
-  { label: '箱体震荡技能看中芯国际', skill: 'box_oscillation' },
-  { label: '分析腾讯 hk00700', skill: 'bull_trend' },
-  { label: '用情绪周期分析东方财富', skill: 'emotion_cycle' },
+  { label: { zh: '用缠论分析茅台', en: 'Analyze Moutai with Chan theory', ko: 'Chan 이론으로 마오타이 분석' }, message: '用缠论分析茅台', skill: 'chan_theory' },
+  { label: { zh: '波浪理论看宁德时代', en: 'View CATL through wave theory', ko: '파동 이론으로 CATL 보기' }, message: '波浪理论看宁德时代', skill: 'wave_theory' },
+  { label: { zh: '分析比亚迪趋势', en: 'Analyze BYD trend', ko: 'BYD 추세 분석' }, message: '分析比亚迪趋势', skill: 'bull_trend' },
+  { label: { zh: '箱体震荡技能看中芯国际', en: 'Review SMIC with range strategy', ko: '박스권 전략으로 SMIC 보기' }, message: '箱体震荡技能看中芯国际', skill: 'box_oscillation' },
+  { label: { zh: '分析腾讯 hk00700', en: 'Analyze Tencent hk00700', ko: '텐센트 hk00700 분석' }, message: '分析腾讯 hk00700', skill: 'bull_trend' },
+  { label: { zh: '用情绪周期分析东方财富', en: 'Analyze East Money with sentiment cycle', ko: '심리 사이클로 East Money 분석' }, message: '用情绪周期分析东方财富', skill: 'emotion_cycle' },
 ];
+
+const SKILL_LABELS: Record<string, Partial<Record<UiLanguage, string>>> = {
+  bull_trend: { en: 'Default bull trend', ko: '기본 상승 추세' },
+  ma_golden_cross: { en: 'MA golden cross', ko: '이동평균 골든크로스' },
+  volume_breakout: { en: 'Volume breakout', ko: '거래량 동반 돌파' },
+  hot_theme: { en: 'Hot theme', ko: '핫 테마' },
+  pullback: { en: 'Low-volume pullback', ko: '거래량 축소 눌림목' },
+  event_driven: { en: 'Event driven', ko: '이벤트 드리븐' },
+  box_oscillation: { en: 'Range oscillation', ko: '박스권 등락' },
+  growth_quality: { en: 'Growth quality', ko: '성장 퀄리티' },
+  bottom_volume: { en: 'Bottom volume expansion', ko: '바닥권 거래량 증가' },
+  revaluation: { en: 'Expectation re-rating', ko: '기대 재평가' },
+  chan_theory: { en: 'Chan theory', ko: 'Chan 이론' },
+  wave_theory: { en: 'Wave theory', ko: '파동 이론' },
+  leader_strategy: { en: 'Leader strategy', ko: '주도주 전략' },
+  emotion_cycle: { en: 'Sentiment cycle', ko: '심리 사이클' },
+  single_yang_two_yin: { en: 'One bullish candle between two bearish candles', ko: '일양이음' },
+};
+
+const SKILL_NAME_LABELS: Record<string, Partial<Record<UiLanguage, string>>> = {
+  默认多头趋势: SKILL_LABELS.bull_trend,
+  趋势分析: { en: 'Trend analysis', ko: '추세 분석' },
+  均线金叉: SKILL_LABELS.ma_golden_cross,
+  放量突破: SKILL_LABELS.volume_breakout,
+  热点题材: SKILL_LABELS.hot_theme,
+  缩量回踩: SKILL_LABELS.pullback,
+  事件驱动: SKILL_LABELS.event_driven,
+  箱体震荡: SKILL_LABELS.box_oscillation,
+  成长质量: SKILL_LABELS.growth_quality,
+  底部放量: SKILL_LABELS.bottom_volume,
+  预期重估: SKILL_LABELS.revaluation,
+  缠论: SKILL_LABELS.chan_theory,
+  波浪理论: SKILL_LABELS.wave_theory,
+  龙头策略: SKILL_LABELS.leader_strategy,
+  情绪周期: SKILL_LABELS.emotion_cycle,
+  一阳夹二阴: SKILL_LABELS.single_yang_two_yin,
+  通用: { en: 'General', ko: '일반' },
+};
+
+const SKILL_DESCRIPTION_LABELS: Record<string, Partial<Record<UiLanguage, string>>> = {
+  默认趋势: { en: 'Default trend', ko: '기본 추세' },
+  均线交叉: { en: 'Moving-average crossover', ko: '이동평균 교차' },
+  结构分析: { en: 'Structure analysis', ko: '구조 분석' },
+  波浪分析: { en: 'Wave analysis', ko: '파동 분석' },
+  测试技能: { en: 'Test skill', ko: '테스트 스킬' },
+};
 
 const MAX_SELECTED_SKILLS = 3;
 const CONTEXT_COMPRESSION_CONFIG_KEY = 'AGENT_CONTEXT_COMPRESSION_ENABLED';
@@ -62,7 +109,20 @@ const getMessageSkillNames = (msg: Message): string[] => {
   return [];
 };
 
-const getMessageSkillLabel = (msg: Message): string => getMessageSkillNames(msg).join('、');
+const getQuickQuestionLabel = (question: (typeof QUICK_QUESTIONS)[number], language: UiLanguage): string =>
+  question.label[language] || question.label.zh;
+
+const getSkillDisplayName = (skill: Pick<SkillInfo, 'id' | 'name'>, language: UiLanguage): string =>
+  SKILL_LABELS[skill.id]?.[language] || SKILL_NAME_LABELS[skill.name]?.[language] || skill.name;
+
+const getSkillNameDisplayText = (name: string, language: UiLanguage): string =>
+  SKILL_NAME_LABELS[name]?.[language] || name;
+
+const getSkillDescriptionDisplayText = (description: string, language: UiLanguage): string =>
+  SKILL_DESCRIPTION_LABELS[description]?.[language] || description;
+
+const getMessageSkillLabel = (msg: Message, language: UiLanguage): string =>
+  getMessageSkillNames(msg).map((name) => getSkillNameDisplayText(name, language)).join('、');
 
 const isCompareStockMessage = (
   message: string,
@@ -458,8 +518,11 @@ const ChatPage: React.FC = () => {
   const skillLimitReached = selectedSkillIds.length >= MAX_SELECTED_SKILLS;
 
   const getSkillNames = useCallback(
-    (skillIds: string[]) => skillIds.map((id) => skills.find((s) => s.id === id)?.name || id),
-    [skills],
+    (skillIds: string[]) => skillIds.map((id) => {
+      const skill = skills.find((s) => s.id === id);
+      return skill ? getSkillDisplayName(skill, language) : id;
+    }),
+    [language, skills],
   );
 
   const normalizeSelectedSkillIds = useCallback((skillIds: string[]) => {
@@ -569,7 +632,7 @@ const ChatPage: React.FC = () => {
       const msgText = (overrideMessage ?? input).trim();
       if (!msgText || loading) return;
       const usedSkillIds = normalizeSelectedSkillIds(overrideSkillIds ?? selectedSkillIds);
-      const usedSkillNames = usedSkillIds.length > 0 ? getSkillNames(usedSkillIds) : ['通用'];
+      const usedSkillNames = usedSkillIds.length > 0 ? getSkillNames(usedSkillIds) : [tx.general];
 
       let nextActiveStockContext = activeStockContext;
       let useActiveContextForThisSend = false;
@@ -602,7 +665,7 @@ const ChatPage: React.FC = () => {
         skillName: usedSkillNames.join('、'),
       });
     },
-    [activeStockContext, getSkillNames, input, loading, normalizeSelectedSkillIds, requestScrollToBottom, selectedSkillIds, sessionId, startStream],
+    [activeStockContext, getSkillNames, input, loading, normalizeSelectedSkillIds, requestScrollToBottom, selectedSkillIds, sessionId, startStream, tx.general],
   );
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -614,7 +677,7 @@ const ChatPage: React.FC = () => {
 
   const handleQuickQuestion = (q: (typeof QUICK_QUESTIONS)[0]) => {
     setSelectedSkillIds([q.skill]);
-    handleSend(q.label, [q.skill]);
+    handleSend(q.message, [q.skill]);
   };
 
   const showSendFeedback = useCallback((nextToast: { type: 'success' | 'error'; message: string }, durationMs: number) => {
@@ -659,7 +722,7 @@ const ChatPage: React.FC = () => {
   };
 
   const downloadMessageAsMarkdown = useCallback((msg: Message) => {
-    const skillLabel = getMessageSkillLabel(msg);
+    const skillLabel = getMessageSkillLabel(msg, language);
     const heading = msg.role === 'user' ? '# 用户消息' : `# AI 回复${skillLabel ? ` · ${skillLabel}` : ''}`;
     const content = [heading, '', msg.content].join('\n');
     const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
@@ -671,7 +734,7 @@ const ChatPage: React.FC = () => {
     anchor.click();
     document.body.removeChild(anchor);
     URL.revokeObjectURL(url);
-  }, []);
+  }, [language]);
 
   const getCurrentStage = (steps: ProgressStep[]): string => {
     if (steps.length === 0) return tx.connecting;
@@ -1089,7 +1152,7 @@ const ChatPage: React.FC = () => {
                           onClick={() => handleQuickQuestion(q)}
                           className="quick-question-btn"
                         >
-                          {q.label}
+                          {getQuickQuestionLabel(q, language)}
                         </button>
                       ))}
                     </div>
@@ -1098,7 +1161,7 @@ const ChatPage: React.FC = () => {
               </div>
             ) : (
               messages.map((msg) => {
-                const skillLabel = getMessageSkillLabel(msg);
+                const skillLabel = getMessageSkillLabel(msg, language);
                 return (
                 <div
                   key={msg.id}
@@ -1356,12 +1419,12 @@ const ChatPage: React.FC = () => {
                           <span
                             className={`transition-colors text-sm ${checked ? 'text-foreground font-medium' : 'text-secondary-text group-hover:text-foreground'}`}
                           >
-                            {s.name}
+                            {getSkillDisplayName(s, language)}
                           </span>
                           {showSkillDesc === s.id && s.description && (
                             <div className="skill-desc-tooltip">
-                              <p className="skill-title">{s.name}</p>
-                              <p>{s.description}</p>
+                              <p className="skill-title">{getSkillDisplayName(s, language)}</p>
+                              <p>{getSkillDescriptionDisplayText(s.description, language)}</p>
                             </div>
                           )}
                         </label>

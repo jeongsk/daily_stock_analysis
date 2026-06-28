@@ -3,9 +3,11 @@ import { createMemoryRouter, MemoryRouter, RouterProvider } from 'react-router-d
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createParsedApiError } from '../../api/error';
 import { historyApi } from '../../api/history';
+import { UiLanguageProvider } from '../../contexts/UiLanguageContext';
 import type { Message } from '../../stores/agentChatStore';
 import ChatPage from '../ChatPage';
 import { extractStockCodeFromMessage, extractStockCodesFromMessage } from '../../utils/chatStockCode';
+import { UI_LANGUAGE_STORAGE_KEY } from '../../utils/uiLanguage';
 
 function createDeferred<T>() {
   let resolve!: (value: T) => void;
@@ -145,6 +147,7 @@ beforeAll(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'zh');
   mockStoreState.messages = [];
   mockStoreState.loading = false;
   mockStoreState.progressSteps = [];
@@ -572,6 +575,76 @@ describe('ChatPage', () => {
         expect.objectContaining({
           skillNames: ['缠论'],
           skillName: '缠论',
+        }),
+      );
+    });
+  });
+
+  it('renders Korean quick questions and skill labels without changing the sent skill payload', async () => {
+    localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'ko');
+    mockGetSkills.mockResolvedValue({
+      skills: [
+        { id: 'bull_trend', name: '默认多头趋势', description: '默认趋势' },
+        { id: 'ma_golden_cross', name: '均线金叉', description: '均线交叉' },
+        { id: 'volume_breakout', name: '放量突破', description: '放量突破' },
+        { id: 'hot_theme', name: '热点题材', description: '热点题材' },
+        { id: 'pullback', name: '缩量回踩', description: '缩量回踩' },
+        { id: 'event_driven', name: '事件驱动', description: '事件驱动' },
+        { id: 'box_oscillation', name: '箱体震荡', description: '箱体震荡' },
+        { id: 'growth_quality', name: '成长质量', description: '成长质量' },
+        { id: 'bottom_volume', name: '底部放量', description: '底部放量' },
+        { id: 'revaluation', name: '预期重估', description: '预期重估' },
+        { id: 'chan_theory', name: '缠论', description: '结构分析' },
+        { id: 'wave_theory', name: '波浪理论', description: '波浪分析' },
+        { id: 'leader_strategy', name: '龙头策略', description: '龙头策略' },
+        { id: 'emotion_cycle', name: '情绪周期', description: '情绪周期' },
+        { id: 'single_yang_two_yin', name: '一阳夹二阴', description: '一阳夹二阴' },
+      ],
+      default_skill_id: 'bull_trend',
+    });
+
+    render(
+      <UiLanguageProvider>
+        <MemoryRouter initialEntries={['/chat']}>
+          <ChatPage />
+        </MemoryRouter>
+      </UiLanguageProvider>
+    );
+
+    expect(await screen.findByRole('button', { name: 'Chan 이론으로 마오타이 분석' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '파동 이론으로 CATL 보기' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'BYD 추세 분석' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '박스권 전략으로 SMIC 보기' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '텐센트 hk00700 분석' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '심리 사이클로 East Money 분석' })).toBeInTheDocument();
+
+    expect(screen.getByRole('checkbox', { name: '기본 상승 추세' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: '이동평균 골든크로스' })).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: '거래량 동반 돌파' })).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: '핫 테마' })).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: '거래량 축소 눌림목' })).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: '이벤트 드리븐' })).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: '박스권 등락' })).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: '성장 퀄리티' })).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: '바닥권 거래량 증가' })).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: '기대 재평가' })).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Chan 이론' })).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: '파동 이론' })).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: '주도주 전략' })).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: '심리 사이클' })).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: '일양이음' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Chan 이론으로 마오타이 분석' }));
+
+    await waitFor(() => {
+      expect(mockStartStream).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: '用缠论分析茅台',
+          skills: ['chan_theory'],
+        }),
+        expect.objectContaining({
+          skillNames: ['Chan 이론'],
+          skillName: 'Chan 이론',
         }),
       );
     });

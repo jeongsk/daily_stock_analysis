@@ -40,11 +40,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN groupadd -g 1000 dsa && \
     useradd -u 1000 -g dsa -m dsa
 
-# 复制依赖文件
+# 复制依赖文件与依赖安装脚本
 COPY requirements.txt .
+COPY scripts/pip-install-requirements.sh /tmp/pip-install-requirements.sh
 
-# 安装 Python 依赖
-RUN pip install --no-cache-dir -r requirements.txt
+# 安装 Python 依赖。
+# - requirements.txt 由 `uv export --no-dev` 全量 hash-pinned 生成；pip 的
+#   --require-hashes 模式无法校验 VCS/git 依赖（如 alphasift），安装脚本将其拆出
+#   并以 --no-deps 单独安装，其余依赖保留 hash 校验。
+# - longbridge 被 uv 锁定为 4.3.3，但其 wheel 仅 manylinux_2_39（需 glibc >= 2.39），
+#   与本 bookworm 基础镜像（glibc 2.36）不兼容；改用提供 bookworm wheel 的 0.2.75，
+#   并通过 `--exclude longbridge` 跳过其 hash-pinned 块。longbridge 为 Priority 5
+#   可选数据源，运行时按 OAuth 能力检测并降级；CI（ubuntu-24.04, glibc 2.39）与本地 uv 仍用 4.3.3。
+RUN pip install --no-cache-dir --no-deps "longbridge==0.2.75"
+RUN /tmp/pip-install-requirements.sh --exclude longbridge requirements.txt
 
 # 复制应用代码
 COPY *.py ./
