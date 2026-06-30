@@ -90,6 +90,21 @@ _PHASE_LABELS_EN = {
     "non_trading": "Non-trading",
     "unknown": "Unknown phase",
 }
+_MARKET_LABELS_KO = {
+    "cn": "A주",
+    "hk": "홍콩",
+    "us": "미국",
+    "tw": "대만",
+}
+_PHASE_LABELS_KO = {
+    "premarket": "장전",
+    "intraday": "장중",
+    "lunch_break": "점심시간 휴장",
+    "closing_auction": "장 마감 임박",
+    "postmarket": "장후",
+    "non_trading": "비거래일",
+    "unknown": "단계 미상",
+}
 
 
 def render_market_phase_summary(phase_context: Any) -> Optional[Dict[str, Any]]:
@@ -276,13 +291,20 @@ def format_public_market_status_line(
         return ""
 
     lang = normalize_report_language(report_language)
-    phase_labels = _PHASE_LABELS_EN if lang == "en" else _PHASE_LABELS_ZH
-    market_labels = _MARKET_LABELS_EN if lang == "en" else _MARKET_LABELS_ZH
+    if lang == "en":
+        phase_labels = _PHASE_LABELS_EN
+        market_labels = _MARKET_LABELS_EN
+    elif lang == "ko":
+        phase_labels = _PHASE_LABELS_KO
+        market_labels = _MARKET_LABELS_KO
+    else:
+        phase_labels = _PHASE_LABELS_ZH
+        market_labels = _MARKET_LABELS_ZH
     phase_label = phase_labels.get(phase, phase)
     market = _safe_text(phase_summary.get("market"))
     market_key = market.lower()
     if market_key:
-        market_label = market_labels.get(market_key, market.upper() if lang == "en" else market)
+        market_label = market_labels.get(market_key, market.upper() if lang in ("en", "ko") else market)
         value = f"{market_label} · {phase_label}"
     else:
         value = phase_label

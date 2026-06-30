@@ -688,5 +688,33 @@ class TestSupplementFromLongbridge(unittest.TestCase):
         self.assertEqual(result.price, 253.79)
 
 
+class TestReportLanguageMapping(unittest.TestCase):
+    """REPORT_LANGUAGE (zh/en/ko) must map to a Longbridge SDK Language.
+
+    Regression: ``ko`` previously matched neither branch and silently left the SDK
+    language unset. The SDK has no Korean locale, so ko now maps to EN.
+    """
+
+    def test_report_language_maps_to_sdk_language(self):
+        try:
+            from longbridge.openapi import Language
+        except Exception:
+            self.skipTest("longbridge SDK not installed in this environment")
+        from data_provider.longbridge_fetcher import _longbridge_config_kwargs
+
+        for env_val, expected in (
+            ("zh", Language.ZH_CN),
+            ("en", Language.EN),
+            ("ko", Language.EN),
+        ):
+            with patch.dict(os.environ, {"REPORT_LANGUAGE": env_val}, clear=False):
+                kw = _longbridge_config_kwargs()
+            self.assertIs(
+                kw.get("language"),
+                expected,
+                f"REPORT_LANGUAGE={env_val} should map to {expected}",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

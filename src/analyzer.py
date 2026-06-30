@@ -78,6 +78,8 @@ from src.report_language import (
     is_chip_placeholder_value,
     localize_chip_health,
     localize_confidence_level,
+    localize_operation_advice,
+    localize_trend_prediction,
     normalize_report_language,
 )
 from src.schemas.decision_action import build_action_fields
@@ -220,8 +222,8 @@ def _legacy_audit_marker_specs(
     add("stock_code", code)
     add("stock_name", stock_name)
     add("analysis_date", context.get("date"))
-    add("market_phase", "## Market Phase Context" if report_language == "en" else "## 市场阶段上下文")
-    add("daily_market_context", "## Daily Market Context" if report_language == "en" else "## 大盘环境摘要")
+    add("market_phase", "## Market Phase Context" if report_language == "en" else "## 장중 단계 컨텍스트" if report_language == "ko" else "## 市场阶段上下文")
+    add("daily_market_context", "## Daily Market Context" if report_language == "en" else "## 일일 시장 컨텍스트" if report_language == "ko" else "## 大盘环境摘要")
     add("analysis_context_pack", analysis_context_pack_summary)
     add("quote", "## 📈 技术面数据")
     add("news_context", "## 📰 舆情情报" if news_context else None)
@@ -365,23 +367,23 @@ def apply_placeholder_fill(result: "AnalysisResult", missing_fields: List[str]) 
     placeholder = get_placeholder_text(report_language)
     phase_decision_placeholders = {
         "dashboard.phase_decision.action_window": (
-            "Model did not provide a phase action window"
-            if report_language == "en"
+            "Model did not provide a phase action window" if report_language == "en"
+            else "모델이 단계별 행동 구간을 제공하지 않았습니다" if report_language == "ko"
             else "模型未提供阶段化行动窗口"
         ),
         "dashboard.phase_decision.immediate_action": (
-            "Model did not provide a phase-aware immediate action"
-            if report_language == "en"
+            "Model did not provide a phase-aware immediate action" if report_language == "en"
+            else "모델이 단계별 즉시 행동을 제공하지 않았습니다" if report_language == "ko"
             else "模型未提供阶段化即时动作"
         ),
         "dashboard.phase_decision.next_check_time": (
-            "Model did not provide a next check point"
-            if report_language == "en"
+            "Model did not provide a next check point" if report_language == "en"
+            else "모델이 다음 확인 시점을 제공하지 않았습니다" if report_language == "ko"
             else "模型未提供下一次检查点"
         ),
         "dashboard.phase_decision.confidence_reason": (
-            "Model did not provide a phase confidence rationale"
-            if report_language == "en"
+            "Model did not provide a phase confidence rationale" if report_language == "en"
+            else "모델이 단계별 신뢰도 근거를 제공하지 않았습니다" if report_language == "ko"
             else "模型未提供阶段化置信度理由"
         ),
     }
@@ -2230,6 +2232,20 @@ class GeminiAnalyzer:
 - Use the common English company name when you are confident; otherwise keep the original listed company name instead of inventing one.
 - This includes `stock_name`, `trend_prediction`, `operation_advice`, `confidence_level`, nested dashboard text, checklist items, and all narrative summaries.
 """
+        if lang == "ko":
+            return base_prompt + """
+
+## 출력 언어 (최우선 지시)
+
+- 모든 JSON 키 이름은 변경하지 말 것.
+- `decision_type`은 반드시 `buy|hold|sell` 중 하나로 유지할 것.
+- 사람이 읽는 모든 JSON 값은 한국어로 작성할 것. 여기에는 `stock_name`, `trend_prediction`, `operation_advice`, `confidence_level`, 대시보드 내포 텍스트, 체크리스트 항목, 모든 요약 서술이 포함됨.
+- 종목명은 신뢰할 수 있는 한국어 통칭이 있으면 사용하고, 없으면 원문 상장 종목명을 그대로 유지하며 임의로 새로 만들지 말 것.
+- `operation_advice` 허용값: 강력 매수 / 매수 / 보유 / 관망 / 비중 축소 / 매도 / 강력 매도.
+- `trend_prediction` 허용값: 강한 상승 전망 / 상승 전망 / 횡보 / 하락 전망 / 강한 하락 전망.
+- `confidence_level` 허용값: 높음 / 보통 / 낮음.
+- 데이터가 부족할 때는 한국어로 "데이터가 부족해 판단할 수 없습니다"라고 명시할 것.
+"""
         return base_prompt + """
 
 ## 输出语言（最高优先级）
@@ -3067,6 +3083,15 @@ class GeminiAnalyzer:
                     f"Check {field}={requested_backend} ({reason}) or set a valid "
                     "backend/fallback before retrying."
                 )
+            elif report_language == "ko":
+                summary = (
+                    f"AI 분석을 사용할 수 없습니다: 생성 백엔드를 시작할 수 없습니다 "
+                    f"({backend_error.error_code.value})."
+                )
+                risk_warning = (
+                    f"{field}={requested_backend}({reason})을(를) 확인하거나, 유효한 "
+                    "백엔드/폴백을 설정한 뒤 다시 시도하세요."
+                )
             else:
                 summary = (
                     "AI 分析功能不可用：生成后端无法启动，"
@@ -3080,9 +3105,9 @@ class GeminiAnalyzer:
                 code=code,
                 name=name,
                 sentiment_score=50,
-                trend_prediction='Sideways' if report_language == "en" else '震荡',
-                operation_advice='Hold' if report_language == "en" else '持有',
-                confidence_level='Low' if report_language == "en" else '低',
+                trend_prediction=localize_trend_prediction("sideways", report_language),
+                operation_advice=localize_operation_advice("hold", report_language),
+                confidence_level=localize_confidence_level("low", report_language),
                 analysis_summary=summary,
                 risk_warning=risk_warning,
                 success=False,
@@ -3099,13 +3124,13 @@ class GeminiAnalyzer:
                 code=code,
                 name=name,
                 sentiment_score=50,
-                trend_prediction='Sideways' if report_language == "en" else '震荡',
-                operation_advice='Hold' if report_language == "en" else '持有',
-                confidence_level='Low' if report_language == "en" else '低',
-                analysis_summary='AI analysis is unavailable because no API key is configured.' if report_language == "en" else 'AI 分析功能未启用（未配置 API Key）',
-                risk_warning='Configure an LLM API key (GEMINI_API_KEY/ANTHROPIC_API_KEY/OPENAI_API_KEY) and retry.' if report_language == "en" else '请配置 LLM API Key（GEMINI_API_KEY/ANTHROPIC_API_KEY/OPENAI_API_KEY）后重试',
+                trend_prediction=localize_trend_prediction("sideways", report_language),
+                operation_advice=localize_operation_advice("hold", report_language),
+                confidence_level=localize_confidence_level("low", report_language),
+                analysis_summary='AI analysis is unavailable because no API key is configured.' if report_language == "en" else 'API Key가 설정되지 않아 AI 분석 기능이 비활성화되어 있습니다.' if report_language == "ko" else 'AI 分析功能未启用（未配置 API Key）',
+                risk_warning='Configure an LLM API key (GEMINI_API_KEY/ANTHROPIC_API_KEY/OPENAI_API_KEY) and retry.' if report_language == "en" else 'LLM API Key(GEMINI_API_KEY/ANTHROPIC_API_KEY/OPENAI_API_KEY)를 설정한 뒤 다시 시도하세요.' if report_language == "ko" else '请配置 LLM API Key（GEMINI_API_KEY/ANTHROPIC_API_KEY/OPENAI_API_KEY）后重试',
                 success=False,
-                error_message='LLM API key is not configured' if report_language == "en" else 'LLM API Key 未配置',
+                error_message='LLM API key is not configured' if report_language == "en" else 'LLM API Key가 설정되지 않음' if report_language == "ko" else 'LLM API Key 未配置',
                 model_used=None,
                 report_language=report_language,
             )
@@ -3275,11 +3300,11 @@ class GeminiAnalyzer:
                 code=code,
                 name=name,
                 sentiment_score=50,
-                trend_prediction='Sideways' if report_language == "en" else '震荡',
-                operation_advice='Hold' if report_language == "en" else '持有',
-                confidence_level='Low' if report_language == "en" else '低',
-                analysis_summary=(f'Analysis failed: {str(e)[:100]}' if report_language == "en" else f'分析过程出错: {str(e)[:100]}'),
-                risk_warning='Analysis failed. Please retry later or review manually.' if report_language == "en" else '分析失败，请稍后重试或手动分析',
+                trend_prediction=localize_trend_prediction("sideways", report_language),
+                operation_advice=localize_operation_advice("hold", report_language),
+                confidence_level=localize_confidence_level("low", report_language),
+                analysis_summary=(f'Analysis failed: {str(e)[:100]}' if report_language == "en" else f'분석 중 오류 발생: {str(e)[:100]}' if report_language == "ko" else f'分析过程出错: {str(e)[:100]}'),
+                risk_warning='Analysis failed. Please retry later or review manually.' if report_language == "en" else '분석에 실패했습니다. 잠시 후 다시 시도하거나 수동으로 확인해 주세요.' if report_language == "ko" else '分析失败，请稍后重试或手动分析',
                 success=False,
                 error_message=str(e),
                 model_used=None,
@@ -3519,6 +3544,8 @@ class GeminiAnalyzer:
                 "Do not fabricate profit ratio, average cost, or concentration. Mention chip data "
                 "unavailability only once in the report; do not repeat per-field no-data text in `chip_structure`."
                 if report_language == "en"
+                else "수익 비율·평균 단가·집중도를 임의로 생성하지 마세요. 보고서에서 칩 데이터 부재는 한 번만 언급하고, `chip_structure`에 필드별 결측 텍스트를 반복해 넣지 마세요."
+                if report_language == "ko"
                 else "请勿编造获利比例、平均成本或集中度；报告中只说明一次筹码数据不可用，不要把“数据缺失，无法判断”逐字段重复写入 `chip_structure`。"
             )
             prompt += f"""
@@ -3726,6 +3753,16 @@ class GeminiAnalyzer:
 - Use the common English company name when you are confident. If not, keep the listed company name rather than inventing one.
 - When data is missing, explain it in English instead of Chinese.
 """
+        elif report_language == "ko":
+            prompt += f"""
+
+### 출력 언어 요구사항 (최우선)
+- 모든 JSON 키 이름은 위 정의 그대로 유지하고, 키를 번역하지 말 것.
+- `decision_type`은 `buy`, `hold`, `sell` 중 하나로 유지.
+- 사람이 읽는 모든 JSON 값은 한국어로 작성. 여기에는 `stock_name`, `trend_prediction`, `operation_advice`, `confidence_level`, 대시보드 내포 텍스트, 체크리스트 항목, 모든 요약 필드가 포함됨.
+- 종목명은 신뢰 가능한 한국어 통칭 사용, 없으면 원문 상장명 유지(임의 생성 금지).
+- 데이터가 부족할 때는 중국어 대신 한국어로 설명하고 “{no_data_text}, 판단 불가”로 표시.
+"""
         else:
             prompt += f"""
 
@@ -3869,6 +3906,37 @@ class GeminiAnalyzer:
                     lines.append("- dashboard.phase_decision.data_limitations: list of phase/data quality limitations")
             return "\n".join(lines)
 
+        if report_language == "ko":
+            lines = ["### 보완 요구사항: 아래 누락된 필수 필드를 채우고 전체 JSON을 다시 출력하세요:"]
+            for f in missing_fields:
+                if f == "sentiment_score":
+                    lines.append("- sentiment_score: 0~100 정수 점수")
+                elif f == "operation_advice":
+                    lines.append("- operation_advice: 강력 매수/매수/보유/관망/비중 축소/매도/강력 매도")
+                elif f == "analysis_summary":
+                    lines.append("- analysis_summary: 간결한 분석 요약")
+                elif f == "dashboard.core_conclusion.one_sentence":
+                    lines.append("- dashboard.core_conclusion.one_sentence: 한 줄 결론")
+                elif f == "dashboard.intelligence.risk_alerts":
+                    lines.append("- dashboard.intelligence.risk_alerts: 리스크 알림 목록 (빈 배열 가능)")
+                elif f == "dashboard.battle_plan.sniper_points.stop_loss":
+                    lines.append("- dashboard.battle_plan.sniper_points.stop_loss: 손절가")
+                elif f == "dashboard.phase_decision.phase_context":
+                    lines.append("- dashboard.phase_decision.phase_context: 공개 저민감도 시장 단계 요약 부분집합")
+                elif f == "dashboard.phase_decision.action_window":
+                    lines.append("- dashboard.phase_decision.action_window: 단계별 행동 구간")
+                elif f == "dashboard.phase_decision.immediate_action":
+                    lines.append("- dashboard.phase_decision.immediate_action: 즉시 행동/확인 대기/관찰/장중 동작 없음")
+                elif f == "dashboard.phase_decision.watch_conditions":
+                    lines.append("- dashboard.phase_decision.watch_conditions: 관찰 조건 배열")
+                elif f == "dashboard.phase_decision.next_check_time":
+                    lines.append("- dashboard.phase_decision.next_check_time: 다음 확인 시점 또는 시장 현지 시간")
+                elif f == "dashboard.phase_decision.confidence_reason":
+                    lines.append("- dashboard.phase_decision.confidence_reason: 신뢰도 근거 및 데이터 한계")
+                elif f == "dashboard.phase_decision.data_limitations":
+                    lines.append("- dashboard.phase_decision.data_limitations: 단계/데이터 품질 한계 배열")
+            return "\n".join(lines)
+
         lines = ["### 补全要求：请在上方分析基础上补充以下必填内容，并输出完整 JSON："]
         for f in missing_fields:
             if f == "sentiment_score":
@@ -3911,6 +3979,8 @@ class GeminiAnalyzer:
         previous_output = previous_response.strip()
         if normalize_report_language(report_language) == "en":
             prefix = "### The previous output is below. Complete the missing fields based on that output and return the full JSON again. Do not omit existing fields:"
+        elif normalize_report_language(report_language) == "ko":
+            prefix = "### 이전 출력이 아래와 같습니다. 해당 출력을 기반으로 누락 필드를 보완하고 전체 JSON을 다시 출력하세요. 기존 필드를 생략하지 마세요:"
         else:
             prefix = "### 上一次输出如下，请在该输出基础上补齐缺失字段，并重新输出完整 JSON。不要省略已有字段："
         return "\n\n".join([
@@ -4090,7 +4160,7 @@ class GeminiAnalyzer:
             # 解析 decision_type，如果没有则根据 operation_advice 推断
             decision_type = data.get('decision_type', '')
             if not decision_type:
-                op = data.get('operation_advice', 'Hold' if report_language == "en" else '持有')
+                op = data.get('operation_advice', localize_operation_advice("hold", report_language))
                 decision_type = infer_decision_type_from_advice(op, default='hold')
 
             explicit_action = data.get("action")
@@ -4102,11 +4172,11 @@ class GeminiAnalyzer:
                 name=name,
                 # 核心指标
                 sentiment_score=int(data.get('sentiment_score', 50)),
-                trend_prediction=data.get('trend_prediction', 'Sideways' if report_language == "en" else '震荡'),
-                operation_advice=data.get('operation_advice', 'Hold' if report_language == "en" else '持有'),
+                trend_prediction=data.get('trend_prediction', localize_trend_prediction("sideways", report_language)),
+                operation_advice=data.get('operation_advice', localize_operation_advice("hold", report_language)),
                 decision_type=decision_type,
                 confidence_level=localize_confidence_level(
-                    data.get('confidence_level', 'Medium' if report_language == "en" else '中'),
+                    data.get('confidence_level', "medium"),
                     report_language,
                 ),
                 report_language=report_language,
@@ -4130,13 +4200,13 @@ class GeminiAnalyzer:
                 market_sentiment=data.get('market_sentiment', ''),
                 hot_topics=data.get('hot_topics', ''),
                 # 综合
-                analysis_summary=data.get('analysis_summary', 'Analysis completed' if report_language == "en" else '分析完成'),
+                analysis_summary=data.get('analysis_summary', 'Analysis completed' if report_language == "en" else '분석이 완료되었습니다.' if report_language == "ko" else '分析完成'),
                 key_points=data.get('key_points', ''),
                 risk_warning=data.get('risk_warning', ''),
                 buy_reason=data.get('buy_reason', ''),
                 # 元数据
                 search_performed=data.get('search_performed', False),
-                data_sources=data.get('data_sources', 'Technical data' if report_language == "en" else '技术面数据'),
+                data_sources=data.get('data_sources', 'Technical data' if report_language == "en" else '기술적 데이터' if report_language == "ko" else '技术面数据'),
                 success=True,
             )
             return populate_decision_action_fields(result, explicit_action=explicit_action)
@@ -4217,33 +4287,33 @@ class GeminiAnalyzer:
         )
         # 尝试识别关键词来判断情绪
         sentiment_score = 50
-        trend = 'Sideways' if report_language == "en" else '震荡'
-        advice = 'Hold' if report_language == "en" else '持有'
+        trend = localize_trend_prediction("sideways", report_language)
+        advice = localize_operation_advice("hold", report_language)
         
         text_lower = response_text.lower()
         
         # 简单的情绪识别
-        positive_keywords = ['看多', '买入', '上涨', '突破', '强势', '利好', '加仓', 'bullish', 'buy']
-        negative_keywords = ['看空', '卖出', '下跌', '跌破', '弱势', '利空', '减仓', 'bearish', 'sell']
+        positive_keywords = ['看多', '买入', '上涨', '突破', '强势', '利好', '加仓', 'bullish', 'buy', '매수', '상승', '강세', '돌파', '긍정적', '호재']
+        negative_keywords = ['看空', '卖出', '下跌', '跌破', '弱势', '利空', '减仓', 'bearish', 'sell', '매도', '하락', '약세', '이탈', '부정적', '악재']
         
         positive_count = sum(1 for kw in positive_keywords if kw in text_lower)
         negative_count = sum(1 for kw in negative_keywords if kw in text_lower)
         
         if positive_count > negative_count + 1:
             sentiment_score = 65
-            trend = 'Bullish' if report_language == "en" else '看多'
-            advice = 'Buy' if report_language == "en" else '买入'
+            trend = localize_trend_prediction("bullish", report_language)
+            advice = localize_operation_advice("buy", report_language)
             decision_type = 'buy'
         elif negative_count > positive_count + 1:
             sentiment_score = 35
-            trend = 'Bearish' if report_language == "en" else '看空'
-            advice = 'Sell' if report_language == "en" else '卖出'
+            trend = localize_trend_prediction("bearish", report_language)
+            advice = localize_operation_advice("sell", report_language)
             decision_type = 'sell'
         else:
             decision_type = 'hold'
         
         # 截取前500字符作为摘要
-        summary = response_text[:500] if response_text else ('No analysis result' if report_language == "en" else '无分析结果')
+        summary = response_text[:500] if response_text else ('No analysis result' if report_language == "en" else '분석 결과가 없습니다.' if report_language == "ko" else '无分析结果')
         
         result = AnalysisResult(
             code=code,
@@ -4252,10 +4322,10 @@ class GeminiAnalyzer:
             trend_prediction=trend,
             operation_advice=advice,
             decision_type=decision_type,
-            confidence_level='Low' if report_language == "en" else '低',
+            confidence_level=localize_confidence_level("low", report_language),
             analysis_summary=summary,
-            key_points='JSON parsing failed; treat this as best-effort output.' if report_language == "en" else 'JSON解析失败，仅供参考',
-            risk_warning='The result may be inaccurate. Cross-check with other information.' if report_language == "en" else '分析结果可能不准确，建议结合其他信息判断',
+            key_points='JSON parsing failed; treat this as best-effort output.' if report_language == "en" else 'JSON 파싱에 실패했습니다. 참고용으로만 활용하세요.' if report_language == "ko" else 'JSON解析失败，仅供参考',
+            risk_warning='The result may be inaccurate. Cross-check with other information.' if report_language == "en" else '분석 결과가 부정확할 수 있어 다른 정보와 교차 검증하세요.' if report_language == "ko" else '分析结果可能不准确，建议结合其他信息判断',
             raw_response=response_text,
             success=False,
             error_message='LLM response is not valid JSON; analysis result will not be persisted',

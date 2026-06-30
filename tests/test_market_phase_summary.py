@@ -221,6 +221,29 @@ def test_format_public_market_status_line_localizes_compact_summary() -> None:
     )
 
 
+def test_format_public_market_status_line_localizes_korean_summary() -> None:
+    assert (
+        format_public_market_status_line(
+            {"market": "us", "phase": "intraday"},
+            report_language="ko",
+        )
+        == "시장 상태: 미국 · 장중"
+    )
+    assert (
+        format_public_market_status_line(
+            {"market": "hk", "phase": "closing_auction"},
+            report_language="ko",
+        )
+        == "시장 상태: 홍콩 · 장 마감 임박"
+    )
+    # zh 라벨이 한국어 줄에 누출되지 않아야 함
+    ko_line = format_public_market_status_line(
+        {"market": "cn", "phase": "premarket"}, report_language="ko"
+    )
+    assert "A股" not in ko_line
+    assert "盘前" not in ko_line
+
+
 def test_format_public_market_status_line_returns_empty_without_valid_phase() -> None:
     assert format_public_market_status_line(None, report_language="zh") == ""
     assert format_public_market_status_line({"market": "cn"}, report_language="zh") == ""

@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [修复] 修复 `REPORT_LANGUAGE=ko` 时分析正文与通知回退文案混入中文的问题：分析器系统/用户提示与完整性补全提示增加韩语分支，回退枚举值（趋势/建议/置信度）改用 `report_language` 本地化助手，并扩展 canonical map 识别韩语 LLM 输出。
+- [修复] 修复 `notification._SOURCE_DISPLAY_NAMES` 缺少韩语条目导致韩语通知渲染行情来源时抛 `KeyError` 的问题，并为未覆盖语言/来源增加防御性回退。
+- [修复] 修复 `market_phase_summary.format_public_market_status_line` 缺少韩语阶段/市场标签导致韩语汇总行回退中文的问题。
+- [修复] Longbridge SDK 在 `REPORT_LANGUAGE=ko` 时静默跳过语言设置；因 SDK 无韩语枚举，统一回退到 `Language.EN` 并记录调试日志。
+- [文档] `.env.example.ko` 同步补全 `REPORT_LANGUAGE` 的 `ko` 选项与 Longbridge SDK 韩语回退说明（与 `.env.example` 一致）。
+- [测试] 为 report_language/analyzer/market_phase_summary/notification/longbridge_fetcher 韩语路径补充单测，覆盖韩语回退值、系统提示韩语分支、来源显示名 KeyError 回归与 Longbridge `ko→EN` 映射。
 - [改进] 本地开发环境 uv 导入（pyproject.toml 单源依赖 + uv.lock 锁定, CI/Docker 保持 pip 消费 requirements.txt）
 - [文档] 新增 `.env.example.ko` 韩文环境变量模板，并将韩文 README 的本地配置示例切换为该模板。
 - [文档] .env.example REPORT_LANGUAGE 选项补全 ko(韩文)；本地 .env 切换为 REPORT_LANGUAGE=ko

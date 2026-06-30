@@ -9,8 +9,10 @@ from src.report_language import (
     get_sentiment_label,
     get_signal_level,
     infer_decision_type_from_advice,
-    localize_trend_prediction,
     localize_bias_status,
+    localize_confidence_level,
+    localize_operation_advice,
+    localize_trend_prediction,
 )
 
 
@@ -72,6 +74,35 @@ class ReportLanguageTestCase(unittest.TestCase):
             infer_decision_type_from_advice("不破支撑后仍可持有"),
             "hold",
         )
+
+    def test_localize_helpers_translate_korean(self) -> None:
+        self.assertEqual(localize_operation_advice("hold", "ko"), "보유")
+        self.assertEqual(localize_operation_advice("buy", "ko"), "매수")
+        self.assertEqual(localize_operation_advice("sell", "ko"), "매도")
+        self.assertEqual(localize_trend_prediction("sideways", "ko"), "횡보")
+        self.assertEqual(localize_trend_prediction("bullish", "ko"), "상승 전망")
+        self.assertEqual(localize_confidence_level("low", "ko"), "낮음")
+        self.assertEqual(localize_confidence_level("medium", "ko"), "보통")
+
+    def test_canonical_maps_recognize_korean_source(self) -> None:
+        # 역방향 인식: LLM이 한국어로 출력해도 decision 분류/신호가 정상 동작해야 함
+        self.assertEqual(infer_decision_type_from_advice("매수"), "buy")
+        self.assertEqual(infer_decision_type_from_advice("매도"), "sell")
+        self.assertEqual(infer_decision_type_from_advice("보유"), "hold")
+        self.assertEqual(infer_decision_type_from_advice("비중 축소"), "sell")
+        signal_text, _emoji, signal_tag = get_signal_level("매수", 60, "ko")
+        self.assertEqual(signal_tag, "buy")
+        self.assertEqual(signal_text, "매수")
+        # 한국어 입력 -> 영어 출력 역방향 변환
+        self.assertEqual(localize_operation_advice("매수", "en"), "Buy")
+        self.assertEqual(localize_trend_prediction("횡보", "en"), "Sideways")
+        self.assertEqual(localize_confidence_level("높음", "en"), "High")
+
+    def test_get_sentiment_label_korean(self) -> None:
+        self.assertEqual(get_sentiment_label(80, "ko"), "매우 낙관")
+        self.assertEqual(get_sentiment_label(60, "ko"), "낙관")
+        self.assertEqual(get_sentiment_label(40, "ko"), "중립")
+        self.assertEqual(get_sentiment_label(20, "ko"), "비관")
 
 
 if __name__ == "__main__":

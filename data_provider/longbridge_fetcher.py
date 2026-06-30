@@ -185,6 +185,10 @@ def _longbridge_config_kwargs() -> Dict[str, Any]:
                 kw["language"] = Language.ZH_CN
             elif rl == "en":
                 kw["language"] = Language.EN
+            elif rl == "ko":
+                # Longbridge SDK has no Korean locale; fall back to English (SDK-side log language only).
+                kw["language"] = Language.EN
+                logger.debug("Longbridge SDK has no Korean locale; falling back to EN for REPORT_LANGUAGE=ko")
         except Exception as e:
             logger.debug("Longbridge language from REPORT_LANGUAGE skipped: %s", e)
 

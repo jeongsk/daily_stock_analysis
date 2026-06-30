@@ -119,6 +119,21 @@ class AnalyzerNewsPromptTestCase(unittest.TestCase):
         self.assertIn("多头排列必须条件", prompt)
         self.assertIn("多头排列：MA5 > MA10 > MA20", prompt)
 
+    def test_analysis_prompt_emits_korean_output_instruction_for_ko(self) -> None:
+        with patch.object(GeminiAnalyzer, "_init_litellm", return_value=None):
+            analyzer = GeminiAnalyzer()
+
+        prompt = analyzer._get_analysis_system_prompt("ko", stock_code="AAPL")
+
+        # 한국어 출력 지시가 포함되어야 함
+        self.assertIn("한국어", prompt)
+        # JSON 키 / decision_type 제약은 언어 무관하게 보존
+        self.assertIn("decision_type", prompt)
+        self.assertIn("buy|hold|sell", prompt)
+        # 중국어 출력 지시 섹션이 한국어 분기로 누출되지 않아야 함
+        self.assertNotIn("输出语言", prompt)
+        self.assertNotIn("所有面向用户的文本值必须使用中文", prompt)
+
     def test_analysis_prompt_requires_phase_decision_in_main_and_legacy_modes(self) -> None:
         for legacy in (False, True):
             with patch.object(GeminiAnalyzer, "_init_litellm", return_value=None):

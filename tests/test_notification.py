@@ -1853,5 +1853,22 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
         self.assertAlmostEqual(mock_post.call_count, 4, delta=1)
 
 
+class TestSourceDisplayNameKorean(unittest.TestCase):
+    """Regression: ``_SOURCE_DISPLAY_NAMES`` must include Korean (ko) entries so
+    that rendering a realtime source under REPORT_LANGUAGE=ko does not raise
+    KeyError, and the lookup degrades safely for uncovered languages/sources."""
+
+    def test_source_display_name_korean_no_keyerror(self) -> None:
+        service = NotificationService.__new__(NotificationService)
+        self.assertEqual(service._get_source_display_name("tencent", "ko"), "텐센트 파이낸스")
+        self.assertEqual(service._get_source_display_name("longbridge", "ko"), "롱브리지")
+        self.assertEqual(service._get_source_display_name("akshare_em", "ko"), "동방재력(Eastmoney)")
+        # 미등록 소스는 원문 그대로 반환
+        self.assertEqual(service._get_source_display_name("unknown_src", "ko"), "unknown_src")
+        # en/zh 회귀
+        self.assertEqual(service._get_source_display_name("tencent", "en"), "Tencent Finance")
+        self.assertEqual(service._get_source_display_name("tencent", "zh"), "腾讯财经")
+
+
 if __name__ == "__main__":
     unittest.main()
