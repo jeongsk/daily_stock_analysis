@@ -118,6 +118,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修复] Web 大盘复盘结构化数据统一格式化成交额、指数点位、涨跌幅和高/低值，避免浮点长尾或缺失值 `0.00` 直接展示；同步更新 `MarketReviewReportView` 与 `HomePage` 回归断言（如 `3150.20`）。
 - [文档] 本次变更仅涉及 Web 展示层（`apps/dsa-web`）与相关前端测试，未改动模型名、provider、Base URL、LiteLLM、`src/services/image_stock_extractor.py` 或其它后端/配置迁移语义，若需回退可直接还原本次前端补丁；兼容边界与可回退路径见现有 LLM 配置文档（如 `docs/LLM_CONFIG_GUIDE*.md`）。
 - [改进] 台股三大法人 fetcher 韧性加固：(1) 接入熔断器（复用 `realtime_types.CircuitBreaker`，按市场 twse/tpex 分流，连续失败 3 次→冷却 ~5min→半开探测），TWSE/TPEx 端点异常时快速跳过网络往返并 fail-open，避免端点故障时每档个股都付 timeout+throttle；(2) TPEx OpenAPI 仅服务最新交易日，调用方传入与服务日期不符的明确日期时改为 fail-open（返回无数据），避免静默返回错日资料。
+- [文档] #1743 Phase 4 同步本地 CLI backend 隐私/部署边界：local CLI 不是离线模型，Docker/CI/远端需自行安装登录，DSA 不读取 Claude/OpenCode credential 文件。
 - [新功能] 台股报告接入三大法人：tw 个股分析报告的 institution 区块改为展示 TWSE T86 / TPEx 三大法人原始买卖超净额（外资/投信/自营/合计，单位:股）；tw-only、严格 additive（A股/港股/美股/日韩股 offshore 流程字节不变）、fail-open（取不到数据维持 not_supported，绝不中断分析）；不接 Web、不派生 capital_flow_signal、不改评分权重或 schema。
 
 ## [3.24.1] - 2026-06-28
