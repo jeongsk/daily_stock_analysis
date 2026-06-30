@@ -4,9 +4,10 @@
  * Manage autocomplete interaction logic
  */
 
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import type { StockIndexItem, StockSuggestion } from '../types/stockIndex';
 import { searchStocks } from '../utils/searchStocks';
+import { getStockIndexDisplayName } from '../utils/stockDisplayName';
 import { SEARCH_CONFIG } from '../utils/stockIndexFields';
 
 export interface UseAutocompleteOptions {
@@ -16,6 +17,8 @@ export interface UseAutocompleteOptions {
   debounceMs?: number;
   /** Limit on number of results to return */
   limit?: number;
+  /** Language used to choose suggestion display names */
+  language?: string;
 }
 
 export interface UseAutocompleteResult {
@@ -66,6 +69,7 @@ export function useAutocomplete(
     minLength = SEARCH_CONFIG.MIN_QUERY_LENGTH,
     debounceMs = SEARCH_CONFIG.DEBOUNCE_MS,
     limit = SEARCH_CONFIG.DEFAULT_LIMIT,
+    language,
   } = options;
 
   const [query, setQuery] = useState('');
@@ -78,6 +82,13 @@ export function useAutocomplete(
 
   // Use ref to store debounce timer
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const localizedSuggestions = useMemo(() => (
+    suggestions.map(suggestion => ({
+      ...suggestion,
+      displayName: getStockIndexDisplayName(suggestion, language),
+    }))
+  ), [suggestions, language]);
 
   // Search function (debounced)
   const search = useCallback((q: string) => {
@@ -93,7 +104,7 @@ export function useAutocomplete(
     }
 
     try {
-      const results = searchStocks(q, index, { limit });
+      const results = searchStocks(q, index, { limit, language });
       setSuggestions(results);
       setIsOpen(results.length > 0);
       setHighlightedIndex(-1);
@@ -106,7 +117,7 @@ export function useAutocomplete(
       setIsOpen(false);
       setHighlightedIndex(-1);
     }
-  }, [index, minLength, limit, runtimeFallback]);
+  }, [index, minLength, limit, language, runtimeFallback]);
 
   // Input handling (with debounce)
   const handleInputChange = useCallback((value: string) => {
@@ -138,18 +149,18 @@ export function useAutocomplete(
   // Highlight previous item
   const highlightPrevious = useCallback(() => {
     setHighlightedIndex(prev => {
-      if (prev <= 0) return suggestions.length - 1;
+      if (prev <= 0) return localizedSuggestions.length - 1;
       return prev - 1;
     });
-  }, [suggestions.length]);
+  }, [localizedSuggestions.length]);
 
   // Highlight next item
   const highlightNext = useCallback(() => {
     setHighlightedIndex(prev => {
-      if (prev >= suggestions.length - 1) return 0;
+      if (prev >= localizedSuggestions.length - 1) return 0;
       return prev + 1;
     });
-  }, [suggestions.length]);
+  }, [localizedSuggestions.length]);
 
   // Close dropdown
   const close = useCallback(() => {
@@ -177,7 +188,7 @@ export function useAutocomplete(
   return {
     query,
     setQuery: handleInputChange,
-    suggestions,
+    suggestions: localizedSuggestions,
     isOpen,
     highlightedIndex,
     setHighlightedIndex,

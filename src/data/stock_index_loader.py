@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 _STOCK_INDEX_FILENAME = "stocks.index.json"
 _STOCK_INDEX_CACHE: Dict[str, str] | None = None
+_STOCK_INDEX_RECORD_CACHE: Dict[str, dict[str, str]] | None = None
 _STOCK_CODE_LOOKUP_CACHE: Dict[str, str] | None = None
 _REMOTE_INDEX_VALIDITY_CACHE: tuple[Path, float, int, bool] | None = None
 _STOCK_INDEX_CACHE_LOCK = RLock()
@@ -96,6 +97,38 @@ def _build_stock_name_map(raw_items: list) -> Dict[str, str]:
 
         for key in _build_lookup_keys(str(canonical_code or ""), str(display_code or "")):
             stock_name_map[key] = str(name_zh).strip()
+
+    return stock_name_map
+
+
+def _select_localized_name(record: dict[str, str], language: Optional[str]) -> Optional[str]:
+    normalized = str(language or "").strip().lower()
+    if normalized.startswith("ko"):
+        return record.get("nameKo") or record.get("nameEn") or record.get("nameZh")
+    if normalized.startswith("en"):
+        return record.get("nameEn") or record.get("nameZh")
+    return record.get("nameZh")
+
+
+def _build_stock_name_record_map(raw_items: list) -> Dict[str, dict[str, str]]:
+    stock_name_map: Dict[str, dict[str, str]] = {}
+    for item in raw_items:
+        if not isinstance(item, list) or len(item) < 3:
+            continue
+
+        canonical_code, display_code, name_zh = item[0], item[1], item[2]
+        code_text = str(display_code or canonical_code or "")
+        if not is_meaningful_stock_name(name_zh, code_text):
+            continue
+
+        record = {"nameZh": str(name_zh).strip()}
+        if len(item) > 10 and str(item[10] or "").strip():
+            record["nameEn"] = str(item[10]).strip()
+        if len(item) > 11 and str(item[11] or "").strip():
+            record["nameKo"] = str(item[11]).strip()
+
+        for key in _build_lookup_keys(str(canonical_code or ""), str(display_code or "")):
+            stock_name_map[key] = record
 
     return stock_name_map
 
@@ -272,10 +305,52 @@ def get_stock_name_index_map() -> Dict[str, str]:
         return _STOCK_INDEX_CACHE
 
 
-def get_index_stock_name(stock_code: str) -> str | None:
+def get_stock_name_index_record_map() -> Dict[str, dict[str, str]]:
+    """Lazily load and cache localized generated stock-name index records."""
+    global _STOCK_INDEX_RECORD_CACHE
+
+    if _STOCK_INDEX_RECORD_CACHE is not None:
+        return _STOCK_INDEX_RECORD_CACHE
+
+    with _STOCK_INDEX_CACHE_LOCK:
+        if _STOCK_INDEX_RECORD_CACHE is not None:
+            return _STOCK_INDEX_RECORD_CACHE
+
+        remote_path = get_remote_stock_index_cache_path()
+        for index_path in _get_fresh_stock_index_candidates(get_stock_index_candidate_paths(), remote_path):
+            try:
+                raw_items = _load_stock_index_payload(index_path)
+                if _same_path(index_path, remote_path):
+                    validate_stock_index_payload(raw_items)
+                _STOCK_INDEX_RECORD_CACHE = _build_stock_name_record_map(raw_items)
+                logger.debug(
+                    "[股票名称] 已加载前端股票索引本地化映射: %s (%d 条)",
+                    index_path,
+                    len(_STOCK_INDEX_RECORD_CACHE),
+                )
+                return _STOCK_INDEX_RECORD_CACHE
+            except (OSError, TypeError, ValueError) as exc:
+                logger.debug("[股票名称] 读取股票索引本地化映射失败 %s: %s", index_path, exc)
+
+        _STOCK_INDEX_RECORD_CACHE = {}
+        return _STOCK_INDEX_RECORD_CACHE
+
+
+def get_index_stock_name(stock_code: str, language: Optional[str] = None) -> str | None:
     """Resolve a stock name from the generated frontend stock index."""
     code = str(stock_code or "").strip()
     if not code:
+        return None
+
+    if language is not None:
+        stock_name_records = get_stock_name_index_record_map()
+        for key in _build_lookup_keys(code, code):
+            record = stock_name_records.get(key)
+            if not record:
+                continue
+            name = _select_localized_name(record, language)
+            if is_meaningful_stock_name(name, code):
+                return name
         return None
 
     stock_name_map = get_stock_name_index_map()
@@ -350,9 +425,10 @@ def _resolve_index_stock_code_uncached(query: str) -> str | None:
 
 def clear_stock_index_cache() -> None:
     """Clear the in-process stock index lookup cache."""
-    global _REMOTE_INDEX_VALIDITY_CACHE, _STOCK_INDEX_CACHE, _STOCK_CODE_LOOKUP_CACHE
+    global _REMOTE_INDEX_VALIDITY_CACHE, _STOCK_INDEX_CACHE, _STOCK_INDEX_RECORD_CACHE, _STOCK_CODE_LOOKUP_CACHE
     with _STOCK_INDEX_CACHE_LOCK:
         _STOCK_INDEX_CACHE = None
+        _STOCK_INDEX_RECORD_CACHE = None
         _STOCK_CODE_LOOKUP_CACHE = None
         _REMOTE_INDEX_VALIDITY_CACHE = None
 

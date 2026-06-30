@@ -83,9 +83,11 @@ const mockIndex: StockIndexItem[] = [
     canonicalCode: "005930.KS",
     displayCode: "005930.KS",
     nameZh: "三星电子",
+    nameEn: "Samsung Electronics Co. Ltd.",
+    nameKo: "삼성전자",
     pinyinFull: "sanxingdianzi",
     pinyinAbbr: "sxdz",
-    aliases: ["Samsung", "Samsung Electronics", "三星"],
+    aliases: ["Samsung", "Samsung Electronics", "三星", "삼성전자"],
     market: "KR",
     assetType: "stock",
     active: true,
@@ -95,9 +97,11 @@ const mockIndex: StockIndexItem[] = [
     canonicalCode: "035720.KQ",
     displayCode: "035720.KQ",
     nameZh: "Kakao",
+    nameEn: "Kakao Corp.",
+    nameKo: "카카오",
     pinyinFull: "Kakao",
     pinyinAbbr: "Kakao",
-    aliases: ["Kakao", "可可"],
+    aliases: ["Kakao", "可可", "카카오"],
     market: "KR",
     assetType: "stock",
     active: true,
@@ -263,6 +267,15 @@ describe('searchStocks', () => {
     expect(results[0].matchField).toBe('alias');
   });
 
+  test('exact alias match is reported before localized name contains match', () => {
+    const results = searchStocks('Samsung', mockIndex, { language: 'en' });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].canonicalCode).toBe('005930.KS');
+    expect(results[0].matchType).toBe('exact');
+    expect(results[0].matchField).toBe('alias');
+  });
+
   test('韩股 KOSPI Yahoo 后缀代码匹配', () => {
     const results = searchStocks('005930.KS', mockIndex);
     expect(results).toHaveLength(1);
@@ -281,6 +294,47 @@ describe('searchStocks', () => {
     const results = searchStocks('三星', mockIndex);
     expect(results).toHaveLength(1);
     expect(results[0].canonicalCode).toBe('005930.KS');
+  });
+
+  test('uses Korean display names while matching Chinese and Korean names or aliases', () => {
+    const byChineseName = searchStocks('三星电子', mockIndex, { language: 'ko' });
+    const byKoreanAlias = searchStocks('삼성전자', mockIndex, { language: 'ko' });
+    const byKoreanName = searchStocks('카카오', mockIndex, { language: 'ko' });
+
+    expect(byChineseName[0]).toMatchObject({
+      canonicalCode: '005930.KS',
+      displayName: '삼성전자',
+      nameEn: 'Samsung Electronics Co. Ltd.',
+      nameKo: '삼성전자',
+      matchField: 'name',
+    });
+    expect(byKoreanAlias[0]).toMatchObject({
+      canonicalCode: '005930.KS',
+      displayName: '삼성전자',
+    });
+    expect(byKoreanName[0]).toMatchObject({
+      canonicalCode: '035720.KQ',
+      displayName: '카카오',
+      matchField: 'name',
+    });
+  });
+
+  test('uses English display names when language is English', () => {
+    const results = searchStocks('삼성전자', mockIndex, { language: 'en' });
+
+    expect(results[0]).toMatchObject({
+      canonicalCode: '005930.KS',
+      displayName: 'Samsung Electronics Co. Ltd.',
+    });
+  });
+
+  test('defaults suggestion display names to Chinese', () => {
+    const results = searchStocks('삼성전자', mockIndex);
+
+    expect(results[0]).toMatchObject({
+      canonicalCode: '005930.KS',
+      displayName: '三星电子',
+    });
   });
 
   describe('Edge case tests', () => {

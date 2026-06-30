@@ -11,6 +11,7 @@ import type { ErrorInfo, ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useStockIndex } from '../../hooks/useStockIndex';
 import { useAutocomplete } from '../../hooks/useAutocomplete';
+import { useUiLanguage } from '../../contexts/UiLanguageContext';
 import { SuggestionsList } from './SuggestionsList';
 import { cn } from '../../utils/cn';
 
@@ -100,6 +101,7 @@ function StockAutocompleteInner({
   className,
 }: StockAutocompleteProps) {
   const { index, loading, fallback } = useStockIndex();
+  const { language } = useUiLanguage();
   const {
     // query,
     setQuery,
@@ -115,7 +117,7 @@ function StockAutocompleteInner({
     setIsComposing,
     runtimeFallback,
     error: autocompleteError,
-  } = useAutocomplete(index);
+  } = useAutocomplete(index, { language });
 
   const inputRef = useRef<HTMLInputElement>(null);
   const prevValueRef = useRef(value);
@@ -194,7 +196,7 @@ function StockAutocompleteInner({
           const selected = suggestions[highlightedIndex];
           onChange(selected.displayCode);
           closeSuggestions();
-          onSubmit(selected.canonicalCode, selected.nameZh, 'autocomplete');
+          onSubmit(selected.canonicalCode, selected.displayName, 'autocomplete');
         } else {
           // Submit directly
           onSubmit(value);
@@ -283,7 +285,7 @@ function StockAutocompleteInner({
             // Close dropdown list
             closeSuggestions();
             // Submit analysis
-            onSubmit(s.canonicalCode, s.nameZh, 'autocomplete');
+            onSubmit(s.canonicalCode, s.displayName, 'autocomplete');
           }}
           onMouseEnter={(index) => setHighlightedIndex(index)}
           style={{ position: 'fixed', ...dropdownStyle }}

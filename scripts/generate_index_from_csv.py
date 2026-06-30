@@ -351,6 +351,12 @@ def get_stock_name(row: Dict[str, str], market: str) -> Optional[str]:
         return name if name else None
 
 
+def get_optional_localized_name(row: Dict[str, str], field_name: str) -> Optional[str]:
+    """Return a normalized optional localized stock name from a CSV row."""
+    value = unicodedata.normalize('NFKC', str(row.get(field_name, '') or '')).strip()
+    return value if value else None
+
+
 def parse_aliases(row: Dict[str, str]) -> List[str]:
     """Parse optional seed aliases from a CSV row."""
     raw_aliases = (row.get('aliases') or row.get('alias') or '').strip()
@@ -410,10 +416,15 @@ def parse_stock_row(row: Dict[str, str], preferred_market: Optional[str] = None)
     if not display_code:
         return None
 
+    name_en = get_optional_localized_name(row, 'enname')
+    name_ko = get_optional_localized_name(row, 'name_ko')
+
     return {
         'ts_code': ts_code,
         'symbol': display_code,
         'name': name,
+        'name_en': name_en,
+        'name_ko': name_ko,
         'market': market,
         'aliases': parse_aliases(row),
     }
@@ -558,6 +569,8 @@ def build_stock_index(stocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         ts_code = stock['ts_code']
         symbol = stock['symbol']
         name = stock['name']
+        name_en = stock.get('name_en')
+        name_ko = stock.get('name_ko')
         market = stock.get('market', 'CN')  # 优先使用已解析的市场，否则从 ts_code 判断
 
         # 如果没有 market 字段，从 ts_code 判断
@@ -577,6 +590,8 @@ def build_stock_index(stocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "canonicalCode": ts_code,    # Example: 000001.SZ, AAPL
             "displayCode": symbol,       # Example: 000001, AAPL
             "nameZh": name,
+            "nameEn": name_en,
+            "nameKo": name_ko,
             "pinyinFull": pinyin_full,
             "pinyinAbbr": pinyin_abbr,
             "aliases": aliases,
@@ -612,6 +627,8 @@ def compress_index(index: List[Dict[str, Any]]) -> List[List]:
             item["assetType"],
             item["active"],
             item.get("popularity", 0),
+            item.get("nameEn"),
+            item.get("nameKo"),
         ])
     return compressed
 

@@ -271,6 +271,25 @@ class TestDataCleaning:
         assert result['market'] == 'KR'
         assert result['aliases'] == ['Samsung', 'Samsung Electronics', '三星']
 
+    def test_valid_kr_stock_preserves_localized_names(self):
+        """测试韩股种子记录保留英文名和韩文名"""
+        row = {
+            'ts_code': '005930.KS',
+            'name': '三星电子',
+            'enname': 'Samsung Electronics Co. Ltd.',
+            'name_ko': '삼성전자',
+            'aliases': 'Samsung|Samsung Electronics|三星|삼성전자',
+        }
+        result = parse_stock_row(row, 'KR')
+        assert result is not None
+        assert result['ts_code'] == '005930.KS'
+        assert result['symbol'] == '005930.KS'
+        assert result['name'] == '三星电子'
+        assert result['name_en'] == 'Samsung Electronics Co. Ltd.'
+        assert result['name_ko'] == '삼성전자'
+        assert result['market'] == 'KR'
+        assert result['aliases'] == ['Samsung', 'Samsung Electronics', '三星', '삼성전자']
+
     def test_us_dummy_filtered(self):
         """测试美股 DUMMY 记录被过滤"""
         row = {
@@ -423,7 +442,31 @@ class TestOutputFormat:
         }]
 
         compressed = compress_index(index)
-        assert len(compressed[0]) == 10  # 10个字段
+        assert len(compressed[0]) == 12  # 12个字段
+
+    def test_compress_index_appends_optional_localized_names(self):
+        """测试压缩格式在尾部追加可选英文名和韩文名"""
+        index = [{
+            "canonicalCode": "005930.KS",
+            "displayCode": "005930.KS",
+            "nameZh": "三星电子",
+            "nameEn": "Samsung Electronics Co. Ltd.",
+            "nameKo": "삼성전자",
+            "pinyinFull": "sanxingdianzi",
+            "pinyinAbbr": "sxdz",
+            "aliases": ["Samsung", "삼성전자"],
+            "market": "KR",
+            "assetType": "stock",
+            "active": True,
+            "popularity": 100,
+        }]
+
+        compressed = compress_index(index)
+
+        assert compressed[0][0] == "005930.KS"
+        assert compressed[0][2] == "三星电子"
+        assert compressed[0][10] == "Samsung Electronics Co. Ltd."
+        assert compressed[0][11] == "삼성전자"
 
     def test_json_serialization(self):
         """测试 JSON 序列化"""
@@ -500,12 +543,13 @@ class TestIntegration:
 
         kr_csv = tmp_path / 'stock_list_kr.csv'
         with open(kr_csv, 'w', encoding='utf-8-sig', newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=['ts_code', 'name', 'enname', 'aliases'])
+            writer = csv.DictWriter(f, fieldnames=['ts_code', 'name', 'enname', 'name_ko', 'aliases'])
             writer.writeheader()
             writer.writerow({
                 'ts_code': '005930.KS',
                 'name': '三星电子',
                 'enname': 'Samsung Electronics',
+                'name_ko': '삼성전자',
                 'aliases': 'Samsung|三星'
             })
 
@@ -522,6 +566,10 @@ class TestIntegration:
         assert len(index) == 5
         assert next(item for item in index if item['canonicalCode'] == '7203.T')['aliases'] == ['Toyota', '丰田']
         assert next(item for item in index if item['canonicalCode'] == '005930.KS')['aliases'] == ['Samsung', '三星']
+        samsung = next(item for item in index if item['canonicalCode'] == '005930.KS')
+        assert samsung['nameZh'] == '三星电子'
+        assert samsung['nameEn'] == 'Samsung Electronics'
+        assert samsung['nameKo'] == '삼성전자'
 
         # 压缩索引
         compressed = compress_index(index)
@@ -531,7 +579,7 @@ class TestIntegration:
 
         # 验证字段数量
         for item in compressed:
-            assert len(item) == 10
+            assert len(item) == 12
 
     def test_market_distribution(self, tmp_path):
         """测试市场分布统计"""

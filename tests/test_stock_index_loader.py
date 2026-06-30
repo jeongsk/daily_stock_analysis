@@ -64,6 +64,36 @@ class TestStockIndexLoader(unittest.TestCase):
                 self.assertEqual(stock_index_loader.get_index_stock_name("700.HK"), "腾讯控股")
                 self.assertEqual(stock_index_loader.get_index_stock_name("aapl"), "苹果")
 
+    def test_get_index_stock_name_selects_localized_name_by_language(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            index_path = Path(temp_dir) / "stocks.index.json"
+            index_path.write_text(
+                json.dumps(
+                    [[
+                        "005930.KS",
+                        "005930.KS",
+                        "三星电子",
+                        "sanxingdianzi",
+                        "sxdz",
+                        ["Samsung", "삼성전자"],
+                        "KR",
+                        "stock",
+                        True,
+                        100,
+                        "Samsung Electronics Co. Ltd.",
+                        "삼성전자",
+                    ]],
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.object(stock_index_loader, "get_stock_index_candidate_paths", return_value=(index_path,)):
+                self.assertEqual(stock_index_loader.get_index_stock_name("005930.KS"), "三星电子")
+                self.assertEqual(stock_index_loader.get_index_stock_name("005930.KS", language="zh"), "三星电子")
+                self.assertEqual(stock_index_loader.get_index_stock_name("005930.KS", language="en"), "Samsung Electronics Co. Ltd.")
+                self.assertEqual(stock_index_loader.get_index_stock_name("005930.KS", language="ko"), "삼성전자")
+
     def test_default_candidate_paths_prefer_remote_cache(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             remote_cache = Path(temp_dir) / "data" / "cache" / "stocks.index.json"

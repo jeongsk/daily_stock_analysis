@@ -9,6 +9,7 @@
 
 import type { StockIndexItem, StockSuggestion } from '../types/stockIndex';
 import { normalizeQuery } from './normalizeQuery';
+import { getStockIndexDisplayName, type StockNameLanguage } from './stockDisplayName';
 import { MATCH_SCORE, SEARCH_CONFIG } from './stockIndexFields';
 
 export interface SearchOptions {
@@ -16,6 +17,8 @@ export interface SearchOptions {
   limit?: number;
   /** Show only active stocks */
   activeOnly?: boolean;
+  /** Language used to choose display names */
+  language?: StockNameLanguage;
 }
 
 /**
@@ -64,6 +67,9 @@ export function searchStocks(
     canonicalCode: s.item.canonicalCode,
     displayCode: s.item.displayCode,
     nameZh: s.item.nameZh,
+    nameEn: s.item.nameEn,
+    nameKo: s.item.nameKo,
+    displayName: getStockIndexDisplayName(s.item, options.language),
     market: s.item.market,
     matchType: determineMatchType(s.score),
     matchField: determineMatchField(normalizedQuery, s.item),
@@ -89,7 +95,9 @@ function calculateMatchScore(query: string, item: StockIndexItem): number {
   const q = query.toLowerCase();
   const normalizedCanonicalCode = normalizeQuery(item.canonicalCode);
   const normalizedDisplayCode = normalizeQuery(item.displayCode);
-  const normalizedName = normalizeQuery(item.nameZh);
+  const normalizedNames = [item.nameZh, item.nameEn, item.nameKo]
+    .map(name => normalizeQuery(name || ''))
+    .filter(Boolean);
   const normalizedPinyinFull = normalizeQuery(item.pinyinFull || '');
   const normalizedPinyinAbbr = normalizeQuery(item.pinyinAbbr || '');
   const normalizedAliases = item.aliases?.map(alias => normalizeQuery(alias)) || [];
@@ -97,19 +105,19 @@ function calculateMatchScore(query: string, item: StockIndexItem): number {
   // 1. Exact match (96-100 points)
   if (q === normalizedCanonicalCode) return 100;
   if (q === normalizedDisplayCode) return 99;
-  if (q === normalizedName) return 98;
+  if (normalizedNames.some(name => name === q)) return 98;
   if (normalizedAliases.some(a => a === q)) return 97;
   if (q === normalizedPinyinAbbr) return 96;
 
   // 2. Prefix match (77-80 points)
   if (normalizedDisplayCode.startsWith(q)) score = Math.max(score, 80);
-  if (normalizedName.startsWith(q)) score = Math.max(score, 79);
+  if (normalizedNames.some(name => name.startsWith(q))) score = Math.max(score, 79);
   if (normalizedPinyinAbbr.startsWith(q)) score = Math.max(score, 78);
   if (normalizedAliases.some(a => a.startsWith(q))) score = Math.max(score, 77);
 
   // 3. Contains match (57-60 points)
   if (normalizedDisplayCode.includes(q)) score = Math.max(score, 60);
-  if (normalizedName.includes(q)) score = Math.max(score, 59);
+  if (normalizedNames.some(name => name.includes(q))) score = Math.max(score, 59);
   if (normalizedPinyinFull.includes(q)) score = Math.max(score, 58);
   if (normalizedAliases.some(a => a.includes(q))) score = Math.max(score, 57);
 
@@ -133,21 +141,28 @@ function determineMatchField(query: string, item: StockIndexItem): 'code' | 'nam
   const q = query.toLowerCase();
   const normalizedCanonicalCode = normalizeQuery(item.canonicalCode);
   const normalizedDisplayCode = normalizeQuery(item.displayCode);
-  const normalizedName = normalizeQuery(item.nameZh);
+  const normalizedNames = [item.nameZh, item.nameEn, item.nameKo]
+    .map(name => normalizeQuery(name || ''))
+    .filter(Boolean);
   const normalizedPinyinFull = normalizeQuery(item.pinyinFull || '');
   const normalizedPinyinAbbr = normalizeQuery(item.pinyinAbbr || '');
   const normalizedAliases = item.aliases?.map(alias => normalizeQuery(alias)) || [];
 
-  if (normalizedCanonicalCode.includes(q) ||
-      normalizedDisplayCode.includes(q)) {
-    return 'code';
-  }
-  if (normalizedName.includes(q)) return 'name';
-  if (normalizedPinyinFull.includes(q) ||
-      normalizedPinyinAbbr.includes(q)) {
-    return 'pinyin';
-  }
-  if (normalizedAliases.some(a => a.includes(q))) return 'alias';
+  if (q === normalizedCanonicalCode || q === normalizedDisplayCode) return 'code';
+  if (normalizedNames.some(name => name === q)) return 'name';
+  if (normalizedAliases.some(alias => alias === q)) return 'alias';
+  if (q === normalizedPinyinAbbr) return 'pinyin';
+
+  if (normalizedDisplayCode.startsWith(q)) return 'code';
+  if (normalizedNames.some(name => name.startsWith(q))) return 'name';
+  if (normalizedPinyinAbbr.startsWith(q)) return 'pinyin';
+  if (normalizedAliases.some(alias => alias.startsWith(q))) return 'alias';
+
+  if (normalizedDisplayCode.includes(q)) return 'code';
+  if (normalizedNames.some(name => name.includes(q))) return 'name';
+  if (normalizedPinyinFull.includes(q)) return 'pinyin';
+  if (normalizedAliases.some(alias => alias.includes(q))) return 'alias';
+
   return 'name';
 }
 

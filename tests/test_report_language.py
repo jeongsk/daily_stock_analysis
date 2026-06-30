@@ -32,10 +32,42 @@ class ReportLanguageTestCase(unittest.TestCase):
         self.assertEqual(signal_tag, "buy")
 
     def test_get_localized_stock_name_replaces_placeholder_for_english(self) -> None:
-        self.assertEqual(
-            get_localized_stock_name("股票AAPL", "AAPL", "en"),
-            "Unnamed Stock",
-        )
+        with unittest.mock.patch("src.report_language.get_index_stock_name", return_value=None):
+            self.assertEqual(
+                get_localized_stock_name("股票AAPL", "AAPL", "en"),
+                "Unnamed Stock",
+            )
+
+    def test_get_localized_stock_name_uses_korean_index_name_for_korean_report(self) -> None:
+        def fake_index_name(code, language=None):
+            if code == "005930.KS" and language == "ko":
+                return "삼성전자"
+            if code == "005930.KS" and language == "zh":
+                return "三星电子"
+            return None
+
+        with unittest.mock.patch(
+            "src.report_language.get_index_stock_name",
+            side_effect=fake_index_name,
+        ):
+            self.assertEqual(
+                get_localized_stock_name("三星电子", "005930.KS", "ko"),
+                "삼성전자",
+            )
+
+    def test_get_localized_stock_name_preserves_custom_non_placeholder_name(self) -> None:
+        def fake_index_name(code, language=None):
+            if code == "005930.KS" and language == "ko":
+                return "삼성전자"
+            if code == "005930.KS" and language == "zh":
+                return "三星电子"
+            return None
+
+        with unittest.mock.patch("src.report_language.get_index_stock_name", side_effect=fake_index_name):
+            self.assertEqual(
+                get_localized_stock_name("自定义名称", "005930.KS", "ko"),
+                "自定义名称",
+            )
 
     def test_get_sentiment_label_preserves_higher_band_thresholds(self) -> None:
         self.assertEqual(get_sentiment_label(80, "en"), "Very Bullish")

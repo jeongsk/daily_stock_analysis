@@ -61,7 +61,7 @@ export function SuggestionsList({
 
             <div className="flex flex-col">
               <span className="text-sm font-medium text-primary-text">
-                {suggestion.nameZh}
+                {suggestion.displayName}
               </span>
               <span className="text-sm text-secondary-text">
                 {suggestion.displayCode}

@@ -19,6 +19,8 @@ export interface StockIndexItem {
   nameZh: string;
   /** English name: Kweichow Moutai */
   nameEn?: string;
+  /** Korean name: 삼성전자 */
+  nameKo?: string;
   /** Pinyin full: guizhoumaotai */
   pinyinFull?: string;
   /** Pinyin abbreviation: gzmt */
@@ -45,6 +47,12 @@ export interface StockSuggestion {
   displayCode: string;
   /** Chinese name */
   nameZh: string;
+  /** English name */
+  nameEn?: string;
+  /** Korean name */
+  nameKo?: string;
+  /** Language-selected display name */
+  displayName: string;
   /** Market */
   market: Market;
   /** Match type */
@@ -69,6 +77,8 @@ export type StockIndexTuple = [
   AssetType,
   boolean, // active
   number | undefined, // popularity
+  string?, // nameEn
+  string?, // nameKo
 ];
 
 /**

@@ -65,6 +65,7 @@ describe('useAutocomplete', () => {
         canonicalCode: '600519.SH',
         displayCode: '600519',
         nameZh: '贵州茅台',
+        displayName: '贵州茅台',
         market: 'CN',
         matchType: 'exact',
         matchField: 'code',
@@ -85,5 +86,43 @@ describe('useAutocomplete', () => {
     expect(result.current.isOpen).toBe(true);
     expect(result.current.suggestions).toHaveLength(1);
     expect(result.current.highlightedIndex).toBe(-1);
+  });
+
+  it('updates suggestion display names immediately when language changes', () => {
+    searchStocksMock.mockImplementation((_query, _index, options) => [
+      {
+        canonicalCode: '005930.KS',
+        displayCode: '005930.KS',
+        nameZh: '三星电子',
+        nameKo: '삼성전자',
+        displayName: options.language === 'ko' ? '삼성전자' : '三星电子',
+        market: 'KR',
+        matchType: 'exact',
+        matchField: 'code',
+        score: 99,
+      },
+    ]);
+
+    const { result, rerender } = renderHook(
+      ({ language }) => useAutocomplete(mockIndex, { debounceMs: 10, language }),
+      { initialProps: { language: 'zh' } },
+    );
+
+    act(() => {
+      result.current.setQuery('005930');
+    });
+
+    act(() => {
+      vi.advanceTimersByTime(10);
+    });
+
+    expect(result.current.suggestions[0].displayName).toBe('三星电子');
+
+    act(() => {
+      rerender({ language: 'ko' });
+    });
+
+    expect(result.current.suggestions[0].displayName).toBe('삼성전자');
+    expect(searchStocksMock).toHaveBeenCalledTimes(1);
   });
 });

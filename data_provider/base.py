@@ -2157,7 +2157,12 @@ class DataFetcherManager:
         logger.warning(f"[筹码分布] {stock_code} 所有数据源均失败")
         return None
 
-    def get_stock_name(self, stock_code: str, allow_realtime: bool = True) -> Optional[str]:
+    def get_stock_name(
+        self,
+        stock_code: str,
+        allow_realtime: bool = True,
+        report_language: Optional[str] = None,
+    ) -> Optional[str]:
         """
         获取股票中文名称（自动切换数据源）
         
@@ -2172,6 +2177,7 @@ class DataFetcherManager:
             allow_realtime: Whether to query realtime quote first. Set False when
                 caller only wants lightweight prefetch without triggering heavy
                 realtime source calls.
+            report_language: Optional report language for localized index names.
             
         Returns:
             股票中文名称，所有数据源都失败则返回 None
@@ -2180,25 +2186,49 @@ class DataFetcherManager:
         # Normalize code (strip SH/SZ prefix etc.)
         stock_code = normalize_stock_code(stock_code)
         static_name = STOCK_NAME_MAP.get(stock_code)
+        normalized_report_language = str(report_language or "").strip().lower()
+        use_generic_cache = report_language is None or normalized_report_language in {
+            "",
+            "zh",
+            "zh-cn",
+            "zh_cn",
+            "zh-tw",
+            "zh_tw",
+            "zh-hans",
+            "zh_hans",
+            "cn",
+            "chinese",
+        }
 
         # 1. 先检查缓存
-        cached_name = self._get_cached_stock_name(stock_code)
-        if cached_name is not None:
-            return cached_name
+        if use_generic_cache:
+            cached_name = self._get_cached_stock_name(stock_code)
+            if cached_name is not None:
+                return cached_name
         
-        if is_meaningful_stock_name(static_name, stock_code):
+        if use_generic_cache and is_meaningful_stock_name(static_name, stock_code):
             return self._cache_stock_name(stock_code, static_name) or static_name
 
-        index_name = get_index_stock_name(stock_code)
+        index_name = (
+            get_index_stock_name(stock_code)
+            if use_generic_cache
+            else get_index_stock_name(stock_code, language=report_language)
+        )
         if is_meaningful_stock_name(index_name, stock_code):
-            return self._cache_stock_name(stock_code, index_name) or index_name
+            if use_generic_cache:
+                return self._cache_stock_name(stock_code, index_name) or index_name
+            return index_name
+
+        if not use_generic_cache and is_meaningful_stock_name(static_name, stock_code):
+            return static_name
 
         # 2. 尝试从实时行情中获取（最快，可按需禁用）
         if allow_realtime:
             quote = self.get_realtime_quote(raw_stock_code or stock_code, log_final_failure=False)
             if quote and hasattr(quote, 'name') and is_meaningful_stock_name(getattr(quote, 'name', ''), stock_code):
                 name = quote.name
-                self._cache_stock_name(stock_code, name)
+                if use_generic_cache:
+                    self._cache_stock_name(stock_code, name)
                 logger.info(f"[股票名称] 从实时行情获取: {stock_code} -> {name}")
                 return name
 
@@ -2216,7 +2246,8 @@ class DataFetcherManager:
             try:
                 name = self._call_fetcher_method(fetcher, 'get_stock_name', stock_code)
                 if is_meaningful_stock_name(name, stock_code):
-                    self._cache_stock_name(stock_code, name)
+                    if use_generic_cache:
+                        self._cache_stock_name(stock_code, name)
                     logger.info(f"[股票名称] 从 {fetcher.name} 获取: {stock_code} -> {name}")
                     return name
             except Exception as e:

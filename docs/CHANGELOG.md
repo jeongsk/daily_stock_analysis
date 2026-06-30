@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [修复] 韩股自动补全、分析提交和韩文报告优先使用韩文股票名称，避免 `005930.KS` 等韩国股票在韩文界面或报告中显示为中文名称。
 - [修复] 修复 `REPORT_LANGUAGE=ko` 时分析正文与通知回退文案混入中文的问题：分析器系统/用户提示与完整性补全提示增加韩语分支，回退枚举值（趋势/建议/置信度）改用 `report_language` 本地化助手，并扩展 canonical map 识别韩语 LLM 输出。
 - [修复] 修复 `notification._SOURCE_DISPLAY_NAMES` 缺少韩语条目导致韩语通知渲染行情来源时抛 `KeyError` 的问题，并为未覆盖语言/来源增加防御性回退。
 - [修复] 修复 `market_phase_summary.format_public_market_status_line` 缺少韩语阶段/市场标签导致韩语汇总行回退中文的问题。

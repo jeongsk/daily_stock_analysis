@@ -11,7 +11,7 @@ import {
   getPopularStocks,
   groupStocksByMarket,
 } from '../stockIndexLoader';
-import type { StockIndexItem } from '../../types/stockIndex';
+import type { StockIndexItem, StockIndexTuple } from '../../types/stockIndex';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
 // Mock fetch
@@ -60,6 +60,7 @@ describe('stockIndexLoader', () => {
       canonicalCode: 'AAPL.US',
       displayCode: 'AAPL',
       nameZh: '苹果',
+      nameEn: 'Apple Inc.',
       pinyinFull: 'pingguo',
       pinyinAbbr: 'pg',
       aliases: [],
@@ -102,7 +103,7 @@ describe('stockIndexLoader', () => {
     });
 
     test('successfully loads compressed format index (tuple format)', async () => {
-      const compressedData = [
+      const compressedData: StockIndexTuple[] = [
         ['600519.SH', '600519', '贵州茅台', 'guizhoumaotai', 'gzmt', ['茅台'], 'CN', 'stock', true, 100],
         ['000001.SZ', '000001', '平安银行', 'pinganyinxing', 'payh', ['平银'], 'CN', 'stock', true, 90],
       ];
@@ -119,6 +120,41 @@ describe('stockIndexLoader', () => {
       expect(result.data).toHaveLength(2);
       expect(result.data[0].canonicalCode).toBe('600519.SH');
       expect(result.data[0].nameZh).toBe('贵州茅台');
+    });
+
+    test('successfully unpacks optional localized names from compressed format', async () => {
+      const compressedData = [
+        [
+          '005930.KS',
+          '005930.KS',
+          '三星电子',
+          'sanxingdianzi',
+          'sxdz',
+          ['Samsung', '삼성전자'],
+          'KR',
+          'stock',
+          true,
+          100,
+          'Samsung Electronics Co. Ltd.',
+          '삼성전자',
+        ],
+      ];
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => compressedData,
+      } as unknown as Response);
+
+      const result = await loadStockIndex();
+
+      expect(result.loaded).toBe(true);
+      expect(result.data).toHaveLength(1);
+      expect(result.data[0]).toMatchObject({
+        canonicalCode: '005930.KS',
+        nameZh: '三星电子',
+        nameEn: 'Samsung Electronics Co. Ltd.',
+        nameKo: '삼성전자',
+      });
     });
 
     test('returns fallback mode on network error', async () => {
@@ -205,6 +241,8 @@ describe('stockIndexLoader', () => {
         'stock',
         true,
         100,
+        undefined,
+        undefined,
       ]);
     });
 
@@ -227,6 +265,31 @@ describe('stockIndexLoader', () => {
       const compressed = compressIndex(itemWithoutAliases);
 
       expect(compressed[0][5]).toEqual([]);
+    });
+
+    test('appends optional localized names after popularity', () => {
+      const localizedItems: StockIndexItem[] = [
+        {
+          canonicalCode: '005930.KS',
+          displayCode: '005930.KS',
+          nameZh: '三星电子',
+          nameEn: 'Samsung Electronics Co. Ltd.',
+          nameKo: '삼성전자',
+          pinyinFull: 'sanxingdianzi',
+          pinyinAbbr: 'sxdz',
+          aliases: ['Samsung', '삼성전자'],
+          market: 'KR',
+          assetType: 'stock',
+          active: true,
+          popularity: 100,
+        },
+      ];
+
+      const compressed = compressIndex(localizedItems);
+
+      expect(compressed[0][9]).toBe(100);
+      expect(compressed[0][10]).toBe('Samsung Electronics Co. Ltd.');
+      expect(compressed[0][11]).toBe('삼성전자');
     });
 
     test('handles undefined aliases', () => {

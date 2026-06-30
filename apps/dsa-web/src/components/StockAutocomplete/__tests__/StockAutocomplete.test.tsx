@@ -7,6 +7,8 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { StockAutocomplete } from '../StockAutocomplete';
 import type { StockIndexItem, StockSuggestion } from '../../../types/stockIndex';
 
+const useAutocompleteMock = vi.hoisted(() => vi.fn());
+
 let stockIndexHookImpl: () => {
   index: StockIndexItem[];
   loading: boolean;
@@ -32,6 +34,7 @@ let autocompleteHookImpl: () => {
   runtimeFallback: boolean;
   error: Error | null;
 };
+let uiLanguage: 'zh' | 'en' | 'ko' = 'zh';
 
 // Mock the hooks
 vi.mock('../../../hooks/useStockIndex', () => ({
@@ -39,7 +42,15 @@ vi.mock('../../../hooks/useStockIndex', () => ({
 }));
 
 vi.mock('../../../hooks/useAutocomplete', () => ({
-  useAutocomplete: () => autocompleteHookImpl(),
+  useAutocomplete: (...args: unknown[]) => useAutocompleteMock(...args),
+}));
+
+vi.mock('../../../contexts/UiLanguageContext', () => ({
+  useUiLanguage: () => ({
+    language: uiLanguage,
+    setLanguage: vi.fn(),
+    t: (key: string) => key,
+  }),
 }));
 
 const mockIndex: StockIndexItem[] = [
@@ -62,6 +73,7 @@ const mockSuggestions: StockSuggestion[] = [
     canonicalCode: "600519.SH",
     displayCode: "600519",
     nameZh: "贵州茅台",
+    displayName: "贵州茅台",
     market: "CN",
     matchType: "exact" as const,
     matchField: "code" as const,
@@ -73,6 +85,7 @@ const hkSuggestion = {
   canonicalCode: "00700.HK",
   displayCode: "00700",
   nameZh: "腾讯控股",
+  displayName: "腾讯控股",
   market: "HK" as const,
   matchType: "exact" as const,
   matchField: "code" as const,
@@ -83,6 +96,7 @@ const bseSuggestion = {
   canonicalCode: "920493.BJ",
   displayCode: "920493",
   nameZh: "示例北交所股票",
+  displayName: "示例北交所股票",
   market: "BSE" as const,
   matchType: "exact" as const,
   matchField: "code" as const,
@@ -93,6 +107,9 @@ const krSuggestion = {
   canonicalCode: "000660.KS",
   displayCode: "000660.KS",
   nameZh: "SK Hynix",
+  nameEn: "SK hynix Inc.",
+  nameKo: "SK하이닉스",
+  displayName: "SK Hynix",
   market: "KR" as const,
   matchType: "contains" as const,
   matchField: "code" as const,
@@ -103,6 +120,7 @@ const jpSuggestion = {
   canonicalCode: "7203.T",
   displayCode: "7203.T",
   nameZh: "ソニーグループ",
+  displayName: "ソニーグループ",
   market: "JP" as const,
   matchType: "contains" as const,
   matchField: "code" as const,
@@ -115,6 +133,8 @@ describe('StockAutocomplete', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    useAutocompleteMock.mockReset();
+    uiLanguage = 'zh';
     stockIndexHookImpl = () => ({
       index: mockIndex,
       loading: false,
@@ -139,6 +159,7 @@ describe('StockAutocomplete', () => {
       runtimeFallback: false,
       error: null,
     });
+    useAutocompleteMock.mockImplementation(() => autocompleteHookImpl());
   });
 
   it('renders the input element', () => {
@@ -236,6 +257,23 @@ describe('StockAutocomplete', () => {
     const input = screen.getByRole('combobox');
     expect(input).toHaveAttribute('aria-autocomplete', 'none');
     expect(input).toHaveAttribute('role', 'combobox');
+  });
+
+  it('passes the current UI language into useAutocomplete options', () => {
+    uiLanguage = 'ko';
+
+    render(
+      <StockAutocomplete
+        value=""
+        onChange={mockOnChange}
+        onSubmit={mockOnSubmit}
+      />
+    );
+
+    expect(useAutocompleteMock).toHaveBeenCalledWith(
+      mockIndex,
+      expect.objectContaining({ language: 'ko' }),
+    );
   });
 
   describe('fallback mode', () => {
@@ -480,6 +518,44 @@ describe('StockAutocomplete', () => {
       expect(mockOnChange).toHaveBeenCalledWith('920493');
       expect(mockOnSubmit).toHaveBeenCalledWith('920493.BJ', '示例北交所股票', 'autocomplete');
     });
+
+    it('submits the highlighted KR suggestion using the Korean display name', () => {
+      uiLanguage = 'ko';
+      autocompleteHookImpl = () => ({
+        query: '',
+        setQuery: vi.fn(),
+        suggestions: [{
+          ...krSuggestion,
+          displayName: 'SK하이닉스',
+        }],
+        isOpen: true,
+        highlightedIndex: 0,
+        setHighlightedIndex: vi.fn(),
+        highlightPrevious: vi.fn(),
+        highlightNext: vi.fn(),
+        handleSelect: vi.fn(),
+        close: vi.fn(),
+        reset: vi.fn(),
+        isComposing: false,
+        setIsComposing: vi.fn(),
+        runtimeFallback: false,
+        error: null,
+      });
+
+      render(
+        <StockAutocomplete
+          value="000660"
+          onChange={mockOnChange}
+          onSubmit={mockOnSubmit}
+        />
+      );
+
+      const input = screen.getByDisplayValue('000660');
+      fireEvent.keyDown(input, { key: 'Enter' });
+
+      expect(mockOnChange).toHaveBeenCalledWith('000660.KS');
+      expect(mockOnSubmit).toHaveBeenCalledWith('000660.KS', 'SK하이닉스', 'autocomplete');
+    });
   });
 
   describe('runtime boundary', () => {
@@ -580,6 +656,7 @@ describe('StockAutocomplete', () => {
             canonicalCode: 'TEST.OTC',
             displayCode: 'TEST',
             nameZh: '测试市场',
+            displayName: '测试市场',
             market: 'OTC' as never,
             matchType: 'exact' as const,
             matchField: 'code' as const,

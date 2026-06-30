@@ -6,6 +6,8 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, Optional
 
+from src.data.stock_index_loader import get_index_stock_name
+
 SUPPORTED_REPORT_LANGUAGES = ("zh", "en", "ko")
 
 _REPORT_LANGUAGE_ALIASES = {
@@ -934,11 +936,25 @@ def get_signal_level(advice: Any, score: Any, language: Optional[str]) -> tuple[
 
 
 def get_localized_stock_name(value: Any, code: Any, language: Optional[str]) -> str:
-    """Return a localized stock name placeholder when the original name is missing."""
+    """Return a localized stock name when the index has one, else keep existing value."""
     raw_text = str(value or "").strip()
+    normalized_language = normalize_report_language(language)
+    code_text = str(code or "").strip()
+
+    if code_text and normalized_language != "zh":
+        localized_index_name = get_index_stock_name(code_text, language=normalized_language)
+        if localized_index_name:
+            zh_index_name = get_index_stock_name(code_text, language="zh")
+            if (
+                not raw_text
+                or raw_text == zh_index_name
+                or _is_placeholder_stock_name(raw_text, code)
+            ):
+                return localized_index_name
+
     if not _is_placeholder_stock_name(raw_text, code):
         return raw_text
-    return _GENERIC_STOCK_NAME_BY_LANGUAGE[normalize_report_language(language)]
+    return _GENERIC_STOCK_NAME_BY_LANGUAGE[normalized_language]
 
 
 def get_sentiment_label(score: int, language: Optional[str]) -> str:

@@ -121,6 +121,38 @@ class TestPrefetchStockNames(unittest.TestCase):
         remote_fetcher.get_stock_name.assert_not_called()
         self.assertEqual(manager._stock_name_cache["123456"], "索引名称")
 
+    def test_get_stock_name_uses_generic_cache_for_chinese_report_language_alias(self):
+        manager = DataFetcherManager.__new__(DataFetcherManager)
+        manager._fetchers = []
+        manager.get_realtime_quote = MagicMock()
+
+        with patch.dict("data_provider.base.STOCK_NAME_MAP", {}, clear=True):
+            with patch("data_provider.base.get_index_stock_name", return_value="索引名称") as index_lookup:
+                first = DataFetcherManager.get_stock_name(
+                    manager,
+                    "123456",
+                    allow_realtime=False,
+                    report_language="zh-cn",
+                )
+                second = DataFetcherManager.get_stock_name(
+                    manager,
+                    "123456",
+                    allow_realtime=False,
+                    report_language="cn",
+                )
+                third = DataFetcherManager.get_stock_name(
+                    manager,
+                    "123456",
+                    allow_realtime=False,
+                    report_language="zh-tw",
+                )
+
+        self.assertEqual(first, "索引名称")
+        self.assertEqual(second, "索引名称")
+        self.assertEqual(third, "索引名称")
+        index_lookup.assert_called_once_with("123456")
+        self.assertEqual(manager._stock_name_cache["123456"], "索引名称")
+
     def test_get_stock_name_prefers_static_mapping_before_index_hits(self):
         manager = DataFetcherManager.__new__(DataFetcherManager)
         manager._fetchers = []
@@ -188,7 +220,11 @@ class TestPrefetchStockNames(unittest.TestCase):
 
         self.assertTrue(success)
         self.assertIsNone(error)
-        pipeline.fetcher_manager.get_stock_name.assert_called_once_with("600519", allow_realtime=False)
+        pipeline.fetcher_manager.get_stock_name.assert_called_once_with(
+            "600519",
+            allow_realtime=False,
+            report_language="zh",
+        )
 
     def test_pytdx_get_stock_name_reads_all_security_list_pages(self):
         fetcher = PytdxFetcher(hosts=[])

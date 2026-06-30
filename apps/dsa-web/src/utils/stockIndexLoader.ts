@@ -72,6 +72,8 @@ function unpackTuples(tuples: StockIndexTuple[]): StockIndexItem[] {
     canonicalCode: tuple[INDEX_FIELD.CANONICAL_CODE],
     displayCode: tuple[INDEX_FIELD.DISPLAY_CODE],
     nameZh: tuple[INDEX_FIELD.NAME_ZH],
+    nameEn: tuple[INDEX_FIELD.NAME_EN],
+    nameKo: tuple[INDEX_FIELD.NAME_KO],
     pinyinFull: tuple[INDEX_FIELD.PINYIN_FULL],
     pinyinAbbr: tuple[INDEX_FIELD.PINYIN_ABBR],
     aliases: tuple[INDEX_FIELD.ALIASES],
@@ -99,6 +101,8 @@ export function compressIndex(items: StockIndexItem[]): StockIndexTuple[] {
     item.assetType,
     item.active,
     item.popularity,
+    item.nameEn,
+    item.nameKo,
   ]);
 }
 
