@@ -3544,13 +3544,25 @@ class SystemConfigService:
             if generation_backend in LOCAL_CLI_GENERATION_BACKEND_IDS:
                 litellm_model, _source = self._resolve_setup_primary_model(effective_map)
                 if litellm_model:
+                    if litellm_model in hermes_routes and litellm_model not in non_hermes_routes:
+                        return self._setup_check(
+                            "llm_agent",
+                            "Agent 渠道",
+                            "agent",
+                            True,
+                            "needs_action",
+                            "普通分析使用 Codex CLI；但当前 LiteLLM Agent 路径继承的是 Hermes-only 模型，"
+                            "Hermes Phase 3 不支持 Agent 工具调用。",
+                            "如需使用 Ask-Stock Agent，请配置非 Hermes 的 AGENT_LITELLM_MODEL，"
+                            "或配置包含非 Hermes deployment 的 mixed Agent route。",
+                        )
                     return self._setup_check(
                         "llm_agent",
                         "Agent 渠道",
                         "agent",
                         True,
                         "configured",
-                        "Agent 工具调用将继续使用 LiteLLM 渠道。",
+                        f"普通分析使用 Codex CLI；Agent 工具调用仍使用 LiteLLM 主模型: {litellm_model}",
                     )
                 if agent_backend == LITELLM_BACKEND_ID:
                     return self._setup_check(
@@ -3616,6 +3628,11 @@ class SystemConfigService:
                 f"Agent 主模型 {agent_model} 只有 Hermes deployment，Phase 3 不支持 Agent 工具调用。",
                 "请选择非 Hermes Agent 模型，或配置 mixed route 中的非 Hermes deployment。",
             )
+        configured_agent_message = f"已配置 Agent 主模型: {agent_model}"
+        if generation_backend == CODEX_CLI_BACKEND_ID:
+            configured_agent_message = (
+                f"普通分析使用 Codex CLI；Agent 工具调用仍使用 LiteLLM 主模型: {agent_model}"
+            )
         if _uses_direct_env_provider(agent_model):
             return self._setup_check(
                 "llm_agent",
@@ -3623,7 +3640,7 @@ class SystemConfigService:
                 "agent",
                 True,
                 "configured",
-                f"已配置 Agent 主模型: {agent_model}",
+                configured_agent_message,
             )
         if (
             not configured_models
@@ -3635,7 +3652,7 @@ class SystemConfigService:
                 "agent",
                 True,
                 "configured",
-                f"已配置 Agent 主模型: {agent_model}",
+                configured_agent_message,
             )
 
         return self._setup_check(
