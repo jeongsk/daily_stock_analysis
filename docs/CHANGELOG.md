@@ -84,6 +84,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [新功能] #1772 新增台湾（台股）suffix-only 个股分析 MVP（**市场识别与数据路由层**）：手输 `.TW`（TWSE 上市）/ `.TWO`（TPEx 上柜）代码可走 YFinance 日线与近实时行情，补充市场识别、交易日历（XTAI / Asia/Taipei）、Prompt 语义与能力边界文档；加权指数 `^TWII`、柜买指数 `^TWOII`。台股股票索引/种子、Web 自动补全与告警（大盘红绿灯）市场放行作为后续 PR。
 - [文档] #1772 明确本次为台股 suffix 仅路由兼容改造，对齐 #1718 日韩模式；不涉及 provider/model/base URL/运行时配置变更；回退方式为 revert 本次改动或移除 tw 入口恢复既有行为。
 - [新功能] #1772 台股 `tw` 纳入 DecisionSignal / Portfolio / Intelligence 服务层与 API 市场枚举（VALID_MARKETS / _ALLOWED_MARKETS + Pydantic Literal + api_spec.json），修复数据层 MVP 下 tw 分析在 pipeline 自动抽取 DecisionSignal 时被 _normalize_market 静默丢弃的缺陷，并同步放行 DecisionSignal/Portfolio 前端市场类型与筛选及相关专题文档，对齐 #1720 日韩；告警（大盘红绿灯）市场仍为 cn/hk/us。
+- [修复] A 股个股分析遇到空 `belong_boards` 占位时会继续补查所属板块，关联板块模块在已有板块时稳定展示；对应涨跌幅缺失时只显示板块，不再输出占位涨跌幅。
+- [修复] 大盘复盘在 LLM 标题漂移或正文缺少板块段时，会从结构化 `sectors` 兜底渲染板块表，避免 Web 与推送报告偶发缺少板块主线。
+
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
 
