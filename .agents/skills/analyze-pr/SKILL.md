@@ -1,3 +1,8 @@
+---
+name: analyze-pr
+description: Analyze a GitHub pull request for this repository and produce a concise Chinese review document.
+---
+
 # Analyze PR
 
 分析 GitHub Pull Request，评估必要性、描述完整性、验证证据、主要风险与是否可直接合入。

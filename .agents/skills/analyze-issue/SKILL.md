@@ -1,3 +1,8 @@
+---
+name: analyze-issue
+description: Analyze a GitHub issue for this repository and produce a concise Chinese triage document.
+---
+
 # Analyze Issue
 
 分析 GitHub Issue，判断其真实性、优先级、仓库责任边界与建议动作。
