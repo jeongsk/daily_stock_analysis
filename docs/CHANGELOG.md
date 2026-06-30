@@ -97,6 +97,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修复] Docker 与 CI 安装 hash-pinned `requirements.txt` 时，pip `--require-hashes` 模式无法校验 alphasift 这类 git 依赖导致构建失败；新增 `scripts/pip-install-requirements.sh` 将 git 依赖拆出单独安装，保留其余依赖的 hash 校验。
 - [修复] Docker bookworm 镜像（glibc 2.36）无法安装 longbridge 4.3.3（wheel 仅 manylinux_2_39），Docker 构建改用 bookworm 兼容的 0.2.75 并经安装脚本 `--exclude` 跳过其 hash 块；longbridge 为 Priority 5 可选数据源，CI（ubuntu-24.04）与本地 uv 不受影响仍用 4.3.3。
 - [修复] 修复 Web 首页个股栏在 stock-bar 摘要字段缺失或动作建议无法归类时隐藏情绪分与建议标识的问题。
+- [测试] 台股三大法人 fetcher（TwInstitutionalFetcher）新增真实端点 live-smoke 脚本（tests/tw_institutional_live_smoke.py，非 pytest）与 @pytest.mark.network 漂移检测测试：核对 TWSE T86 / TPEx 核心字段名仍在、解析结果与原始字段一致；仅在非阻断的 network-smoke 定时任务运行，阻断门（pytest -m "not network"）不收集，离线 fixtures 无法察觉的上游字段改名/端点变动由此告警。
 - [修复] 修复 Web 设置页定时任务“立即执行一次”后台线程未传 `stock_codes` 导致任务崩溃的问题。
 - [新功能] #1743 Phase 4 新增 `claude_code_cli` generation-only 本地 CLI backend，保留 LiteLLM 默认路径、Agent 工具调用边界、per-preset extractor、最小 env allowlist 与结构化错误。
 - [新功能] #1743 Phase 4 新增 `opencode_cli` generation-only 本地 CLI backend，使用 OpenCode `run --format json --file` prompt-file 路径、JSON event extractor、Agent 边界和 provider credential 不接管约束。
