@@ -2191,6 +2191,82 @@ class TestMarketAnalyzerBypassFix:
         assert "### 6. Strategy Framework" in result
         assert "### 一、市场总结" not in result
 
+    def test_build_review_prompt_uses_korean_shell_when_report_language_is_ko(self):
+        from src.market_analyzer import MarketOverview, MarketIndex
+
+        ma = self._make_market_analyzer_with_mock_generate_text(return_value="review")
+        ma.config.report_language = "ko"
+        overview = MarketOverview(
+            date="2026-07-02",
+            indices=[
+                MarketIndex(
+                    code="000001",
+                    name="상하이종합지수",
+                    current=3300.0,
+                    change=12.0,
+                    change_pct=0.36,
+                    amount=145000000000.0,
+                )
+            ],
+            up_count=3200,
+            down_count=1800,
+            flat_count=100,
+            limit_up_count=85,
+            limit_down_count=12,
+            total_amount=9800,
+            top_sectors=[{"name": "AI 인프라", "change_pct": 3.25}],
+            bottom_sectors=[{"name": "석탄", "change_pct": -1.12}],
+        )
+
+        prompt = ma._build_review_prompt(overview, [])
+
+        assert "한국어" in prompt
+        assert "# 오늘의 시장 데이터" in prompt
+        assert "## 주요 지수" in prompt
+        assert "## 시장 폭" in prompt
+        assert "## 섹터 동향" in prompt
+        assert "## 2026-07-02 A주 시장 리뷰" in prompt
+        assert "### 1. 시장 요약" in prompt
+        assert "### 7. 전략 계획" in prompt
+        assert "今日市场数据" not in prompt
+        assert "输出格式模板" not in prompt
+        assert "大盘复盘" not in prompt
+
+    def test_generate_template_review_uses_korean_shell_when_report_language_is_ko(self):
+        from src.market_analyzer import MarketOverview, MarketIndex
+
+        ma = self._make_market_analyzer_with_mock_generate_text(return_value=None)
+        ma.config.report_language = "ko"
+        overview = MarketOverview(
+            date="2026-07-02",
+            indices=[
+                MarketIndex(
+                    code="000001",
+                    name="상하이종합지수",
+                    current=3300.0,
+                    change=12.0,
+                    change_pct=0.36,
+                )
+            ],
+            up_count=3200,
+            down_count=1800,
+            flat_count=100,
+            limit_up_count=85,
+            limit_down_count=12,
+            total_amount=9800,
+            top_sectors=[{"name": "AI 인프라", "change_pct": 3.25}],
+            bottom_sectors=[{"name": "석탄", "change_pct": -1.12}],
+        )
+
+        result = ma.generate_market_review(overview, [])
+
+        assert "## 2026-07-02 A주 시장 리뷰" in result
+        assert "오늘 A주 시장은" in result
+        assert "### 1. 시장 요약" in result
+        assert "### 6. 전략 프레임워크" in result
+        assert "### 七、风险提示" not in result
+        assert "大盘复盘" not in result
+
     def test_generate_template_review_keeps_chinese_shell_for_us_when_report_language_is_default(self):
         from src.core.market_profile import US_PROFILE
         from src.core.market_strategy import get_market_strategy_blueprint

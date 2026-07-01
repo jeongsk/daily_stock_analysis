@@ -144,6 +144,7 @@ class MarketCommand(BotCommand):
                 notifier=notifier,
                 analyzer=analyzer,
                 search_service=search_service,
+                config=config,
                 send_notification=True,
                 override_region=override_region,
                 trigger_source="bot",
