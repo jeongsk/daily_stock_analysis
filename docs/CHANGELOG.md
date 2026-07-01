@@ -31,6 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修复] 将 Docker 可安装的 Longbridge SDK 版本固定为 0.2.75，避免 `longbridge>=0.2.77` 从包索引消失后导致 docker-build 失败。
 - [修复] 持仓快照今日估值改为受限并发预取多只持仓实时价，减少持仓较多时 Web 组合页面刷新超时。
 - [修复] Web 首页重新分析完成后自动切换到同一股票最新生成的报告，避免仍停留在旧报告内容。
+- [修复] Discord 长报告推送按 2000 字符上限分片逐段发送，遇到 429 限流会按 `retry_after`/`Retry-After` 有限重试，避免中途失败后只收到前半段报告。
+- [改进] #1777 台股三大法人 fetcher（`TwInstitutionalFetcher`）增加缓存防击穿：并发同 (市场, 日期) 调用合并为单次上游请求，保护 TWSE T86 ~3 req/5s 限流额度；不同 key 仍并行；新增并发单次抓取、不同 key 各抓一次、HTTP 错误 fail-open 回归测试。
+- [修复] A 股个股分析遇到空 `belong_boards` 占位时会继续补查所属板块，关联板块模块在已有板块时稳定展示；对应涨跌幅缺失时只显示板块，不再输出占位涨跌幅。
+- [修复] 大盘复盘在 LLM 标题漂移或正文缺少板块段时，会从结构化 `sectors` 兜底渲染板块表，避免 Web 与推送报告偶发缺少板块主线。
 
 - [修复] 默认通知报告补充展示 `dashboard.phase_decision` 盘中决策护栏字段，避免与模板渲染路径展示不一致。
 - [修复] 修复 Windows 环境下 Web/Desktop 静态 JS 资源可能被识别为 `text/plain` 导致前端黑屏的问题。
