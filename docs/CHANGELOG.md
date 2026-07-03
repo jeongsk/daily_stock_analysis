@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 - [修复] 修复任务状态接口重建报告动作字段时把合法情绪分 `0` 当成空值的问题，确保低分报告能按评分口径纠正为卖出建议。
 - [修复] 修复 Agent 流式回复在未收到完成事件就断开时被显示为“（无内容）”的问题，改为提示流式响应中断并保留用户消息，避免误判为空回答。
+- [新功能] 钉钉群机器人通知支持 — 支持通过 `DINGTALK_WEBHOOK_URL` 和 `DINGTALK_SECRET` 配置钉钉推送，并支持长文本自动切片以适配 20KB 限制。
 
 - [修复] 修复 `REPORT_LANGUAGE=ko` 时个股分析系统 Prompt、上下文包摘要与 Agent 语言段仍混入中文输出指令和中文 JSON 值示例的问题。
 - [修复] 修复韩文 UI 下任务面板市场复盘任务名、运行中消息和韩股历史列表/个股栏名称仍显示中文的问题。
