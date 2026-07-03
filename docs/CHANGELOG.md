@@ -51,6 +51,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修复] 将 Docker 可安装的 Longbridge SDK 版本固定为 0.2.75，避免 `longbridge>=0.2.77` 从包索引消失后导致 docker-build 失败。
 - [修复] 持仓快照今日估值改为受限并发预取多只持仓实时价，减少持仓较多时 Web 组合页面刷新超时。
 - [修复] Web 首页重新分析完成后自动切换到同一股票最新生成的报告，避免仍停留在旧报告内容。
+- [文档] 记录 Agent `/chat/stream` progress event 契约，说明新增 `stage_start`、`stage_done`、`pipeline_timeout`、`pipeline_budget_skipped` 的字段语义、Web 兼容边界、验证方式、回滚方式；其中 `pipeline_budget_skipped` 表示剩余预算不足、未启动下一阶段即跳过的语义；本变更不触及 provider/model/Base URL 或运行时配置迁移语义。
+- [修复] 日股/韩股 `market_phase` 补齐收盘集合竞价识别：JP 15:25-15:30 与 KR 15:20-15:30 现在会进入 `closing_auction`，避免临近收盘阶段仍被标记为普通 `intraday`；仅调整阶段标签和派生 `market_phase_summary`，不改变数据源、配置或交易日 fail-open/fail-closed 语义。
 - [修复] Discord 长报告推送按 2000 字符上限分片逐段发送，遇到 429 限流会按 `retry_after`/`Retry-After` 有限重试，避免中途失败后只收到前半段报告。
 - [改进] #1777 台股三大法人 fetcher（`TwInstitutionalFetcher`）增加缓存防击穿：并发同 (市场, 日期) 调用合并为单次上游请求，保护 TWSE T86 ~3 req/5s 限流额度；不同 key 仍并行；新增并发单次抓取、不同 key 各抓一次、HTTP 错误 fail-open 回归测试。
 - [修复] 修复桌面端启动时 `.env` 中 `WEBUI_PORT` 与 Electron 自动选择端口不一致会导致窗口继续等待旧端口并连接超时的问题。
