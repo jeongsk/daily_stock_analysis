@@ -123,6 +123,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修复] Docker 与 CI 安装 hash-pinned `requirements.txt` 时，pip `--require-hashes` 模式无法校验 alphasift 这类 git 依赖导致构建失败；新增 `scripts/pip-install-requirements.sh` 将 git 依赖拆出单独安装，保留其余依赖的 hash 校验。
 - [修复] Docker bookworm 镜像（glibc 2.36）无法安装 longbridge 4.3.3（wheel 仅 manylinux_2_39），Docker 构建改用 bookworm 兼容的 0.2.75 并经安装脚本 `--exclude` 跳过其 hash 块；longbridge 为 Priority 5 可选数据源，CI（ubuntu-24.04）与本地 uv 不受影响仍用 4.3.3。
 - [修复] 修复 Web 首页个股栏在 stock-bar 摘要字段缺失或动作建议无法归类时隐藏情绪分与建议标识的问题。
+- [修复] Web 设置页左侧分类切换时仅在相关分类展示首次启动检查和 AlphaSift 辅助卡片，避免分类内容看起来没有切换。
+- [文档] 本次设置页修复为前端展示层分类可见性改造，不涉及 LLM/provider/Base URL/LiteLLM/默认模型/保存前清理或迁移语义。
+- [修复] 收敛个股分析评分与 DecisionSignal action 口径：统一 80/60/40/20 分段，避免高低分默认坍缩为 hold/watch，并在风控降级时记录 raw/adjusted score、final action 与原因。
+- [文档] 明确本轮评分/决策口径收敛不变更模型 Provider/Model/Base URL 运行时配置语义，不涉及 `.env`、配置 key 或运行时 provider 迁移。
 - [修复] 修复 macOS 桌面端从 Finder/Dock 启动时后端 PATH 看不到 Homebrew Codex CLI 的问题，并明确 Codex CLI 主分析与 Agent LiteLLM 工具调用分流诊断。
 - [测试] 台股三大法人 fetcher（TwInstitutionalFetcher）新增真实端点 live-smoke 脚本（tests/tw_institutional_live_smoke.py，非 pytest）与 @pytest.mark.network 漂移检测测试：核对 TWSE T86 / TPEx 核心字段名仍在、解析结果与原始字段一致；仅在非阻断的 network-smoke 定时任务运行，阻断门（pytest -m "not network"）不收集，离线 fixtures 无法察觉的上游字段改名/端点变动由此告警。
 - [修复] 修复 Web 设置页定时任务“立即执行一次”后台线程未传 `stock_codes` 导致任务崩溃的问题。

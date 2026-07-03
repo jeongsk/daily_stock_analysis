@@ -1896,10 +1896,13 @@ class StockAnalysisPipeline:
     ) -> AnalysisResult:
         previous_advice = str(previous_operation_advice or "").strip()
         current_advice = str(getattr(result, "operation_advice", None) or "").strip()
+        explicit_action = current_advice if previous_advice != current_advice else None
         return populate_decision_action_fields(
             result,
+            explicit_action=explicit_action,
             report_type=report_type,
             use_existing_action=(previous_advice == current_advice),
+            align_with_score=(previous_advice == current_advice),
         )
 
     @staticmethod
