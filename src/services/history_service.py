@@ -306,6 +306,7 @@ class HistoryService:
             "id": record.id,
             "query_id": record.query_id,
             "stock_code": display_code,
+            "storage_stock_code": str(record.code or "").strip(),
             "stock_name": record.name,
             "report_type": record.report_type,
             "trend_prediction": record.trend_prediction,
@@ -317,6 +318,8 @@ class HistoryService:
             "model_used": normalize_model_used(model_used),
             "created_at": record.created_at.isoformat() if record.created_at else None,
             "market_phase_summary": market_phase_summary,
+            "raw_result": raw_result,
+            "context_snapshot": parse_json_field(getattr(record, "context_snapshot", None)),
             **market_fields,
         }
 

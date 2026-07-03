@@ -119,6 +119,44 @@ class AnalyzerNewsPromptTestCase(unittest.TestCase):
         self.assertIn("多头排列必须条件", prompt)
         self.assertIn("多头排列：MA5 > MA10 > MA20", prompt)
 
+    def test_korean_analysis_system_prompt_uses_korean_readable_json_examples(self) -> None:
+        with patch.object(GeminiAnalyzer, "_init_litellm", return_value=None):
+            analyzer = GeminiAnalyzer()
+
+        prompt = analyzer._get_analysis_system_prompt("ko", stock_code="SNDK")
+
+        self.assertIn('"stock_name": "상장 종목명 또는 한국어 통칭"', prompt)
+        self.assertIn('"trend_prediction": "강한 상승 전망/상승 전망/횡보/하락 전망/강한 하락 전망"', prompt)
+        self.assertIn('"analysis_summary": "100자 내외 종합 분석 요약"', prompt)
+        self.assertIn("중국어 용어", prompt)
+        self.assertNotIn('"stock_name": "股票中文名称"', prompt)
+        self.assertNotIn('"trend_prediction": "强烈看多/看多/震荡/看空/强烈看空"', prompt)
+
+    def test_korean_format_prompt_uses_korean_task_instructions(self) -> None:
+        with patch.object(GeminiAnalyzer, "_init_litellm", return_value=None):
+            analyzer = GeminiAnalyzer()
+
+        prompt = analyzer._format_prompt(
+            {
+                "code": "SNDK",
+                "stock_name": "Sandisk Corporation",
+                "date": "2026-07-03",
+                "today": {"close": 74.52, "pct_chg": -14.4},
+                "ma_status": "약세 하락",
+            },
+            "Sandisk Corporation",
+            news_context="",
+            report_language="ko",
+        )
+
+        self.assertIn("## 분석 작업", prompt)
+        self.assertIn("핵심 결론", prompt)
+        self.assertIn("한국어로 작성", prompt)
+        self.assertIn("중국어 용어", prompt)
+        self.assertNotIn("请为", prompt)
+        self.assertNotIn("正确的股票名称格式", prompt)
+        self.assertNotIn("决策仪表盘要求", prompt)
+
     def test_analysis_prompt_emits_korean_output_instruction_for_ko(self) -> None:
         with patch.object(GeminiAnalyzer, "_init_litellm", return_value=None):
             analyzer = GeminiAnalyzer()

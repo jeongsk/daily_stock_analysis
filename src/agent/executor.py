@@ -442,6 +442,14 @@ def _build_language_section(report_language: str, *, chat_mode: bool = False) ->
 - Reply in English.
 - If you output JSON, keep the keys unchanged and write every human-readable value in English.
 """
+        if normalized == "ko":
+            return """
+## 출력 언어
+
+- 기본적으로 한국어로 답변합니다.
+- JSON을 출력하는 경우 키 이름은 유지하고, 사람이 읽는 모든 값은 한국어로 작성합니다.
+- 입력 데이터나 도구 결과에 중국어 용어가 있어도 사용자에게 보이는 답변에서는 한국어로 번역합니다.
+"""
         return """
 ## 输出语言
 
@@ -457,6 +465,17 @@ def _build_language_section(report_language: str, *, chat_mode: bool = False) ->
 - `decision_type` must remain `buy|hold|sell`.
 - All human-readable JSON values must be written in English.
 - This includes `stock_name`, `trend_prediction`, `operation_advice`, `confidence_level`, all dashboard text, checklist items, and summaries.
+"""
+
+    if normalized == "ko":
+        return """
+## 출력 언어
+
+- 모든 JSON 키 이름은 그대로 유지합니다.
+- `decision_type`은 반드시 `buy|hold|sell` 중 하나로 유지합니다.
+- 사람이 읽는 모든 JSON 값은 한국어로 작성합니다.
+- 여기에는 `stock_name`, `trend_prediction`, `operation_advice`, `confidence_level`, 대시보드 텍스트, 체크리스트 항목, 요약 필드가 포함됩니다.
+- 입력 데이터나 도구 결과에 중국어 용어가 있어도 사용자에게 보이는 값에서는 한국어로 번역합니다.
 """
 
     return """

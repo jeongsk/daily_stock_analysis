@@ -26,11 +26,12 @@ except ModuleNotFoundError:
 try:
     from fastapi.testclient import TestClient
     from api.app import create_app
-    from api.v1.endpoints.history import get_history_detail, get_stock_bar
+    from api.v1.endpoints.history import get_history_detail, get_history_list, get_stock_bar
 except ModuleNotFoundError:
     TestClient = None
     create_app = None
     get_history_detail = None
+    get_history_list = None
     get_stock_bar = None
 
 from src.config import Config
@@ -736,6 +737,52 @@ class AnalysisHistoryTestCase(unittest.TestCase):
         self.assertEqual(response.items[0].operation_advice, "不建议买入")
         self.assertEqual(response.items[0].action, "avoid")
         self.assertEqual(response.items[0].action_label, "回避")
+
+    def test_history_api_localizes_ko_stock_name_for_list_and_stock_bar(self) -> None:
+        if get_history_list is None or get_stock_bar is None:
+            self.skipTest("fastapi is not installed in this test environment")
+
+        result = self._build_result()
+        result.code = "000660.KS"
+        result.name = "*ST南华"
+        result.report_language = "ko"
+
+        saved = self.db.save_analysis_history(
+            result=result,
+            query_id="query_ko_stock_name",
+            report_type="detailed",
+            news_content="본문",
+            context_snapshot={"report_language": "ko"},
+            save_snapshot=True,
+        )
+        self.assertGreater(saved, 0)
+
+        def fake_index_name(code, language=None):
+            if code == "000660.KS" and language == "ko":
+                return "SK하이닉스"
+            if code == "000660.KS" and language == "zh":
+                return "SK海力士"
+            return None
+
+        with patch("src.report_language.get_index_stock_name", side_effect=fake_index_name):
+            listing = get_history_list(
+                stock_code=None,
+                report_type=None,
+                start_date=None,
+                end_date=None,
+                page=1,
+                limit=10,
+                db_manager=self.db,
+            )
+            stock_bar = get_stock_bar(
+                start_date=None,
+                end_date=None,
+                limit=10,
+                db_manager=self.db,
+            )
+
+        self.assertEqual(listing.items[0].stock_name, "SK하이닉스")
+        self.assertEqual(stock_bar.items[0].stock_name, "SK하이닉스")
 
     def test_history_detail_uses_service_resolved_action_fields(self) -> None:
         if get_history_detail is None:

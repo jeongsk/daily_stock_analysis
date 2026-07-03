@@ -25,6 +25,15 @@ BLOCK_LABELS_EN = {
     "news": "news",
 }
 
+BLOCK_LABELS_KO = {
+    "quote": "시세",
+    "daily_bars": "일봉",
+    "technical": "기술",
+    "chip": "수급",
+    "fundamentals": "기본면",
+    "news": "뉴스",
+}
+
 STATUS_LABELS_ZH = {
     "available": "可用",
     "missing": "缺失",
@@ -47,6 +56,17 @@ STATUS_LABELS_EN = {
     "fetch_failed": "fetch failed",
 }
 
+STATUS_LABELS_KO = {
+    "available": "사용 가능",
+    "missing": "누락",
+    "not_supported": "미지원",
+    "fallback": "대체",
+    "stale": "오래됨",
+    "estimated": "추정",
+    "partial": "부분 사용 가능",
+    "fetch_failed": "가져오기 실패",
+}
+
 QUALITY_LEVEL_LABELS_ZH = {
     "good": "良好",
     "usable": "可用",
@@ -59,6 +79,13 @@ QUALITY_LEVEL_LABELS_EN = {
     "usable": "usable",
     "limited": "limited",
     "poor": "poor",
+}
+
+QUALITY_LEVEL_LABELS_KO = {
+    "good": "양호",
+    "usable": "사용 가능",
+    "limited": "제한적",
+    "poor": "취약",
 }
 
 CORE_DEGRADED_STATUSES = {
@@ -101,15 +128,21 @@ SENSITIVE_MARKERS = (
 
 
 def normalize_analysis_context_pack_language(report_language: str = "zh") -> str:
-    return "en" if str(report_language or "").lower() == "en" else "zh"
+    normalized = str(report_language or "").lower()
+    if normalized == "en":
+        return "en"
+    if normalized == "ko":
+        return "ko"
+    return "zh"
 
 
 def get_analysis_context_pack_block_labels(report_language: str = "zh") -> Dict[str, str]:
-    return (
-        BLOCK_LABELS_EN
-        if normalize_analysis_context_pack_language(report_language) == "en"
-        else BLOCK_LABELS_ZH
-    )
+    normalized = normalize_analysis_context_pack_language(report_language)
+    if normalized == "en":
+        return BLOCK_LABELS_EN
+    if normalized == "ko":
+        return BLOCK_LABELS_KO
+    return BLOCK_LABELS_ZH
 
 
 def iter_analysis_context_pack_block_keys(blocks: Mapping[str, Any]) -> List[str]:
@@ -139,7 +172,11 @@ def format_analysis_context_pack_prompt_section(
         return ""
 
     lang = normalize_analysis_context_pack_language(report_language)
-    return _format_en(payload) if lang == "en" else _format_zh(payload)
+    if lang == "en":
+        return _format_en(payload)
+    if lang == "ko":
+        return _format_ko(payload)
+    return _format_zh(payload)
 
 
 def analysis_context_pack_to_dict(pack: Any) -> Dict[str, Any]:
@@ -196,6 +233,23 @@ def _format_en(payload: Dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _format_ko(payload: Dict[str, Any]) -> str:
+    lines = ["", "## 분석 컨텍스트 팩 요약"]
+    lines.extend(_subject_lines(payload, lang="ko"))
+    block_lines = _block_lines(payload, lang="ko")
+    if block_lines:
+        lines.append("- 데이터 블록 상태:")
+        lines.extend(f"  - {line}" for line in block_lines)
+    metadata_lines = _metadata_lines(payload, lang="ko")
+    if metadata_lines:
+        lines.extend(metadata_lines)
+    warnings = _list_strings(_nested(payload, "data_quality", "warnings"))
+    if warnings:
+        lines.append(f"- 데이터 품질 알림: {_join_text(warnings, lang='ko')}")
+    lines.extend(_data_limitation_lines(payload, lang="ko"))
+    return "\n".join(lines) + "\n"
+
+
 def _subject_lines(payload: Dict[str, Any], *, lang: str) -> List[str]:
     subject = payload.get("subject") if isinstance(payload.get("subject"), Mapping) else {}
     code = _safe_text(subject.get("code"))
@@ -211,6 +265,20 @@ def _subject_lines(payload: Dict[str, Any], *, lang: str) -> List[str]:
         details = []
         if market:
             details.append(f"market={market}")
+        if version:
+            details.append(f"pack_version={version}")
+        if details:
+            line += f"; {', '.join(details)}"
+        return [line]
+
+    if lang == "ko":
+        label = code or "알 수 없는 대상"
+        if name:
+            label += f" ({name})"
+        line = f"- 대상: {label}"
+        details = []
+        if market:
+            details.append(f"시장={market}")
         if version:
             details.append(f"pack_version={version}")
         if details:
@@ -244,7 +312,8 @@ def _block_lines(payload: Dict[str, Any], *, lang: str) -> List[str]:
         block = blocks.get(key)
         if not isinstance(block, Mapping):
             continue
-        status = _safe_text(block.get("status")) or "unknown"
+        raw_status = _safe_text(block.get("status")) or "unknown"
+        status = _status_label(raw_status, lang=lang) if lang == "ko" else raw_status
         label = labels.get(key, _safe_text(key))
         parts = [f"{label}: {status}"]
 
@@ -257,7 +326,7 @@ def _block_lines(payload: Dict[str, Any], *, lang: str) -> List[str]:
 
         warnings = _list_strings(block.get("warnings"))
         if warnings:
-            warning_label = "warnings" if lang == "en" else "告警"
+            warning_label = "warnings" if lang == "en" else "알림" if lang == "ko" else "告警"
             parts.append(f"{warning_label}={_join_text(warnings, lang=lang)}")
 
         reasons = _item_missing_reasons(block.get("items"))
@@ -279,12 +348,19 @@ def _metadata_lines(payload: Dict[str, Any], *, lang: str) -> List[str]:
     return [
         f"- News result count: {news_count}"
         if lang == "en"
+        else f"- 뉴스 결과 수: {news_count}"
+        if lang == "ko"
         else f"- 新闻结果数：{news_count}"
     ]
 
 
 def _data_limitation_lines(payload: Dict[str, Any], *, lang: str) -> List[str]:
-    lines = ["", "## Data Limitations" if lang == "en" else "## 数据限制"]
+    if lang == "en":
+        lines = ["", "## Data Limitations"]
+    elif lang == "ko":
+        lines = ["", "## 데이터 제한"]
+    else:
+        lines = ["", "## 数据限制"]
     data_quality = payload.get("data_quality")
     if not isinstance(data_quality, Mapping):
         data_quality = {}
@@ -295,6 +371,10 @@ def _data_limitation_lines(payload: Dict[str, Any], *, lang: str) -> List[str]:
         level_text = _quality_level_label(level, lang=lang)
         if lang == "en":
             line = f"- Data quality score: {score}/100"
+            if level_text:
+                line += f" ({level_text})"
+        elif lang == "ko":
+            line = f"- 데이터 품질 점수: {score}/100"
             if level_text:
                 line += f" ({level_text})"
         else:
@@ -308,8 +388,8 @@ def _data_limitation_lines(payload: Dict[str, Any], *, lang: str) -> List[str]:
         lang=lang,
     )
     if limitations:
-        label = "Known limitations" if lang == "en" else "已知限制"
-        separator = ": " if lang == "en" else "："
+        label = "Known limitations" if lang == "en" else "알려진 제한" if lang == "ko" else "已知限制"
+        separator = ": " if lang in {"en", "ko"} else "："
         lines.append(f"- {label}{separator}{_join_text(limitations, lang=lang)}")
 
     lines.extend(_phase_data_quality_constraint_lines(payload, lang=lang))
@@ -320,6 +400,12 @@ def _data_limitation_lines(payload: Dict[str, Any], *, lang: str) -> List[str]:
                 "- Confidence rule: when quote, daily bars, or technical data is "
                 "stale, fallback, missing, fetch_failed, partial, or estimated, "
                 "the final JSON confidence_level must not be High."
+            )
+        elif lang == "ko":
+            lines.append(
+                "- 신뢰도 규칙: quote, daily_bars 또는 technical 데이터가 stale, "
+                "fallback, missing, fetch_failed, partial 또는 estimated이면 "
+                "최종 JSON의 confidence_level은 높음이면 안 됩니다."
             )
         else:
             lines.append(
@@ -337,6 +423,15 @@ def _data_limitation_lines(payload: Dict[str, Any], *, lang: str) -> List[str]:
             "from this summary; do not reproduce raw payloads, news body text, "
             "raw trend values, secrets, tokens, or webhooks."
         )
+    elif lang == "ko":
+        lines.append(
+            "- 분석 규칙: 보조 데이터 블록 누락은 해당 분석 단락만 제한하며, "
+            "누락 자체를 호재나 악재로 해석하지 마세요."
+        )
+        lines.append(
+            "- 안전 규칙: 이 요약의 status, source, warnings, missing_reason만 사용하고 "
+            "raw payload, 뉴스 본문, 원시 추세값, secret, token, webhook은 재현하지 마세요."
+        )
     else:
         lines.append(
             "- 分析规则：辅助数据块缺失只限制对应分析段落，不要把缺失本身解释为利好或利空。"
@@ -350,7 +445,12 @@ def _data_limitation_lines(payload: Dict[str, Any], *, lang: str) -> List[str]:
 
 def _localized_limitations(limitations: List[str], *, lang: str) -> List[str]:
     labels = get_analysis_context_pack_block_labels(lang)
-    status_labels = STATUS_LABELS_EN if lang == "en" else STATUS_LABELS_ZH
+    if lang == "en":
+        status_labels = STATUS_LABELS_EN
+    elif lang == "ko":
+        status_labels = STATUS_LABELS_KO
+    else:
+        status_labels = STATUS_LABELS_ZH
     result: List[str] = []
     for item in limitations:
         key, separator, status = item.partition(":")
@@ -364,7 +464,7 @@ def _localized_limitations(limitations: List[str], *, lang: str) -> List[str]:
         if not label or not status_label:
             continue
         result.append(
-            f"{label}: {status_label}" if lang == "en" else f"{label}：{status_label}"
+            f"{label}: {status_label}" if lang in {"en", "ko"} else f"{label}：{status_label}"
         )
     return result[:5]
 
@@ -411,6 +511,24 @@ def _phase_data_quality_constraint_lines(payload: Dict[str, Any], *, lang: str) 
             ]
         return []
 
+    if lang == "ko":
+        if phase in INTRADAY_MARKET_PHASES:
+            return [
+                "- 단계/데이터 규칙: 장중 판단은 시세, 일봉 또는 기술 데이터 품질의 제한을 받습니다. "
+                "단기 매매 결론을 내리기 전에 해당 한계를 먼저 명시하세요."
+            ]
+        if phase == "premarket":
+            return [
+                "- 단계/데이터 규칙: 개장 전 계획은 데이터 신선도 또는 대체 상태의 제한을 받습니다. "
+                "저하된 시세 데이터를 오늘 완료된 가격 흐름처럼 설명하지 마세요."
+            ]
+        if phase in CONSERVATIVE_MARKET_PHASES:
+            return [
+                "- 단계/데이터 규칙: 현재 사용 가능한 데이터만 보수적으로 사용하고 "
+                "존재하지 않는 장중 사실을 보완해서 쓰지 마세요."
+            ]
+        return []
+
     if phase in INTRADAY_MARKET_PHASES:
         return [
             "- 阶段数据规则：盘中判断受实时行情、日线或技术数据质量限制；"
@@ -437,8 +555,23 @@ def _phase_value(payload: Dict[str, Any]) -> str:
 
 
 def _quality_level_label(level: str, *, lang: str) -> str:
-    labels = QUALITY_LEVEL_LABELS_EN if lang == "en" else QUALITY_LEVEL_LABELS_ZH
+    if lang == "en":
+        labels = QUALITY_LEVEL_LABELS_EN
+    elif lang == "ko":
+        labels = QUALITY_LEVEL_LABELS_KO
+    else:
+        labels = QUALITY_LEVEL_LABELS_ZH
     return labels.get(level, "")
+
+
+def _status_label(status: str, *, lang: str) -> str:
+    if lang == "en":
+        labels = STATUS_LABELS_EN
+    elif lang == "ko":
+        labels = STATUS_LABELS_KO
+    else:
+        labels = STATUS_LABELS_ZH
+    return labels.get(status, status)
 
 
 def _safe_score(value: Any) -> Optional[int]:
@@ -515,5 +648,5 @@ def _safe_text(value: Any) -> str:
 
 
 def _join_text(values: Iterable[str], *, lang: str) -> str:
-    separator = ", " if lang == "en" else "、"
+    separator = ", " if lang in {"en", "ko"} else "、"
     return separator.join(values)

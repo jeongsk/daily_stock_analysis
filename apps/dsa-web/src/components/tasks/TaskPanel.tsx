@@ -14,6 +14,24 @@ interface TaskItemProps {
   onOpenRunFlow?: (task: TaskInfo) => void;
 }
 
+function getTaskDisplayName(task: TaskInfo, t: ReturnType<typeof useUiLanguage>['t']): string {
+  if (task.reportType === 'market_review' || task.stockCode === 'MARKET') {
+    return t('home.marketReview');
+  }
+  return task.stockName || task.stockCode;
+}
+
+function getTaskMessageDisplayText(message: string | undefined, t: ReturnType<typeof useUiLanguage>['t']): string {
+  const normalized = (message || '').trim();
+  if (!normalized) {
+    return '';
+  }
+  if (normalized === '任务执行中') {
+    return t('taskPanel.messageRunning');
+  }
+  return normalized;
+}
+
 /**
  * 单个任务项
  */
@@ -34,6 +52,8 @@ const TaskItem: React.FC<TaskItemProps> = ({ task, onOpenRunFlow }) => {
   const traceId = (task.traceId || '').trim();
   const requestedPhaseLabel = getRequestedPhaseLabel(task.analysisPhase, language);
   const requestedPhaseVariant = task.analysisPhase === 'auto' ? 'default' : 'info';
+  const displayName = getTaskDisplayName(task, t);
+  const displayMessage = getTaskMessageDisplayText(task.message, t);
 
   return (
     <div className="home-subpanel grid min-w-0 gap-2.5 px-3 py-2.5" data-testid="task-panel-item">
@@ -52,7 +72,7 @@ const TaskItem: React.FC<TaskItemProps> = ({ task, onOpenRunFlow }) => {
           <div className="min-w-0">
             <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
               <span className="max-w-full truncate text-sm font-medium text-foreground">
-                {task.stockName || task.stockCode}
+                {displayName}
               </span>
               <span className="shrink-0 text-xs text-muted-text">
                 {task.stockCode}
@@ -75,7 +95,7 @@ const TaskItem: React.FC<TaskItemProps> = ({ task, onOpenRunFlow }) => {
                     onOpenRunFlow(task);
                   }}
                   aria-label={t('taskPanel.openRunFlowAria', {
-                    stock: task.stockName || task.stockCode,
+                    stock: displayName,
                   })}
                 >
                   <Workflow className="h-4 w-4" aria-hidden="true" />
@@ -94,9 +114,9 @@ const TaskItem: React.FC<TaskItemProps> = ({ task, onOpenRunFlow }) => {
         </div>
       </div>
 
-      {task.message ? (
+      {displayMessage ? (
         <p className="min-w-0 truncate text-xs text-secondary-text">
-          {task.message}
+          {displayMessage}
         </p>
       ) : null}
 

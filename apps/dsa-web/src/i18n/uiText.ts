@@ -378,6 +378,7 @@ const zh = {
   'taskPanel.pendingAria': '任务等待中',
   'taskPanel.openRunFlow': '查看运行流',
   'taskPanel.openRunFlowAria': '查看 {stock} 运行流',
+  'taskPanel.messageRunning': '任务执行中',
   'taskPanel.statusAria': '任务状态：{status}',
   'taskPanel.title': '分析任务',
 
@@ -1105,6 +1106,7 @@ const en: Record<UiTextKey, string> = {
   'taskPanel.pendingAria': 'Task pending',
   'taskPanel.openRunFlow': 'View run flow',
   'taskPanel.openRunFlowAria': 'View {stock} run flow',
+  'taskPanel.messageRunning': 'Task running',
   'taskPanel.statusAria': 'Task status: {status}',
   'taskPanel.title': 'Analysis tasks',
 
@@ -1819,6 +1821,7 @@ const ko: Record<UiTextKey, string> = {
   'taskPanel.pendingAria': '작업 대기 중',
   'taskPanel.openRunFlow': '실행 흐름 보기',
   'taskPanel.openRunFlowAria': '{stock} 실행 흐름 보기',
+  'taskPanel.messageRunning': '작업 실행 중',
   'taskPanel.statusAria': '작업 상태: {status}',
   'taskPanel.title': '분석 작업',
   'runFlow.drawerTitle': '실행 흐름',

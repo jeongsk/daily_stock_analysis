@@ -2,6 +2,7 @@
 """Unit tests for report language helpers."""
 
 import unittest
+import unittest.mock
 
 from src.report_language import (
     get_bias_status_emoji,
@@ -67,6 +68,20 @@ class ReportLanguageTestCase(unittest.TestCase):
             self.assertEqual(
                 get_localized_stock_name("自定义名称", "005930.KS", "ko"),
                 "自定义名称",
+            )
+
+    def test_get_localized_stock_name_replaces_wrong_chinese_name_for_korean_symbol(self) -> None:
+        def fake_index_name(code, language=None):
+            if code == "000660.KS" and language == "ko":
+                return "SK하이닉스"
+            if code == "000660.KS" and language == "zh":
+                return "SK海力士"
+            return None
+
+        with unittest.mock.patch("src.report_language.get_index_stock_name", side_effect=fake_index_name):
+            self.assertEqual(
+                get_localized_stock_name("*ST南华", "000660.KS", "ko"),
+                "SK하이닉스",
             )
 
     def test_get_sentiment_label_preserves_higher_band_thresholds(self) -> None:

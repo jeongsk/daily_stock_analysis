@@ -2,6 +2,8 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { TaskPanel } from '../TaskPanel';
 import type { TaskInfo } from '../../../types/analysis';
+import { UiLanguageProvider } from '../../../contexts/UiLanguageContext';
+import { UI_LANGUAGE_STORAGE_KEY } from '../../../utils/uiLanguage';
 
 const baseTask: TaskInfo = {
   taskId: 'task-1',
@@ -15,6 +17,34 @@ const baseTask: TaskInfo = {
 };
 
 describe('TaskPanel', () => {
+  it('localizes market-review task name and known server messages in Korean UI mode', () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'ko');
+
+    render(
+      <UiLanguageProvider>
+        <TaskPanel
+          tasks={[
+            {
+              ...baseTask,
+              taskId: 'market-task',
+              stockCode: 'MARKET',
+              stockName: '大盘复盘',
+              status: 'processing',
+              progress: 10,
+              message: '任务执行中',
+              reportType: 'market_review',
+            },
+          ]}
+        />
+      </UiLanguageProvider>,
+    );
+
+    expect(screen.getByText('시장 리뷰')).toBeInTheDocument();
+    expect(screen.getByText('작업 실행 중')).toBeInTheDocument();
+    expect(screen.queryByText('大盘复盘')).not.toBeInTheDocument();
+    expect(screen.queryByText('任务执行中')).not.toBeInTheDocument();
+  });
+
   it('renders requested analysis phase badges for active tasks', () => {
     render(
       <TaskPanel

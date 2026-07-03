@@ -71,6 +71,15 @@ def _normalize_code_for_grouping(code: str) -> str:
     return normalize_stock_code(code or "")
 
 
+def _extract_report_language(*payloads: object) -> str:
+    for payload in payloads:
+        if isinstance(payload, dict):
+            language = payload.get("report_language")
+            if language:
+                return normalize_report_language(language)
+    return normalize_report_language(None)
+
+
 @router.get(
     "",
     response_model=HistoryListResponse,
@@ -121,29 +130,39 @@ def get_history_list(
         )
         
         # 转换为响应模型
-        items = [
-            HistoryItem(
-                id=item.get("id"),
-                query_id=item.get("query_id", ""),
-                stock_code=item.get("stock_code", ""),
-                stock_name=item.get("stock_name"),
-                report_type=item.get("report_type"),
-                trend_prediction=item.get("trend_prediction"),
-                analysis_summary=item.get("analysis_summary"),
-                sentiment_score=item.get("sentiment_score"),
-                operation_advice=item.get("operation_advice"),
-                action=item.get("action"),
-                action_label=item.get("action_label"),
-                current_price=item.get("current_price"),
-                change_pct=item.get("change_pct"),
-                volume_ratio=item.get("volume_ratio"),
-                turnover_rate=item.get("turnover_rate"),
-                model_used=item.get("model_used"),
-                created_at=item.get("created_at"),
-                market_phase_summary=item.get("market_phase_summary"),
+        items = []
+        for item in result.get("items", []):
+            report_language = _extract_report_language(
+                item.get("raw_result"),
+                item.get("context_snapshot"),
             )
-            for item in result.get("items", [])
-        ]
+            stock_code_for_name = item.get("storage_stock_code") or item.get("stock_code", "")
+            items.append(
+                HistoryItem(
+                    id=item.get("id"),
+                    query_id=item.get("query_id", ""),
+                    stock_code=item.get("stock_code", ""),
+                    stock_name=get_localized_stock_name(
+                        item.get("stock_name"),
+                        stock_code_for_name,
+                        report_language,
+                    ),
+                    report_type=item.get("report_type"),
+                    trend_prediction=item.get("trend_prediction"),
+                    analysis_summary=item.get("analysis_summary"),
+                    sentiment_score=item.get("sentiment_score"),
+                    operation_advice=item.get("operation_advice"),
+                    action=item.get("action"),
+                    action_label=item.get("action_label"),
+                    current_price=item.get("current_price"),
+                    change_pct=item.get("change_pct"),
+                    volume_ratio=item.get("volume_ratio"),
+                    turnover_rate=item.get("turnover_rate"),
+                    model_used=item.get("model_used"),
+                    created_at=item.get("created_at"),
+                    market_phase_summary=item.get("market_phase_summary"),
+                )
+            )
         
         return HistoryListResponse(
             total=result.get("total", 0),
@@ -285,6 +304,7 @@ def get_stock_bar(
             record = seen[norm_code]
             raw_result = parse_json_field(getattr(record, "raw_result", None))
             model_used = raw_result.get("model_used") if isinstance(raw_result, dict) else None
+            report_language = _extract_report_language(raw_result)
             action_fields = build_action_fields(
                 operation_advice=(
                     raw_result.get("operation_advice") if isinstance(raw_result, dict) else None
@@ -292,9 +312,7 @@ def get_stock_bar(
                 or record.operation_advice,
                 explicit_action=raw_result.get("action") if isinstance(raw_result, dict) else None,
                 report_type=record.report_type,
-                report_language=normalize_report_language(
-                    raw_result.get("report_language") if isinstance(raw_result, dict) else None
-                ),
+                report_language=report_language,
             )
 
             display_stock_code = service._display_stock_code(record.code)
@@ -306,7 +324,11 @@ def get_stock_bar(
                 StockBarItem(
                     id=record.id,
                     stock_code=display_stock_code,
-                    stock_name=record.name,
+                    stock_name=get_localized_stock_name(
+                        record.name,
+                        record.code or display_stock_code,
+                        report_language,
+                    ),
                     report_type=record.report_type,
                     sentiment_score=record.sentiment_score,
                     operation_advice=record.operation_advice,

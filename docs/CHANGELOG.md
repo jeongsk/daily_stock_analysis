@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [修复] 修复 `REPORT_LANGUAGE=ko` 时个股分析系统 Prompt、上下文包摘要与 Agent 语言段仍混入中文输出指令和中文 JSON 值示例的问题。
+- [修复] 修复韩文 UI 下任务面板市场复盘任务名、运行中消息和韩股历史列表/个股栏名称仍显示中文的问题。
 - [修复] 修复 `REPORT_LANGUAGE=ko` 时大盘复盘 Prompt、模板兜底与 Telegram 等 report 路由通知正文仍使用中文壳子的问题。
 - [测试] 为韩语大盘复盘 Prompt、模板兜底与 Bot `/market` 配置传递补充回归测试。
 - [修复] 韩股自动补全、分析提交和韩文报告优先使用韩文股票名称，避免 `005930.KS` 等韩国股票在韩文界面或报告中显示为中文名称。

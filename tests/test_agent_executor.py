@@ -33,6 +33,7 @@ from src.agent.executor import (
     LEGACY_DEFAULT_AGENT_SYSTEM_PROMPT,
     AgentExecutor,
     AgentResult,
+    _build_language_section,
 )
 from src.agent.llm_adapter import LLMResponse, ToolCall
 from src.agent.runner import parse_dashboard_json, run_agent_loop, serialize_tool_result
@@ -180,6 +181,18 @@ def test_agent_system_prompts_require_phase_decision_contract() -> None:
         assert '"data_limitations"' in prompt
         assert "quote/daily_bars/technical 存在 stale、fallback、missing、fetch_failed、partial 或 estimated" in prompt
         assert "`confidence_level` 不得为高" in prompt
+
+
+def test_agent_language_section_supports_korean_report_and_chat_modes() -> None:
+    report_section = _build_language_section("ko")
+    chat_section = _build_language_section("ko", chat_mode=True)
+
+    assert "한국어" in report_section
+    assert "사람이 읽는 모든 JSON 값" in report_section
+    assert "한국어" in chat_section
+    assert "기본적으로 한국어로 답변" in chat_section
+    assert "所有面向用户的人类可读文本值必须使用中文" not in report_section
+    assert "默认使用中文回答" not in chat_section
 
 
 # ============================================================

@@ -116,6 +116,74 @@ def _normalize_risk_warning_values(value: Any) -> List[str]:
     return [text] if text else []
 
 
+_KO_ANALYSIS_PROMPT_REPLACEMENTS = {
+    '"stock_name": "股票中文名称"': '"stock_name": "상장 종목명 또는 한국어 통칭"',
+    '"sentiment_score": 0-100整数': '"sentiment_score": 0-100 정수',
+    '"trend_prediction": "强烈看多/看多/震荡/看空/强烈看空"': '"trend_prediction": "강한 상승 전망/상승 전망/횡보/하락 전망/강한 하락 전망"',
+    '"operation_advice": "买入/加仓/持有/减仓/卖出/观望"': '"operation_advice": "강력 매수/매수/보유/관망/비중 축소/매도/강력 매도"',
+    '"confidence_level": "高/中/低"': '"confidence_level": "높음/보통/낮음"',
+    '"one_sentence": "一句话核心结论（30字以内，直接告诉用户做什么）"': '"one_sentence": "한 문장 핵심 결론(30자 내외, 사용자가 무엇을 해야 하는지 직접 제시)"',
+    '"signal_type": "🟢买入信号/🟡持有观望/🔴卖出信号/⚠️风险警告"': '"signal_type": "🟢매수 신호/🟡보유 관망/🔴매도 신호/⚠️리스크 경고"',
+    '"time_sensitivity": "立即行动/今日内/本周内/不急"': '"time_sensitivity": "즉시 행동/오늘 중/이번 주 중/급하지 않음"',
+    '"no_position": "空仓者建议：具体操作指引"': '"no_position": "미보유자 제안: 구체적 행동 지침"',
+    '"has_position": "持仓者建议：具体操作指引"': '"has_position": "보유자 제안: 구체적 행동 지침"',
+    '"ma_alignment": "均线排列状态描述"': '"ma_alignment": "이동평균 배열 상태 설명"',
+    '"bias_status": "安全/警戒/危险"': '"bias_status": "안전/주의/위험"',
+    '"volume_status": "放量/缩量/平量"': '"volume_status": "거래량 증가/거래량 감소/보통"',
+    '"volume_meaning": "量能含义解读（如：缩量回调表示抛压减轻）"': '"volume_meaning": "거래량 의미 해석(예: 거래량 감소 조정은 매도 압력 완화를 의미)"',
+    '"chip_health": "健康/一般/警惕"': '"chip_health": "양호/보통/주의"',
+    '"latest_news": "【最新消息】近期重要新闻摘要"': '"latest_news": "【최신 뉴스】최근 주요 뉴스 요약"',
+    '"risk_alerts": ["风险点1：具体描述", "风险点2：具体描述"]': '"risk_alerts": ["리스크 1: 구체적 설명", "리스크 2: 구체적 설명"]',
+    '"positive_catalysts": ["利好1：具体描述", "利好2：具体描述"]': '"positive_catalysts": ["긍정 촉매 1: 구체적 설명", "긍정 촉매 2: 구체적 설명"]',
+    '"earnings_outlook": "业绩预期分析（基于年报预告、业绩快报等）"': '"earnings_outlook": "실적 전망 분석(잠정 실적, 실적 발표 등 기반)"',
+    '"sentiment_summary": "舆情情绪一句话总结"': '"sentiment_summary": "뉴스/여론 심리 한 문장 요약"',
+    '"ideal_buy": "理想入场位：XX元（满足主要技能触发条件）"': '"ideal_buy": "이상적 진입가: XX(핵심 조건 충족 시)"',
+    '"secondary_buy": "次优入场位：XX元（更保守或确认后执行）"': '"secondary_buy": "차선 진입가: XX(더 보수적이거나 확인 후 실행)"',
+    '"stop_loss": "止损位：XX元（失效条件或X%风险）"': '"stop_loss": "손절가: XX(무효화 조건 또는 X% 리스크)"',
+    '"take_profit": "目标位：XX元（按阻力位/风险回报比制定）"': '"take_profit": "목표가: XX(저항선/손익비 기준)"',
+    '"suggested_position": "建议仓位：X成"': '"suggested_position": "권장 비중: X%"',
+    '"entry_plan": "分批建仓策略描述"': '"entry_plan": "분할 진입 전략 설명"',
+    '"risk_control": "风控策略描述"': '"risk_control": "리스크 관리 전략 설명"',
+    '"✅/⚠️/❌ 检查项1：当前结构是否满足激活技能条件"': '"✅/⚠️/❌ 체크 1: 현재 구조가 활성화된 전략 조건을 충족하는지"',
+    '"✅/⚠️/❌ 检查项2：入场位置与风险回报是否合理"': '"✅/⚠️/❌ 체크 2: 진입 위치와 손익비가 합리적인지"',
+    '"✅/⚠️/❌ 检查项3：量价/波动/筹码是否支持判断"': '"✅/⚠️/❌ 체크 3: 거래량/가격/변동성/수급이 판단을 뒷받침하는지"',
+    '"✅/⚠️/❌ 检查项4：无重大利空"': '"✅/⚠️/❌ 체크 4: 중대한 악재가 없는지"',
+    '"✅/⚠️/❌ 检查项5：仓位与止损计划明确"': '"✅/⚠️/❌ 체크 5: 비중과 손절 계획이 명확한지"',
+    '"✅/⚠️/❌ 检查项6：估值/业绩/催化与结论匹配"': '"✅/⚠️/❌ 체크 6: 밸류에이션/실적/촉매가 결론과 일치하는지"',
+    '"action_window": "盘前计划/盘中跟踪/午间确认/收盘前风控/盘后复盘/非交易日观察"': '"action_window": "장전 계획/장중 추적/점심 확인/마감 전 리스크 관리/장후 복기/비거래일 관찰"',
+    '"immediate_action": "立即行动/等待确认/观察/止损止盈预警/禁止追高/无盘中动作"': '"immediate_action": "즉시 행동/확인 대기/관찰/손절·익절 경고/추격 매수 금지/장중 행동 없음"',
+    '"watch_conditions": ["观察条件1", "观察条件2"]': '"watch_conditions": ["관찰 조건 1", "관찰 조건 2"]',
+    '"next_check_time": "下一次检查点或市场本地时间"': '"next_check_time": "다음 확인 시점 또는 시장 현지 시간"',
+    '"confidence_reason": "置信度理由，说明阶段和数据质量限制"': '"confidence_reason": "신뢰도 근거, 시장 단계와 데이터 품질 제한 설명"',
+    '"data_limitations": ["阶段或数据质量限制1", "阶段或数据质量限制2"]': '"data_limitations": ["시장 단계 또는 데이터 품질 제한 1", "시장 단계 또는 데이터 품질 제한 2"]',
+    '"analysis_summary": "100字综合分析摘要"': '"analysis_summary": "100자 내외 종합 분석 요약"',
+    '"key_points": "3-5个核心看点，逗号分隔"': '"key_points": "핵심 포인트 3-5개, 쉼표로 구분"',
+    '"risk_warning": "风险提示"': '"risk_warning": "리스크 경고"',
+    '"buy_reason": "操作理由，引用激活技能或风险框架"': '"buy_reason": "행동 근거, 활성화된 전략 또는 리스크 프레임워크 인용"',
+    '"trend_analysis": "走势形态分析"': '"trend_analysis": "가격 흐름/패턴 분석"',
+    '"short_term_outlook": "短期1-3日展望"': '"short_term_outlook": "단기 1-3일 전망"',
+    '"medium_term_outlook": "中期1-2周展望"': '"medium_term_outlook": "중기 1-2주 전망"',
+    '"technical_analysis": "技术面综合分析"': '"technical_analysis": "기술적 종합 분석"',
+    '"ma_analysis": "均线系统分析"': '"ma_analysis": "이동평균 분석"',
+    '"volume_analysis": "量能分析"': '"volume_analysis": "거래량 분석"',
+    '"pattern_analysis": "K线形态分析"': '"pattern_analysis": "캔들 패턴 분석"',
+    '"fundamental_analysis": "基本面分析"': '"fundamental_analysis": "기본면 분석"',
+    '"sector_position": "板块行业分析"': '"sector_position": "섹터/업종 분석"',
+    '"company_highlights": "公司亮点/风险"': '"company_highlights": "회사 강점/리스크"',
+    '"news_summary": "新闻摘要"': '"news_summary": "뉴스 요약"',
+    '"market_sentiment": "市场情绪"': '"market_sentiment": "시장 심리"',
+    '"hot_topics": "相关热点"': '"hot_topics": "관련 이슈"',
+    '"data_sources": "数据来源说明"': '"data_sources": "데이터 출처 설명"',
+}
+
+
+def _localize_analysis_prompt_examples_for_korean(prompt: str) -> str:
+    """Translate human-readable JSON examples while preserving schema keys."""
+    for source, target in _KO_ANALYSIS_PROMPT_REPLACEMENTS.items():
+        prompt = prompt.replace(source, target)
+    return prompt
+
+
 def _today_has_realtime_overlay(today: Any) -> bool:
     if not isinstance(today, dict):
         return False
@@ -2221,6 +2289,8 @@ class GeminiAnalyzer:
                 .replace("{default_skill_policy_section}", default_skill_policy_section)
                 .replace("{skills_section}", skills_section)
             )
+        if lang == "ko":
+            base_prompt = _localize_analysis_prompt_examples_for_korean(base_prompt)
         if lang == "en":
             return base_prompt + """
 
@@ -2244,6 +2314,7 @@ class GeminiAnalyzer:
 - `operation_advice` 허용값: 강력 매수 / 매수 / 보유 / 관망 / 비중 축소 / 매도 / 강력 매도.
 - `trend_prediction` 허용값: 강한 상승 전망 / 상승 전망 / 횡보 / 하락 전망 / 강한 하락 전망.
 - `confidence_level` 허용값: 높음 / 보통 / 낮음.
+- 입력 데이터, 전략 설명, JSON 예시에 중국어 용어가 포함되어도 사용자에게 보이는 값에는 그대로 복사하지 말고 한국어로 번역할 것.
 - 데이터가 부족할 때는 한국어로 "데이터가 부족해 판단할 수 없습니다"라고 명시할 것.
 """
         return base_prompt + """
@@ -3688,15 +3759,70 @@ class GeminiAnalyzer:
 """
 
         # 明确的输出要求
-        prompt += f"""
+        if report_language == "ko":
+            prompt += f"""
+---
+
+## 분석 작업
+
+**{stock_name}({code})**에 대한 【의사결정 대시보드】를 생성하고, JSON 형식으로 출력하세요.
+"""
+            if context.get('is_index_etf'):
+                prompt += """
+> ⚠️ **지수/ETF 분석 제약**: 이 종목은 지수 추종 ETF 또는 시장 지수입니다.
+> - 리스크 분석은 **지수 흐름, 추적 오차, 시장 유동성**에만 집중합니다.
+> - 운용사의 소송, 평판, 경영진 변동을 리스크 알림에 포함하지 마세요.
+> - 실적 전망은 운용사 재무제표가 아니라 **지수 구성 종목 전체 흐름**을 기준으로 합니다.
+> - `risk_alerts`에는 펀드 운용사 관련 영업 리스크를 넣지 마세요.
+
+"""
+            prompt += f"""
+### ⚠️ 중요: 올바른 종목명 형식
+종목명 형식은 “종목명(종목코드)”입니다. 예: “Sandisk Corporation(SNDK)”.
+위 종목명이 "주식{code}"처럼 부정확하면 신뢰 가능한 상장 종목명을 사용하고, 한국어 통칭이 확실하지 않으면 원문 상장명을 유지하세요.
+"""
+            if use_legacy_default_prompt:
+                prompt += """
+
+### 중점 확인 사항(반드시 답변)
+1. ❓ MA5>MA10>MA20 상승 배열을 충족하는가?
+2. ❓ 현재 이격률이 안전 범위(<5%)인가? 5% 초과 시 "추격 매수 금지"를 명시
+3. ❓ 거래량이 흐름을 뒷받침하는가?
+4. ❓ 수급 구조가 건강한가?
+5. ❓ 뉴스/이벤트 측면의 중대한 악재가 있는가?
+"""
+            else:
+                prompt += """
+
+### 중점 확인 사항(반드시 답변)
+1. ❓ 현재 구조가 활성화된 전략의 핵심 조건을 충족하는가?
+2. ❓ 현재 진입 위치와 손익비가 합리적인가? 괴리가 크면 대기 조건을 명확히 설명
+3. ❓ 거래량, 변동성, 수급 구조가 결론을 뒷받침하는가?
+4. ❓ 뉴스/이벤트 측면에서 중대한 악재나 전략 결론과 충돌하는 정보가 있는가?
+5. ❓ 결론이 유효하다면 구체적 트리거, 손절가, 관찰 지점은 무엇인가?
+"""
+            prompt += f"""
+
+### 의사결정 대시보드 요구사항:
+- **종목명**: 신뢰 가능한 상장명 또는 확실한 한국어 통칭 사용
+- **핵심 결론**: 매수/매도/대기 중 무엇을 해야 하는지 한 문장으로 명확히 제시
+- **보유 여부별 제안**: 미보유자와 보유자에게 다른 행동 지침 제시
+- **구체적 가격대**: 진입가, 손절가, 목표가를 가능한 한 구체적으로 제시
+- **체크리스트**: 각 항목을 ✅/⚠️/❌로 표시
+- **뉴스 시간 규칙**: `latest_news`, `risk_alerts`, `positive_catalysts`의 각 항목은 최근 {news_window_days}일 범위와 날짜 확인 가능성을 기준으로 작성
+- **기술적 일관성**: 상승 배열과 하락 배열 같은 상호 배타적 결론을 동시에 유효 근거로 쓰지 말 것. 기본면/이벤트와 기술적 흐름이 충돌하면 "이벤트 선행, 기술 확인 필요" 또는 "기본면은 우호적이나 기술적 확인은 부족"처럼 명확히 설명
+
+전체 JSON의 사람이 읽는 값은 한국어로 작성하세요."""
+        else:
+            prompt += f"""
 ---
 
 ## ✅ 分析任务
 
 请为 **{stock_name}({code})** 生成【决策仪表盘】，严格按照 JSON 格式输出。
 """
-        if context.get('is_index_etf'):
-            prompt += """
+            if context.get('is_index_etf'):
+                prompt += """
 > ⚠️ **指数/ETF 分析约束**：该标的为指数跟踪型 ETF 或市场指数。
 > - 风险分析仅关注：**指数走势、跟踪误差、市场流动性**
 > - 严禁将基金公司的诉讼、声誉、高管变动纳入风险警报
@@ -3704,13 +3830,13 @@ class GeminiAnalyzer:
 > - `risk_alerts` 中不得出现基金管理人相关的公司经营风险
 
 """
-        prompt += f"""
+            prompt += f"""
 ### ⚠️ 重要：输出正确的股票名称格式
 正确的股票名称格式为“股票名称（股票代码）”，例如“贵州茅台（600519）”。
 如果上方显示的股票名称为"股票{code}"或不正确，请在分析开头**明确输出该股票的正确中文全称**。
 """
-        if use_legacy_default_prompt:
-            prompt += f"""
+            if use_legacy_default_prompt:
+                prompt += f"""
 
 ### 重点关注（必须明确回答）：
 1. ❓ 是否满足 MA5>MA10>MA20 多头排列？
@@ -3719,8 +3845,8 @@ class GeminiAnalyzer:
 4. ❓ 筹码结构是否健康？
 5. ❓ 消息面有无重大利空？（减持、处罚、业绩变脸等）
 """
-        else:
-            prompt += f"""
+            else:
+                prompt += f"""
 
 ### 重点关注（必须明确回答）：
 1. ❓ 当前结构是否满足激活技能的关键触发条件？
@@ -3729,7 +3855,7 @@ class GeminiAnalyzer:
 4. ❓ 消息面有无重大利空或与技能结论冲突的信息？
 5. ❓ 若结论成立，具体触发条件、止损位、观察点分别是什么？
 """
-        prompt += f"""
+            prompt += f"""
 
 ### 决策仪表盘要求：
 - **股票名称**：必须输出正确的中文全称（如"贵州茅台"而非"股票600519"）
@@ -3761,7 +3887,8 @@ class GeminiAnalyzer:
 - `decision_type`은 `buy`, `hold`, `sell` 중 하나로 유지.
 - 사람이 읽는 모든 JSON 값은 한국어로 작성. 여기에는 `stock_name`, `trend_prediction`, `operation_advice`, `confidence_level`, 대시보드 내포 텍스트, 체크리스트 항목, 모든 요약 필드가 포함됨.
 - 종목명은 신뢰 가능한 한국어 통칭 사용, 없으면 원문 상장명 유지(임의 생성 금지).
-- 데이터가 부족할 때는 중국어 대신 한국어로 설명하고 “{no_data_text}, 판단 불가”로 표시.
+- 입력 데이터, 전략 설명, JSON 예시에 중국어 용어가 포함되어도 사용자에게 보이는 값에는 그대로 복사하지 말고 한국어로 번역.
+- 데이터가 부족할 때는 한국어로 “{no_data_text}, 판단 불가”라고 설명.
 """
         else:
             prompt += f"""

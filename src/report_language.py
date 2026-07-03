@@ -735,6 +735,23 @@ def _is_placeholder_stock_name(value: Any, code: Any = None) -> bool:
     return text.startswith("股票")
 
 
+def _is_jp_kr_stock_code(value: Any) -> bool:
+    code = str(value or "").strip().upper()
+    if "." not in code:
+        return False
+    base, suffix = code.rsplit(".", 1)
+    if suffix == "T":
+        return base.isdigit() and len(base) in {4, 5}
+    if suffix in {"KS", "KQ"}:
+        return base.isdigit() and len(base) == 6
+    return False
+
+
+def _looks_like_a_share_status_name(value: Any) -> bool:
+    text = str(value or "").strip().upper()
+    return text.startswith(("*ST", "ST", "S*ST", "SST", "XD", "XR", "DR"))
+
+
 def _translate_from_map(
     value: Any,
     language: Optional[str],
@@ -948,6 +965,7 @@ def get_localized_stock_name(value: Any, code: Any, language: Optional[str]) -> 
             if (
                 not raw_text
                 or raw_text == zh_index_name
+                or (_is_jp_kr_stock_code(code_text) and _looks_like_a_share_status_name(raw_text))
                 or _is_placeholder_stock_name(raw_text, code)
             ):
                 return localized_index_name
