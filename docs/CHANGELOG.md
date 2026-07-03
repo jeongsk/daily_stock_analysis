@@ -90,6 +90,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [新功能] #1772 台股 `tw` 纳入 DecisionSignal / Portfolio / Intelligence 服务层与 API 市场枚举（VALID_MARKETS / _ALLOWED_MARKETS + Pydantic Literal + api_spec.json），修复数据层 MVP 下 tw 分析在 pipeline 自动抽取 DecisionSignal 时被 _normalize_market 静默丢弃的缺陷，并同步放行 DecisionSignal/Portfolio 前端市场类型与筛选及相关专题文档，对齐 #1720 日韩；告警（大盘红绿灯）市场仍为 cn/hk/us。
 - [修复] A 股个股分析遇到空 `belong_boards` 占位时会继续补查所属板块，关联板块模块在已有板块时稳定展示；对应涨跌幅缺失时只显示板块，不再输出占位涨跌幅。
 - [修复] 大盘复盘在 LLM 标题漂移或正文缺少板块段时，会从结构化 `sectors` 兜底渲染板块表，避免 Web 与推送报告偶发缺少板块主线。
+- [改进] AlphaSift 默认依赖 pin 更新到 `9f522747caafd3c0b1ddb7e14d5cf44c8580b6cf`，接入 wrapper 数据源 caller-side timeout、东财直连限速/抖动、策略目录元数据与新增防守策略；选股任务状态轮询遇到可恢复超时时改为提示后台任务仍会自动重试，`.env.example` 补充相关超时调优项，降低外部数据源卡住时触发 Web 30 秒等待超时的概率。
 
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
