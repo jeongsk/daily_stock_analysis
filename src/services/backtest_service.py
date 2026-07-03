@@ -154,7 +154,7 @@ class BacktestService:
                 )
 
                 if len(forward_bars) < int(eval_window_days):
-                    for fill_code in self._ordered_candidate_codes(
+                    for fill_code in self._ordered_daily_refill_codes(
                         code_candidates=daily_code_candidates,
                         preferred_code=matched_daily_code,
                     ):
@@ -494,6 +494,33 @@ class BacktestService:
         if normalized_preferred and normalized_preferred in ordered:
             return [normalized_preferred] + [code for code in ordered if code != normalized_preferred]
         return ordered
+
+    @staticmethod
+    def _normalize_daily_refill_code(code: Optional[str]) -> str:
+        raw_code = str(code or "").strip()
+        if not raw_code:
+            return ""
+        return canonical_stock_code(normalize_stock_code(raw_code))
+
+    @staticmethod
+    def _ordered_daily_refill_codes(
+        *,
+        code_candidates: List[str],
+        preferred_code: Optional[str] = None,
+    ) -> List[str]:
+        ordered = BacktestService._ordered_candidate_codes(
+            code_candidates=code_candidates,
+            preferred_code=preferred_code,
+        )
+        refill_codes: List[str] = []
+        seen: set[str] = set()
+        for code in ordered:
+            refill_code = BacktestService._normalize_daily_refill_code(code)
+            if not refill_code or refill_code in seen:
+                continue
+            seen.add(refill_code)
+            refill_codes.append(refill_code)
+        return refill_codes
 
     def _get_forward_bars_by_candidates(
         self,
@@ -908,6 +935,10 @@ class BacktestService:
         return None
 
     def _try_fill_daily_data(self, *, code: str, analysis_date: date, eval_window_days: int) -> None:
+        refill_code = self._normalize_daily_refill_code(code)
+        if not refill_code:
+            return
+
         try:
             from data_provider.base import DataFetcherManager
 
@@ -915,16 +946,16 @@ class BacktestService:
             end_date = analysis_date + timedelta(days=max(eval_window_days * 2, 30))
             manager = DataFetcherManager()
             df, source = manager.get_daily_data(
-                stock_code=code,
+                stock_code=refill_code,
                 start_date=analysis_date.strftime("%Y-%m-%d"),
                 end_date=end_date.strftime("%Y-%m-%d"),
                 days=eval_window_days * 2,
             )
             if df is None or df.empty:
                 return
-            self.db.save_daily_data(df, code=code, data_source=source)
+            self.db.save_daily_data(df, code=refill_code, data_source=source)
         except Exception as exc:
-            logger.warning(f"补全日线数据失败({code}): {exc}")
+            logger.warning(f"补全日线数据失败({refill_code}): {exc}")
 
     def _recompute_summaries(self, *, touched_codes: List[str], eval_window_days: int, engine_version: str) -> None:
         with self.db.get_session() as session:
