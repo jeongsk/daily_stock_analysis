@@ -136,6 +136,27 @@ test('buildMainPageUrl includes desktop version and cache buster', (t) => {
   );
 });
 
+test('buildMainPageUrl uses a connect host when provided', (t) => {
+  const mainModule = loadMainModule(t, {
+    app: {
+      getVersion: () => '3.17.1',
+    },
+  });
+
+  assert.equal(
+    mainModule.buildMainPageUrl(8123, 1234567890, '192.168.1.9'),
+    'http://192.168.1.9:8123/?desktop_version=3.17.1&cache_bust=1234567890'
+  );
+});
+
+test('resolveDesktopConnectHost keeps desktop navigation local for public binds', (t) => {
+  const mainModule = loadMainModule(t);
+
+  assert.equal(mainModule.resolveDesktopConnectHost('0.0.0.0'), '127.0.0.1');
+  assert.equal(mainModule.resolveDesktopConnectHost('::'), '127.0.0.1');
+  assert.equal(mainModule.resolveDesktopConnectHost('192.168.1.9'), '192.168.1.9');
+});
+
 test('buildBackendEnvironment extends macOS GUI PATH with Homebrew CLI directories', (t) => {
   const mainModule = loadMainModule(t, { platform: 'darwin' });
 
@@ -160,6 +181,7 @@ test('buildBackendEnvironment extends macOS GUI PATH with Homebrew CLI directori
   assert.equal(env.ENV_FILE, '/tmp/dsa/.env');
   assert.equal(env.DATABASE_PATH, '/tmp/dsa/data.db');
   assert.equal(env.LOG_DIR, '/tmp/dsa/logs');
+  assert.equal(env.WEBUI_HOST, '127.0.0.1');
 });
 
 test('buildBackendEnvironment keeps non-macOS PATH unchanged', (t) => {
@@ -192,6 +214,187 @@ test('buildBackendEnvironment pins WEBUI_PORT to the Electron-selected backend p
   });
 
   assert.equal(env.WEBUI_PORT, '8000');
+  assert.equal(env.WEBUI_HOST, '127.0.0.1');
+});
+
+test('resolveBackendBindHost reads WEBUI_HOST from env file', (t) => {
+  const mainModule = loadMainModule(t, { platform: 'win32' });
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsa-desktop-host-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const envPath = path.join(tmpDir, '.env');
+  fs.writeFileSync(envPath, 'WEBUI_HOST=0.0.0.0 # allow LAN\nWEBUI_PORT=8000\n', 'utf-8');
+
+  assert.equal(mainModule.readEnvFileValue(envPath, 'WEBUI_HOST'), '0.0.0.0');
+  assert.equal(
+    mainModule.resolveBackendBindHost({ envFile: envPath, sourceEnv: {} }),
+    '0.0.0.0'
+  );
+});
+
+test('resolveBackendBindHost expands WEBUI_HOST dotenv references', (t) => {
+  const mainModule = loadMainModule(t, { platform: 'win32' });
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsa-desktop-host-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const envPath = path.join(tmpDir, '.env');
+  fs.writeFileSync(envPath, 'BIND_HOST=0.0.0.0\nWEBUI_HOST=${BIND_HOST}\n', 'utf-8');
+
+  assert.equal(mainModule.readEnvFileValue(envPath, 'WEBUI_HOST', {}), '0.0.0.0');
+  assert.equal(
+    mainModule.resolveBackendBindHost({ envFile: envPath, sourceEnv: {} }),
+    '0.0.0.0'
+  );
+});
+
+test('resolveBackendBindHost handles quoted WEBUI_HOST with inline comment', (t) => {
+  const mainModule = loadMainModule(t, { platform: 'win32' });
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsa-desktop-host-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const envPath = path.join(tmpDir, '.env');
+  fs.writeFileSync(envPath, 'WEBUI_HOST="0.0.0.0" # allow LAN\n', 'utf-8');
+
+  assert.equal(mainModule.readEnvFileValue(envPath, 'WEBUI_HOST', {}), '0.0.0.0');
+  assert.equal(
+    mainModule.resolveBackendBindHost({ envFile: envPath, sourceEnv: {} }),
+    '0.0.0.0'
+  );
+});
+
+test('resolveBackendBindHost supports dotenv default expansion', (t) => {
+  const mainModule = loadMainModule(t, { platform: 'win32' });
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsa-desktop-host-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const envPath = path.join(tmpDir, '.env');
+  fs.writeFileSync(envPath, 'WEBUI_HOST=${MISSING_HOST:-127.0.0.1}\n', 'utf-8');
+
+  assert.equal(mainModule.readEnvFileValue(envPath, 'WEBUI_HOST', {}), '127.0.0.1');
+  assert.equal(
+    mainModule.resolveBackendBindHost({ envFile: envPath, sourceEnv: {} }),
+    '127.0.0.1'
+  );
+});
+
+test('resolveBackendBindHost keeps process WEBUI_HOST override ahead of env file', (t) => {
+  const mainModule = loadMainModule(t, { platform: 'win32' });
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsa-desktop-host-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const envPath = path.join(tmpDir, '.env');
+  fs.writeFileSync(envPath, 'WEBUI_HOST=0.0.0.0\n', 'utf-8');
+
+  assert.equal(
+    mainModule.resolveBackendBindHost({
+      envFile: envPath,
+      sourceEnv: { WEBUI_HOST: '192.168.1.9' },
+    }),
+    '192.168.1.9'
+  );
+});
+
+test('buildBackendEnvironment injects env file WEBUI_HOST into backend process', (t) => {
+  const mainModule = loadMainModule(t, { platform: 'win32' });
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsa-desktop-host-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const envPath = path.join(tmpDir, '.env');
+  fs.writeFileSync(envPath, 'BIND_HOST=0.0.0.0\nWEBUI_HOST=${BIND_HOST}\n', 'utf-8');
+
+  const env = mainModule.buildBackendEnvironment({
+    envFile: envPath,
+    dbPath: 'C:\\Users\\user\\AppData\\Roaming\\Daily Stock Analysis\\data\\stock_analysis.db',
+    logDir: 'C:\\Users\\user\\AppData\\Roaming\\Daily Stock Analysis\\logs',
+    port: 8000,
+    sourceEnv: {
+      PATH: 'C:\\Windows\\System32',
+    },
+  });
+
+  assert.equal(env.WEBUI_HOST, '0.0.0.0');
+  assert.equal(env.WEBUI_PORT, '8000');
+});
+
+test('buildBackendArgs passes resolved host to main.py', (t) => {
+  const mainModule = loadMainModule(t, { platform: 'win32' });
+
+  assert.deepEqual(mainModule.buildBackendArgs({ host: '0.0.0.0', port: 8123 }), [
+    '--serve-only',
+    '--host',
+    '0.0.0.0',
+    '--port',
+    '8123',
+  ]);
+});
+
+test('findAvailablePort listens on requested bind host', async (t) => {
+  let listenedHost = '';
+  const fakeNet = {
+    createServer: () => {
+      const server = new EventEmitter();
+      server.listen = (_port, host) => {
+        listenedHost = host;
+        process.nextTick(() => server.emit('listening'));
+      };
+      server.close = (callback) => {
+        if (callback) {
+          callback();
+        }
+      };
+      return server;
+    },
+  };
+  const mainModule = loadMainModule(t, { platform: 'win32', net: fakeNet });
+
+  const port = await mainModule.findAvailablePort(8123, 8123, '0.0.0.0');
+
+  assert.equal(port, 8123);
+  assert.equal(listenedHost, '0.0.0.0');
+});
+
+test('startBackend passes WEBUI_HOST from env file to backend args and env', (t) => {
+  const previousWebuiHost = process.env.WEBUI_HOST;
+  delete process.env.WEBUI_HOST;
+  t.after(() => {
+    if (previousWebuiHost === undefined) {
+      delete process.env.WEBUI_HOST;
+    } else {
+      process.env.WEBUI_HOST = previousWebuiHost;
+    }
+  });
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsa-desktop-host-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const envPath = path.join(tmpDir, '.env');
+  fs.writeFileSync(envPath, 'BIND_HOST=0.0.0.0\nWEBUI_HOST=${BIND_HOST}\n', 'utf-8');
+  const spawned = [];
+  const fakeBackendProcess = new EventEmitter();
+  fakeBackendProcess.stdout = new EventEmitter();
+  fakeBackendProcess.stderr = new EventEmitter();
+  fakeBackendProcess.exitCode = null;
+  fakeBackendProcess.signalCode = null;
+  fakeBackendProcess.kill = () => true;
+  const mainModule = loadMainModule(t, {
+    platform: 'win32',
+    childProcess: {
+      spawn: (command, args, options) => {
+        spawned.push({ command, args, options });
+        return fakeBackendProcess;
+      },
+    },
+  });
+  t.after(() => mainModule.__setBackendProcessForTest(null));
+
+  mainModule.startBackend({
+    port: 8123,
+    envFile: envPath,
+    dbPath: path.join(tmpDir, 'stock_analysis.db'),
+    logDir: path.join(tmpDir, 'logs'),
+  });
+
+  assert.equal(spawned.length, 1);
+  assert.deepEqual(spawned[0].args.slice(-5), [
+    '--serve-only',
+    '--host',
+    '0.0.0.0',
+    '--port',
+    '8123',
+  ]);
+  assert.equal(spawned[0].options.env.WEBUI_HOST, '0.0.0.0');
 });
 
 test('extendMacDesktopBackendPath preserves existing order and avoids duplicates', (t) => {
