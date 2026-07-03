@@ -1,3 +1,28 @@
 {
-  "$schema": "https://app.kilo.ai/config.json"
+  "$schema": "https://app.kilo.ai/config.json",
+  "agent": {
+    "plan": {
+      "model": "9router/glm-5.2",
+      "permission": {
+        "read": "allow",
+        "grep": "allow",
+        "glob": "allow",
+        "edit": {
+          ".kilo/plans/**": "allow",
+          "*": "deny"
+        },
+        "bash": "deny"
+      }
+    },
+    "code": {
+      "model": "9router/deepseek-v4-pro",
+      "permission": {
+        "read": "allow",
+        "grep": "allow",
+        "glob": "allow",
+        "edit": "allow",
+        "bash": "ask"
+      }
+    }
+  }
 }
