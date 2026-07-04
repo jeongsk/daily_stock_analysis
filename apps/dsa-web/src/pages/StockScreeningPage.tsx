@@ -40,6 +40,7 @@ import {
 import { formatParsedApiError, getParsedApiError, toApiErrorMessage, type ParsedApiError } from '../api/error';
 import { AppPage, Button, InlineAlert } from '../components/common';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
+import type { UiLanguage } from '../i18n/uiText';
 import { SCREENING_TEXT } from '../locales/featureText';
 
 const MARKETS = [{ id: 'cn', label: 'A 股' }];
@@ -160,6 +161,127 @@ const toMessageList = (values: string[] | undefined) =>
 
 const KNOWN_SNAPSHOT_SOURCES = new Set(['tushare', 'efinance', 'akshare_em', 'em_datacenter', 'baostock']);
 const MAX_MESSAGE_DETAIL_LENGTH = 96;
+const UI_LOCALE_BY_LANGUAGE: Record<UiLanguage, string> = {
+  zh: 'zh-CN',
+  en: 'en-US',
+  ko: 'ko-KR',
+};
+
+const SCREENING_LOCAL_TEXT = {
+  zh: {
+    noOpenTradingDays: '交易日历暂无可用开市日',
+    rateLimited: '请求过于频繁',
+    forbidden: '访问被拒绝',
+    timeout: '请求超时',
+    networkDisconnected: '网络连接中断',
+    missingLlmKey: '缺少可用 LLM API Key',
+    noData: '未返回可用数据',
+    llmRankingFailed: 'LLM 重排失败：{detail}，已回退到本地因子评分。',
+    sourceFallback: '数据源降级：{detail}',
+    sourceFallbackWithSource: '数据源降级：{source}（{detail}）',
+    taskFailed: '选股任务失败，请稍后重试。',
+    taskFailedWithDetail: '选股任务失败：{detail}',
+    hotspotNoCache: '暂无缓存热点题材，展开后可点击刷新拉取实时数据。',
+    hotspotNoDataWithDetail: '热点题材暂未返回数据：{detail}',
+    hotspotNoData: '热点题材暂未返回数据',
+    pendingRefresh: '待刷新',
+    restoreTask: '正在恢复选股任务状态...',
+    runningTask: '正在执行 AlphaSift 选股',
+    taskId: '任务 ID',
+    defaultStrategy: '自定义策略',
+    customTag: '自定义',
+    llmLocalFallback: 'LLM 重排未完成或未返回判断，当前候选来自 AlphaSift 本地因子评分。',
+    hotspotIntro: '来自 AlphaSift 最新 hotspot 能力；capital_heat、balanced_alpha 等策略会把 theme_heat 纳入评分。',
+    updatedAt: '更新时间',
+    cachedHotspots: '已缓存 {count} 个热点题材，展开后可查看热度、阶段和发酵路线。',
+    collapsedHotspots: '热点题材默认折叠；展开后可读取缓存，点击刷新才拉取实时数据。',
+    liveDetailHint: '实时详情会在选择具体题材后加载',
+    emptyHotspotGuide: '点击刷新后会拉取热点概念/行业排行、热度分、生命周期阶段和活跃龙头。',
+    hotspotDetailLoadFailed: '热点题材详情加载失败，请稍后重试。',
+    hotspotLoadFailed: '热点题材加载失败，请稍后重试。',
+    strategyLoadFailed: 'AlphaSift 策略列表加载失败',
+    taskCompletedWithoutResult: '选股任务已完成，但服务端未返回候选结果。',
+    unknownTaskStatus: '选股任务返回未知状态：{status}',
+    taskStatusFetchFailed: '暂时无法获取选股任务状态，稍后将自动重试。',
+  },
+  en: {
+    noOpenTradingDays: 'No open trading days are available in the trading calendar',
+    rateLimited: 'Requests are too frequent',
+    forbidden: 'Access denied',
+    timeout: 'Request timed out',
+    networkDisconnected: 'Network disconnected',
+    missingLlmKey: 'No usable LLM API key',
+    noData: 'No usable data returned',
+    llmRankingFailed: 'LLM reranking failed: {detail}. Fell back to local factor scoring.',
+    sourceFallback: 'Data source fallback: {detail}',
+    sourceFallbackWithSource: 'Data source fallback: {source} ({detail})',
+    taskFailed: 'Screening task failed, please retry.',
+    taskFailedWithDetail: 'Screening task failed: {detail}',
+    hotspotNoCache: 'No cached hot themes yet. Expand and refresh to fetch live data.',
+    hotspotNoDataWithDetail: 'Hot themes returned no data: {detail}',
+    hotspotNoData: 'Hot themes returned no data',
+    pendingRefresh: 'Pending refresh',
+    restoreTask: 'Restoring screening task status...',
+    runningTask: 'Running AlphaSift screening',
+    taskId: 'Task ID',
+    defaultStrategy: 'Custom strategy',
+    customTag: 'Custom',
+    llmLocalFallback: 'LLM reranking did not complete or return a judgement; candidates currently come from AlphaSift local factor scoring.',
+    hotspotIntro: 'Powered by AlphaSift hotspot capabilities; strategies such as capital_heat and balanced_alpha include theme_heat in scoring.',
+    updatedAt: 'Updated at',
+    cachedHotspots: '{count} hot themes cached. Expand to view heat, phase, and evolution route.',
+    collapsedHotspots: 'Hot themes are collapsed by default. Expand to read cache; refresh fetches live data.',
+    liveDetailHint: 'Live details load after you select a specific theme',
+    emptyHotspotGuide: 'Refresh to fetch hot concepts/industry ranks, heat scores, lifecycle phases, and active leaders.',
+    hotspotDetailLoadFailed: 'Failed to load hot theme details, please retry.',
+    hotspotLoadFailed: 'Failed to load hot themes, please retry.',
+    strategyLoadFailed: 'Failed to load AlphaSift strategy list',
+    taskCompletedWithoutResult: 'Screening task completed, but the server returned no candidate results.',
+    unknownTaskStatus: 'Screening task returned unknown status: {status}',
+    taskStatusFetchFailed: 'Unable to fetch screening task status for now; will retry automatically.',
+  },
+  ko: {
+    noOpenTradingDays: '거래 달력에 사용 가능한 개장일이 없습니다',
+    rateLimited: '요청이 너무 빈번합니다',
+    forbidden: '접근이 거부되었습니다',
+    timeout: '요청 시간이 초과되었습니다',
+    networkDisconnected: '네트워크 연결이 끊겼습니다',
+    missingLlmKey: '사용 가능한 LLM API Key가 없습니다',
+    noData: '사용 가능한 데이터가 반환되지 않았습니다',
+    llmRankingFailed: 'LLM 재정렬 실패: {detail}. 로컬 팩터 점수로 대체했습니다.',
+    sourceFallback: '데이터 소스 대체: {detail}',
+    sourceFallbackWithSource: '데이터 소스 대체: {source} ({detail})',
+    taskFailed: '스크리닝 작업 실패, 다시 시도하세요.',
+    taskFailedWithDetail: '스크리닝 작업 실패: {detail}',
+    hotspotNoCache: '캐시된 핫 테마가 없습니다. 펼친 뒤 새로고침하면 실시간 데이터를 가져옵니다.',
+    hotspotNoDataWithDetail: '핫 테마 데이터가 반환되지 않았습니다: {detail}',
+    hotspotNoData: '핫 테마 데이터가 반환되지 않았습니다',
+    pendingRefresh: '새로고침 대기 중',
+    restoreTask: '스크리닝 작업 상태 복원 중...',
+    runningTask: 'AlphaSift 스크리닝 실행 중',
+    taskId: '작업 ID',
+    defaultStrategy: '사용자 지정 전략',
+    customTag: '사용자 지정',
+    llmLocalFallback: 'LLM 재정렬이 완료되지 않았거나 판단을 반환하지 않아 현재 후보는 AlphaSift 로컬 팩터 점수 기반입니다.',
+    hotspotIntro: 'AlphaSift 최신 hotspot 기능 기반입니다. capital_heat, balanced_alpha 등 전략은 theme_heat를 점수에 반영합니다.',
+    updatedAt: '업데이트 시간',
+    cachedHotspots: '핫 테마 {count}개가 캐시되어 있습니다. 펼치면 열도, 단계, 발효 경로를 볼 수 있습니다.',
+    collapsedHotspots: '핫 테마는 기본적으로 접혀 있습니다. 펼치면 캐시를 읽고, 새로고침하면 실시간 데이터를 가져옵니다.',
+    liveDetailHint: '특정 테마를 선택하면 실시간 상세 정보가 로드됩니다',
+    emptyHotspotGuide: '새로고침하면 핫 컨셉/업종 순위, 열도 점수, 생명주기 단계와 활발한 주도주를 가져옵니다.',
+    hotspotDetailLoadFailed: '핫 테마 상세 정보를 불러오지 못했습니다. 다시 시도하세요.',
+    hotspotLoadFailed: '핫 테마를 불러오지 못했습니다. 다시 시도하세요.',
+    strategyLoadFailed: 'AlphaSift 전략 목록을 불러오지 못했습니다',
+    taskCompletedWithoutResult: '스크리닝 작업은 완료되었지만 서버가 후보 결과를 반환하지 않았습니다.',
+    unknownTaskStatus: '스크리닝 작업이 알 수 없는 상태를 반환했습니다: {status}',
+    taskStatusFetchFailed: '현재 스크리닝 작업 상태를 가져올 수 없습니다. 잠시 후 자동으로 다시 시도합니다.',
+  },
+} as const;
+
+type ScreeningLocalText = (typeof SCREENING_LOCAL_TEXT)[UiLanguage];
+
+const formatLocalText = (template: string, params: Record<string, string | number> = {}) =>
+  Object.entries(params).reduce((text, [key, value]) => text.replaceAll(`{${key}}`, String(value)), template);
 
 const truncateMessageDetail = (value: string, maxLength = MAX_MESSAGE_DETAIL_LENGTH) => {
   const text = value.replace(/\s+/g, ' ').trim();
@@ -169,27 +291,27 @@ const truncateMessageDetail = (value: string, maxLength = MAX_MESSAGE_DETAIL_LEN
   return `${text.slice(0, maxLength - 1)}…`;
 };
 
-const summarizeAlphaSiftDiagnostic = (detail: string) => {
+const summarizeAlphaSiftDiagnostic = (detail: string, text: ScreeningLocalText) => {
   if (/trade_cal returned no open trading days/i.test(detail)) {
-    return '交易日历暂无可用开市日';
+    return text.noOpenTradingDays;
   }
   if (/too many requests|rate limit|http\s*429/i.test(detail)) {
-    return '请求过于频繁';
+    return text.rateLimited;
   }
   if (/403 forbidden|forbidden|access denied/i.test(detail)) {
-    return '访问被拒绝';
+    return text.forbidden;
   }
   if (/timeout|timed out/i.test(detail)) {
-    return '请求超时';
+    return text.timeout;
   }
   if (/RemoteDisconnected|Connection aborted|ProtocolError|ConnectionPool|Max retries exceeded|ProxyError|NameResolutionError/i.test(detail)) {
-    return '网络连接中断';
+    return text.networkDisconnected;
   }
   if (/missing .*api key|GEMINI_API_KEY|GOOGLE_API_KEY|gemini_api_key/i.test(detail)) {
-    return '缺少可用 LLM API Key';
+    return text.missingLlmKey;
   }
   if (/returned no data|empty/i.test(detail)) {
-    return '未返回可用数据';
+    return text.noData;
   }
 
   const withoutUrl = detail
@@ -210,36 +332,36 @@ const parseSourceDiagnostic = (value: string) => {
   };
 };
 
-const normalizeScreenMessageKey = (value: string) => {
-  const formatted = formatScreenMessage(value);
+const normalizeScreenMessageKey = (value: string, text: ScreeningLocalText) => {
+  const formatted = formatScreenMessage(value, text);
   return formatted ? formatted.trim().toLowerCase() : value.trim().toLowerCase();
 };
 
-const formatScreenMessage = (value: string) => {
+const formatScreenMessage = (value: string, text: ScreeningLocalText) => {
   if (/^DSA provider context applied \d+ of \d+ candidates/i.test(value)) {
     return '';
   }
   if (/^LLM ranking failed/i.test(value)) {
-    return `LLM 重排失败：${summarizeAlphaSiftDiagnostic(value)}，已回退到本地因子评分。`;
+    return formatLocalText(text.llmRankingFailed, { detail: summarizeAlphaSiftDiagnostic(value, text) });
   }
 
   const snapshotFallback = value.match(/^Snapshot source fallback:\s*(.+)$/i);
   if (snapshotFallback) {
     const parsed = parseSourceDiagnostic(snapshotFallback[1]);
     if (parsed) {
-      return `数据源降级：${parsed.source}（${summarizeAlphaSiftDiagnostic(parsed.detail)}）`;
+      return formatLocalText(text.sourceFallbackWithSource, { source: parsed.source, detail: summarizeAlphaSiftDiagnostic(parsed.detail, text) });
     }
-    return `数据源降级：${summarizeAlphaSiftDiagnostic(snapshotFallback[1])}`;
+    return formatLocalText(text.sourceFallback, { detail: summarizeAlphaSiftDiagnostic(snapshotFallback[1], text) });
   }
 
   const parsed = parseSourceDiagnostic(value);
   if (parsed && KNOWN_SNAPSHOT_SOURCES.has(parsed.source.toLowerCase())) {
-    return `数据源降级：${parsed.source}（${summarizeAlphaSiftDiagnostic(parsed.detail)}）`;
+    return formatLocalText(text.sourceFallbackWithSource, { source: parsed.source, detail: summarizeAlphaSiftDiagnostic(parsed.detail, text) });
   }
   return truncateMessageDetail(value);
 };
 
-const getScreenMessages = (meta: AlphaSiftScreenResponse | null) => {
+const getScreenMessages = (meta: AlphaSiftScreenResponse | null, text: ScreeningLocalText) => {
   if (!meta) {
     return [];
   }
@@ -247,11 +369,11 @@ const getScreenMessages = (meta: AlphaSiftScreenResponse | null) => {
   const seen = new Set<string>();
   [...toMessageList(meta.warnings), ...toMessageList(meta.sourceErrors), ...toMessageList(meta.llmParseErrors)].forEach(
     (value) => {
-      const key = normalizeScreenMessageKey(value);
+      const key = normalizeScreenMessageKey(value, text);
       if (seen.has(key)) {
         return;
       }
-      const message = formatScreenMessage(value);
+      const message = formatScreenMessage(value, text);
       if (!message) {
         return;
       }
@@ -264,31 +386,31 @@ const getScreenMessages = (meta: AlphaSiftScreenResponse | null) => {
 
 const isRunningScreenTask = (status: string | undefined | null) => status === 'pending' || status === 'processing';
 
-const formatScreenTaskFailure = (value: string | null | undefined) => {
-  const text = String(value || '').trim();
-  if (!text) {
-    return '选股任务失败，请稍后重试。';
+const formatScreenTaskFailure = (value: string | null | undefined, text: ScreeningLocalText) => {
+  const detail = String(value || '').trim();
+  if (!detail) {
+    return text.taskFailed;
   }
-  return `选股任务失败：${summarizeAlphaSiftDiagnostic(text)}`;
+  return formatLocalText(text.taskFailedWithDetail, { detail: summarizeAlphaSiftDiagnostic(detail, text) });
 };
 
 const ALPHASIFT_HOTSPOT_NO_CACHE_HINT = 'No cached AlphaSift hotspot snapshot. Click refresh to fetch live hotspots.';
 const ALPHASIFT_HOTSPOT_UNAVAILABLE_CODE = 'eastmoney_hotspot_unavailable';
 
-const formatHotspotEmptyMessage = (result: AlphaSiftHotspotsResponse) => {
+const formatHotspotEmptyMessage = (result: AlphaSiftHotspotsResponse, text: ScreeningLocalText) => {
   const message = String(result.message || '').trim();
   const sourceErrors = result.sourceErrors || [];
   if (message && sourceErrors.includes(ALPHASIFT_HOTSPOT_UNAVAILABLE_CODE)) {
     return message;
   }
   if (message === ALPHASIFT_HOTSPOT_NO_CACHE_HINT) {
-    return '暂无缓存热点题材，展开后可点击刷新拉取实时数据。';
+    return text.hotspotNoCache;
   }
   const sourceError = sourceErrors[0];
   if (sourceError) {
-    return `热点题材暂未返回数据：${summarizeAlphaSiftDiagnostic(sourceError)}`;
+    return formatLocalText(text.hotspotNoDataWithDetail, { detail: summarizeAlphaSiftDiagnostic(sourceError, text) });
   }
-  return '热点题材暂未返回数据';
+  return text.hotspotNoData;
 };
 
 const ScreenAlertMessage: React.FC<{ messages: string[] }> = ({ messages }) => {
@@ -368,15 +490,15 @@ const formatStockChangeText = (value: unknown) => {
   return formatted === '-' ? '行情待取' : `${formatted}%`;
 };
 
-const formatHotspotUpdatedAt = (value: string | null) => {
+const formatHotspotUpdatedAt = (value: string | null, locale: string, text: ScreeningLocalText) => {
   if (!value) {
-    return '待刷新';
+    return text.pendingRefresh;
   }
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) {
     return value;
   }
-  return parsed.toLocaleString('zh-CN', {
+  return parsed.toLocaleString(locale, {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -438,6 +560,8 @@ const MiniSparkline: React.FC<{ score?: number | null; selected?: boolean }> = (
 const StockScreeningPage: React.FC = () => {
   const { language } = useUiLanguage();
   const tx = SCREENING_TEXT[language];
+  const localText = SCREENING_LOCAL_TEXT[language];
+  const uiLocale = UI_LOCALE_BY_LANGUAGE[language];
   const navigate = useNavigate();
   const [restoredTask] = useState<PersistedScreenTask | null>(() => readPersistedScreenTask());
   const [enabled, setEnabled] = useState(false);
@@ -468,18 +592,18 @@ const StockScreeningPage: React.FC = () => {
   const [strategyLoadError, setStrategyLoadError] = useState('');
   const [activeTaskId, setActiveTaskId] = useState<string | null>(restoredTask?.taskId ?? null);
   const [taskProgress, setTaskProgress] = useState(restoredTask?.taskId ? 10 : 0);
-  const [taskMessage, setTaskMessage] = useState(restoredTask?.taskId ? '正在恢复选股任务状态...' : '');
+  const [taskMessage, setTaskMessage] = useState(restoredTask?.taskId ? localText.restoreTask : '');
 
   const selectedStrategy = useMemo(() => strategies.find((item) => item.id === strategy), [strategies, strategy]);
-  const selectedStrategyTitle = selectedStrategy?.name || selectedStrategy?.title || '自定义策略';
-  const selectedStrategyTag = selectedStrategy?.category || selectedStrategy?.tag || selectedStrategy?.tags?.[0] || '自定义';
-  const displayedStrategy = selectedStrategy ? selectedStrategyTitle : `自定义策略 (${strategy})`;
-  const screenMessages = useMemo(() => getScreenMessages(screenMeta), [screenMeta]);
+  const selectedStrategyTitle = selectedStrategy?.name || selectedStrategy?.title || localText.defaultStrategy;
+  const selectedStrategyTag = selectedStrategy?.category || selectedStrategy?.tag || selectedStrategy?.tags?.[0] || localText.customTag;
+  const displayedStrategy = selectedStrategy ? selectedStrategyTitle : `${localText.defaultStrategy} (${strategy})`;
+  const screenMessages = useMemo(() => getScreenMessages(screenMeta, localText), [screenMeta, localText]);
   const llmDegraded = screenMeta?.llmRanked === false;
   const alertMessages = llmDegraded
     ? screenMessages.length > 0
       ? screenMessages
-      : ['LLM 重排未完成或未返回判断，当前候选来自 AlphaSift 本地因子评分。']
+      : [localText.llmLocalFallback]
     : screenMessages;
   const isScreeningEnabled = enabled && available;
   const statusText = isScreeningEnabled ? tx.screeningEnabled : tx.screeningDisabled;
@@ -530,13 +654,13 @@ const StockScreeningPage: React.FC = () => {
         return;
       }
       setHotspotDetail(null);
-      setHotspotDetailError(toApiErrorMessage(err, '热点题材详情加载失败，请稍后重试。'));
+      setHotspotDetailError(toApiErrorMessage(err, localText.hotspotDetailLoadFailed));
     } finally {
       if (isCurrentRequest()) {
         setLoadingHotspotDetail(false);
       }
     }
-  }, []);
+  }, [localText.hotspotDetailLoadFailed]);
 
   const loadStrategies = useCallback(async () => {
     setLoadingStrategies(true);
@@ -552,11 +676,11 @@ const StockScreeningPage: React.FC = () => {
       }
     } catch (err) {
       setStrategies([]);
-      setStrategyLoadError(err instanceof Error ? err.message : 'AlphaSift 策略列表加载失败');
+      setStrategyLoadError(err instanceof Error ? err.message : localText.strategyLoadFailed);
     } finally {
       setLoadingStrategies(false);
     }
-  }, []);
+  }, [localText.strategyLoadFailed]);
 
   const loadHotspots = useCallback(async (refresh = false) => {
     setLoadingHotspots(true);
@@ -586,14 +710,14 @@ const StockScreeningPage: React.FC = () => {
       }
       setHotspotDetailError('');
       if (nextHotspots.length === 0) {
-        setHotspotError(formatHotspotEmptyMessage(result));
+        setHotspotError(formatHotspotEmptyMessage(result, localText));
       }
     } catch (err) {
-      setHotspotError(toApiErrorMessage(err, '热点题材加载失败，请稍后重试。'));
+      setHotspotError(toApiErrorMessage(err, localText.hotspotLoadFailed));
     } finally {
       setLoadingHotspots(false);
     }
-  }, [loadHotspotDetail]);
+  }, [loadHotspotDetail, localText]);
 
   const handleHotspotSelect = useCallback((topic: string) => {
     selectedHotspotTopicRef.current = topic;
@@ -699,7 +823,7 @@ const StockScreeningPage: React.FC = () => {
           applyScreenResult(task.result);
           setError('');
         } else {
-          setError('选股任务已完成，但服务端未返回候选结果。');
+          setError(localText.taskCompletedWithoutResult);
           setCandidates([]);
           setScreenMeta(null);
         }
@@ -711,7 +835,7 @@ const StockScreeningPage: React.FC = () => {
         setCandidates([]);
         setScreenMeta(null);
         setExpandedCode(null);
-        setError(formatScreenTaskFailure(task.error || task.message));
+        setError(formatScreenTaskFailure(task.error || task.message, localText));
         finishTask();
         return;
       }
@@ -722,7 +846,7 @@ const StockScreeningPage: React.FC = () => {
         return;
       }
 
-      setError(`选股任务返回未知状态：${task.status || 'unknown'}`);
+      setError(formatLocalText(localText.unknownTaskStatus, { status: task.status || 'unknown' }));
       finishTask();
     }
 
@@ -738,7 +862,7 @@ const StockScreeningPage: React.FC = () => {
           return;
         }
         const parsedError = getParsedApiError(err);
-        setError(formatParsedApiError(parsedError) || '暂时无法获取选股任务状态，稍后将自动重试。');
+        setError(formatParsedApiError(parsedError) || localText.taskStatusFetchFailed);
         if (isUnrecoverableScreenTaskError(parsedError)) {
           setCandidates([]);
           setScreenMeta(null);
@@ -758,7 +882,7 @@ const StockScreeningPage: React.FC = () => {
         window.clearTimeout(timer);
       }
     };
-  }, [activeTaskId, applyScreenResult]);
+  }, [activeTaskId, applyScreenResult, localText]);
 
   const handleEnable = async () => {
     setEnabling(true);
@@ -878,7 +1002,7 @@ const StockScreeningPage: React.FC = () => {
         <InlineAlert
           variant="info"
           title={tx.taskRunning}
-          message={`${taskMessage || '正在执行 AlphaSift 选股'}。任务 ID：${activeTaskId ? activeTaskId.slice(0, 12) : '-'}`}
+          message={`${taskMessage || localText.runningTask}. ${localText.taskId}: ${activeTaskId ? activeTaskId.slice(0, 12) : '-'}`}
         />
       ) : null}
 
@@ -893,7 +1017,7 @@ const StockScreeningPage: React.FC = () => {
             <div>
               <h2 className="text-lg font-bold tracking-normal text-foreground">{tx.hotThemes}</h2>
               <p className="mt-1 text-xs leading-5 text-secondary-text">
-                来自 AlphaSift 最新 hotspot 能力；capital_heat、balanced_alpha 等策略会把 theme_heat 纳入评分。
+                {localText.hotspotIntro}
               </p>
             </div>
           </div>
@@ -923,7 +1047,7 @@ const StockScreeningPage: React.FC = () => {
               </Button>
               ) : null}
             </div>
-            <p className="text-xs text-secondary-text">更新时间：{formatHotspotUpdatedAt(hotspotsUpdatedAt)}</p>
+            <p className="text-xs text-secondary-text">{localText.updatedAt}: {formatHotspotUpdatedAt(hotspotsUpdatedAt, uiLocale, localText)}</p>
           </div>
         </div>
 
@@ -937,14 +1061,14 @@ const StockScreeningPage: React.FC = () => {
           <div className="flex flex-col gap-2 rounded-xl border border-border/70 bg-surface/70 px-4 py-3 text-sm text-secondary-text sm:flex-row sm:items-center sm:justify-between">
             <span>
               {hotspots.length > 0
-                ? `已缓存 ${hotspots.length} 个热点题材，展开后可查看热度、阶段和发酵路线。`
-                : '热点题材默认折叠；展开后可读取缓存，点击刷新才拉取实时数据。'}
+                ? formatLocalText(localText.cachedHotspots, { count: hotspots.length })
+                : localText.collapsedHotspots}
             </span>
-            <span className="text-xs">实时详情会在选择具体题材后加载</span>
+            <span className="text-xs">{localText.liveDetailHint}</span>
           </div>
         ) : hotspots.length === 0 ? (
           <div className="rounded-xl border border-dashed border-border bg-surface/70 px-4 py-6 text-sm text-secondary-text">
-            点击刷新后会拉取热点概念/行业排行、热度分、生命周期阶段和活跃龙头。
+            {localText.emptyHotspotGuide}
           </div>
         ) : (
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
@@ -1244,7 +1368,7 @@ const StockScreeningPage: React.FC = () => {
               </h2>
               <p className="mt-1 text-xs text-secondary-text">
                 {loading
-                  ? `${taskMessage || '正在执行 AlphaSift 选股'} · ${taskProgress}%`
+                  ? `${taskMessage || localText.runningTask} · ${taskProgress}%`
                   : `当前策略：${displayedStrategy} · ${MARKETS.find((item) => item.id === market)?.label}`}
               </p>
             </div>

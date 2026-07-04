@@ -1013,7 +1013,7 @@ const ChatPage: React.FC = () => {
                     <Button
                       variant="action-primary"
                       size="sm"
-                      onClick={() => downloadSession(messages)}
+                      onClick={() => downloadSession(messages, language)}
                       aria-label={tx.exportMarkdown}
                     >
                       <svg
@@ -1044,7 +1044,7 @@ const ChatPage: React.FC = () => {
                         setSending(true);
                         setSendToast(null);
                         try {
-                          const content = formatSessionAsMarkdown(messages);
+                          const content = formatSessionAsMarkdown(messages, language);
                           await agentApi.sendChat(content);
                           showSendFeedback({ type: 'success', message: tx.sentToChannel }, 3000);
                         } catch (err) {

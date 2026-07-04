@@ -67,6 +67,12 @@ const CAPABILITY_STATUS_LABELS: Record<LLMCapabilityCheckResult['status'], strin
   skipped: '跳过',
 };
 
+const CHANNEL_LOCAL_TEXT = {
+  zh: { invalidChannelName: '渠道名称不能为空，且只能包含字母、数字或下划线。' },
+  en: { invalidChannelName: 'Channel name is required and can only contain letters, numbers, or underscores.' },
+  ko: { invalidChannelName: '채널명은 필수이며 문자, 숫자 또는 밑줄만 사용할 수 있습니다.' },
+} as const;
+
 const PROVIDER_LABELS_KO: Record<string, string> = {
   aihubmix: 'AIHubmix(통합 플랫폼)',
   anspire: 'Anspire Open(모델+검색 통합)',
@@ -1376,6 +1382,7 @@ export const LLMChannelEditor: React.FC<LLMChannelEditorProps> = ({
 }) => {
   const { language } = useUiLanguage();
   const tx = LLM_CHANNEL_TEXT[language];
+  const localText = CHANNEL_LOCAL_TEXT[language];
   const initialItemSourceByKey = useMemo(() => {
     const sourceByKey = new Map<string, boolean>();
     for (const item of items) {
@@ -1638,7 +1645,7 @@ export const LLMChannelEditor: React.FC<LLMChannelEditorProps> = ({
   const handleSave = async () => {
     const hasEmptyName = channels.some((channel) => !channel.name.trim());
     if (hasEmptyName) {
-      setSaveMessage({ type: 'local-error', text: '渠道名称不能为空，且只能包含字母、数字或下划线。' });
+      setSaveMessage({ type: 'local-error', text: localText.invalidChannelName });
       return;
     }
 
