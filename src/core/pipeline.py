@@ -420,11 +420,14 @@ class StockAnalysisPipeline:
 
             self._emit_progress(18, f"{code}：正在获取行情与筹码数据")
             # 获取股票名称（先走轻量名称路径，后续若 realtime_quote 有 name 再覆盖）
-            stock_name = self.fetcher_manager.get_stock_name(
-                code,
-                allow_realtime=False,
-                report_language=report_language,
-            )
+            if report_language == "zh":
+                stock_name = self.fetcher_manager.get_stock_name(code, allow_realtime=False)
+            else:
+                stock_name = self.fetcher_manager.get_stock_name(
+                    code,
+                    allow_realtime=False,
+                    report_language=report_language,
+                )
 
             # Step 1: 获取实时行情（量比、换手率等）- 使用统一入口，自动故障切换
             realtime_quote = None
@@ -471,9 +474,10 @@ class StockAnalysisPipeline:
             # switched to Agent mode (which is slower and more expensive).
             use_agent = getattr(self.config, 'agent_mode', False)
             if not use_agent:
-                if self.analysis_skills:
+                analysis_skills = getattr(self, "analysis_skills", None)
+                if analysis_skills:
                     use_agent = True
-                    logger.info(f"{stock_name}({code}) Auto-enabled agent mode due to request skills: {self.analysis_skills}")
+                    logger.info(f"{stock_name}({code}) Auto-enabled agent mode due to request skills: {analysis_skills}")
             if not use_agent:
                 # Auto-enable agent mode when specific skills are configured (e.g., scheduled task with strategy)
                 configured_skills = getattr(self.config, 'agent_skills', [])

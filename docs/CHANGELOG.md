@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修复] 修复离线测试中大盘复盘 JP/KR 标题、历史记录名称、个股栏 raw summary fallback、市场灯快照构建与实时行情降级路径的回归问题。
+- [测试] 隔离系统配置、调度和大盘策略测试中的运行时环境变量，避免本地 `.env` / process env 污染导致 offline suite 顺序相关失败。
 - [chore] 同步 upstream (cb72be7..35e16b0) — cherry-pick 46 个 upstream 커밋을 fork에 반영. 신규 기능(Hermes/Claude Code/OpenCode LLM 백엔드, TickFlow A주 데이터소스, TW 三大法人, 신호 귀인 분석, 개념 섹터, 딩톡 알림, 결정 신호 타임라인/재평가), 버그 수정(hold/watch/buy/sell 수렴, AlphaSift 안정성, Discord 장문 분할, JP/KR 마켓 리뷰), 한국어 i18n은 fork 구현 유지.
 - [修复] 修复任务状态接口重建报告动作字段时把合法情绪分 `0` 当成空值的问题，确保低分报告能按评分口径纠正为卖出建议。
 - [修复] 修复 Agent 流式回复在未收到完成事件就断开时被显示为“（无内容）”的问题，改为提示流式响应中断并保留用户消息，避免误判为空回答。

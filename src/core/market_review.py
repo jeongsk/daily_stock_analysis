@@ -117,6 +117,8 @@ def _get_market_review_text(language: str) -> dict[str, str]:
             "cn_title": "# A股大盘复盘",
             "us_title": "# 美股大盘复盘",
             "hk_title": "# 港股大盘复盘",
+            "jp_title": "# 日股大盘复盘",
+            "kr_title": "# 韩股大盘复盘",
             "separator": "> 接下来是下一市场复盘",
         },
         "en": {
@@ -135,6 +137,8 @@ def _get_market_review_text(language: str) -> dict[str, str]:
             "cn_title": "# A주 시장 리뷰",
             "us_title": "# 미국 시장 리뷰",
             "hk_title": "# 홍콩 시장 리뷰",
+            "jp_title": "# 일본 시장 리뷰",
+            "kr_title": "# 한국 시장 리뷰",
             "separator": "> 다음 시장 리뷰로 이어집니다",
         },
     }
@@ -788,8 +792,16 @@ def _persist_market_review_history(
 
         report_language = resolve_report_language(config)
         summary = _summarize_market_review(review_report, report_language)
-        labels = get_report_labels(report_language)
-        stock_name = labels.get("buy_label", "Market Review")
+        stock_name = (
+            _get_market_review_text(report_language)["push_title"]
+            .replace("🎯", "")
+            .lstrip("#")
+            .strip()
+        )
+        if region in {"hk", "us", "jp", "kr"}:
+            stock_name = _get_market_review_market_heading(report_language, region)
+        elif "," in str(region):
+            stock_name = _get_market_review_text(report_language)["push_title"].lstrip("#").strip()
         operation_advice = get_localized_text("advice_watch", report_language)
         trend_prediction = stock_name
 

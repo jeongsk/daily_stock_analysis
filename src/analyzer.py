@@ -4598,15 +4598,16 @@ class GeminiAnalyzer:
         如果解析失败，尝试智能提取或返回默认结果
         """
         try:
-            report_language = normalize_report_language(
-                getattr(self._get_runtime_config(), "report_language", "zh")
-            )
             try:
                 _json_str, data = self._extract_analysis_json_object(response_text)
                 self._validate_analysis_minimal_contract(data)
             except Exception as exc:
                 logger.warning("无法从响应中提取唯一有效 JSON，标记为解析失败: %s", exc)
                 return self._parse_text_response(response_text, code, name)
+            report_language = normalize_report_language(
+                data.get("report_language"),
+                default="zh",
+            )
 
             # 提取 dashboard 数据
             dashboard = data.get('dashboard', None)

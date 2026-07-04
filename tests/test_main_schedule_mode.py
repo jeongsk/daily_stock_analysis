@@ -57,7 +57,11 @@ class MainScheduleModeTestCase(unittest.TestCase):
         self.env_path.write_text("STOCK_LIST=600519\n", encoding="utf-8")
         self.original_cwd = os.getcwd()
         os.chdir(self.temp_dir.name)
-        self.env_patch = patch.dict(os.environ, {"ENV_FILE": str(self.env_path)}, clear=False)
+        self.env_patch = patch.dict(
+            os.environ,
+            {"ENV_FILE": str(self.env_path), "REPORT_LANGUAGE": "zh"},
+            clear=False,
+        )
         self.env_patch.start()
         Config.reset_instance()
         root_logger = logging.getLogger()

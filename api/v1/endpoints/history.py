@@ -359,8 +359,11 @@ def get_stock_bar(
                         report_language,
                     ),
                     report_type=record.report_type,
-                    sentiment_score=record.sentiment_score,
-                    operation_advice=record.operation_advice,
+                    sentiment_score=sentiment_score,
+                    operation_advice=(
+                        raw_result.get("operation_advice") if isinstance(raw_result, dict) else None
+                    )
+                    or record.operation_advice,
                     action=action_fields["action"],
                     action_label=action_fields["action_label"],
                     analysis_count=analysis_count,

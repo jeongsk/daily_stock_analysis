@@ -1719,6 +1719,17 @@ Concept lagging: {bottom_concepts_text if bottom_concepts_text else "N/A"}"""
             )
             indices_placeholder = indices_text if indices_text else "No index data (API error)"
             news_placeholder = news_text if news_text else "No relevant news"
+            data_boundary_requirement = (
+                "- Respect data boundaries: do not invent or over-interpret market breadth, "
+                "capital flow, turnover, participation, or sector ranking data that was not provided.\n"
+                if data_limits_block
+                else ""
+            )
+            market_summary_hint = (
+                "Summarize index moves, breadth, turnover, and sentiment in 2-3 sentences"
+                if self.profile.has_market_stats
+                else "Summarize index moves, news clues, and the overall risk state in 2-3 sentences"
+            )
         elif review_language == "ko":
             data_no_indices_hint = (
                 "참고: 시장 데이터 수집에 실패했습니다. [시장 뉴스]를 중심으로 정성 분석을 수행하고 구체적인 지수 레벨을 만들지 마세요."

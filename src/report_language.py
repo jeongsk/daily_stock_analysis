@@ -1054,7 +1054,10 @@ def get_localized_stock_name(value: Any, code: Any, language: Optional[str]) -> 
                 not raw_text
                 or raw_text == zh_index_name
                 or (_is_jp_kr_stock_code(code_text) and _looks_like_a_share_status_name(raw_text))
-                or _is_placeholder_stock_name(raw_text, code)
+                or (
+                    _is_jp_kr_stock_code(code_text)
+                    and _is_placeholder_stock_name(raw_text, code)
+                )
             ):
                 return localized_index_name
 

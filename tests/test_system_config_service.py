@@ -23,6 +23,24 @@ from src.core.config_manager import ConfigManager
 from src.llm.backend_registry import GENERATION_ONLY_BACKEND_IDS
 from src.services.system_config_service import ConfigConflictError, ConfigImportError, ConfigValidationError, SystemConfigService
 
+_RUNTIME_CONFIG_ENV_KEYS = (
+    "GENERATION_BACKEND",
+    "GENERATION_FALLBACK_BACKEND",
+    "LITELLM_MODEL",
+    "LITELLM_FALLBACK_MODELS",
+    "LITELLM_CONFIG",
+    "LLM_CHANNELS",
+    "GEMINI_API_KEY",
+    "GEMINI_API_KEYS",
+    "OPENAI_API_KEY",
+    "OPENAI_API_KEYS",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_API_KEYS",
+    "DEEPSEEK_API_KEY",
+    "DEEPSEEK_API_KEYS",
+    "REPORT_LANGUAGE",
+)
+
 
 class SystemConfigServiceTestCase(unittest.TestCase):
     def setUp(self) -> None:
@@ -40,6 +58,9 @@ class SystemConfigServiceTestCase(unittest.TestCase):
             + "\n",
             encoding="utf-8",
         )
+        self._orig_env = {key: os.environ.get(key) for key in _RUNTIME_CONFIG_ENV_KEYS}
+        for key in _RUNTIME_CONFIG_ENV_KEYS:
+            os.environ.pop(key, None)
         os.environ["ENV_FILE"] = str(self.env_path)
         Config.reset_instance()
 
@@ -49,6 +70,11 @@ class SystemConfigServiceTestCase(unittest.TestCase):
     def tearDown(self) -> None:
         Config.reset_instance()
         os.environ.pop("ENV_FILE", None)
+        for key, value in self._orig_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
         self.temp_dir.cleanup()
 
     def _rewrite_env(self, *lines: str) -> None:
@@ -2258,7 +2284,7 @@ class SystemConfigServiceTestCase(unittest.TestCase):
         self.assertEqual(agent_arch_schema["validation"]["enum"], ["single", "multi"])
 
         report_language_schema = items["REPORT_LANGUAGE"]["schema"]
-        self.assertEqual(report_language_schema["validation"]["enum"], ["zh", "en"])
+        self.assertEqual(report_language_schema["validation"]["enum"], ["zh", "en", "ko"])
         self.assertEqual(report_language_schema["options"][1]["value"], "en")
 
         self.assertEqual(items["AGENT_ORCHESTRATOR_TIMEOUT_S"]["schema"]["default_value"], "600")

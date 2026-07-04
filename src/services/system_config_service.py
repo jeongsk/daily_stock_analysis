@@ -4413,7 +4413,12 @@ class SystemConfigService:
                 updated_keys=updated_keys,
             )
         )
-        issues.extend(SystemConfigService._validate_llm_runtime_selection(effective_map=effective_map))
+        issues.extend(
+            SystemConfigService._validate_llm_runtime_selection(
+                effective_map=effective_map,
+                updated_keys=updated_keys,
+            )
+        )
 
         if parse_env_bool(effective_map.get("NOTIFICATION_DAILY_DIGEST_ENABLED"), default=False):
             issues.append(
@@ -4775,9 +4780,14 @@ class SystemConfigService:
         return SystemConfigService._has_legacy_key_for_provider(provider, effective_map)
 
     @staticmethod
-    def _validate_llm_runtime_selection(effective_map: Dict[str, str]) -> List[Dict[str, Any]]:
+    def _validate_llm_runtime_selection(
+        effective_map: Dict[str, str],
+        updated_keys: Optional[Set[str]] = None,
+    ) -> List[Dict[str, Any]]:
         """Validate selected primary/fallback/vision models against configured channels."""
         issues: List[Dict[str, Any]] = []
+        validate_all = updated_keys is None
+        updated_keys = updated_keys or set()
 
         available_models = (
             SystemConfigService._collect_yaml_models_from_map(effective_map)
@@ -4797,7 +4807,11 @@ class SystemConfigService:
                 configured_models=available_model_set,
             )
             primary_model = (effective_map.get("LITELLM_MODEL") or "").strip()
-            if primary_model and not SystemConfigService._has_runtime_source_for_model(primary_model, effective_map):
+            if (
+                (validate_all or "LITELLM_MODEL" in updated_keys)
+                and primary_model
+                and not SystemConfigService._has_runtime_source_for_model(primary_model, effective_map)
+            ):
                 issues.append(
                     {
                         "key": "LITELLM_MODEL",
@@ -4814,6 +4828,8 @@ class SystemConfigService:
                 )
 
             if (
+                (validate_all or "AGENT_LITELLM_MODEL" in updated_keys)
+                and
                 configured_agent_model_raw
                 and configured_agent_model
                 and not SystemConfigService._has_runtime_source_for_model(
@@ -4836,6 +4852,8 @@ class SystemConfigService:
                     }
                 )
             elif (
+                (validate_all or "AGENT_LITELLM_MODEL" in updated_keys)
+                and
                 configured_agent_model_raw
                 and configured_agent_model
                 and SystemConfigService._matches_route_set(configured_agent_model, hermes_route_set)
@@ -4864,7 +4882,7 @@ class SystemConfigService:
                 model for model in fallback_models
                 if not SystemConfigService._has_runtime_source_for_model(model, effective_map)
             ]
-            if invalid_fallbacks:
+            if (validate_all or "LITELLM_FALLBACK_MODELS" in updated_keys) and invalid_fallbacks:
                 issues.append(
                     {
                         "key": "LITELLM_FALLBACK_MODELS",
@@ -4880,7 +4898,11 @@ class SystemConfigService:
                 )
 
             vision_model = (effective_map.get("VISION_MODEL") or "").strip()
-            if vision_model and SystemConfigService._matches_route_set(vision_model, hermes_route_set):
+            if (
+                (validate_all or "VISION_MODEL" in updated_keys)
+                and vision_model
+                and SystemConfigService._matches_route_set(vision_model, hermes_route_set)
+            ):
                 issues.append(
                     {
                         "key": "VISION_MODEL",
@@ -4894,7 +4916,11 @@ class SystemConfigService:
                         "actual": vision_model,
                     }
                 )
-            elif vision_model and not SystemConfigService._has_runtime_source_for_model(vision_model, effective_map):
+            elif (
+                (validate_all or "VISION_MODEL" in updated_keys)
+                and vision_model
+                and not SystemConfigService._has_runtime_source_for_model(vision_model, effective_map)
+            ):
                 issues.append(
                     {
                         "key": "VISION_MODEL",
@@ -4912,7 +4938,10 @@ class SystemConfigService:
             return issues
 
         primary_model = (effective_map.get("LITELLM_MODEL") or "").strip()
-        if SystemConfigService._matches_route_set(primary_model, mixed_hermes_routes):
+        if (
+            (validate_all or "LITELLM_MODEL" in updated_keys)
+            and SystemConfigService._matches_route_set(primary_model, mixed_hermes_routes)
+        ):
             issues.append(
                 {
                     "key": "LITELLM_MODEL",
@@ -4927,6 +4956,8 @@ class SystemConfigService:
                 }
             )
         if (
+            (validate_all or "LITELLM_MODEL" in updated_keys)
+            and
             primary_model
             and not SystemConfigService._matches_exact_route(primary_model, available_model_set)
             and not _uses_direct_env_provider(primary_model)
@@ -4952,6 +4983,8 @@ class SystemConfigService:
             configured_models=available_model_set,
         )
         if (
+            (validate_all or "AGENT_LITELLM_MODEL" in updated_keys)
+            and
             configured_agent_model_raw
             and configured_agent_model
             and not SystemConfigService._matches_exact_route(configured_agent_model, available_model_set)
@@ -4972,6 +5005,8 @@ class SystemConfigService:
                 }
             )
         elif (
+                (validate_all or "AGENT_LITELLM_MODEL" in updated_keys)
+                and
                 configured_agent_model_raw
                 and configured_agent_model
                 and SystemConfigService._matches_route_set(configured_agent_model, hermes_route_set)
@@ -5000,7 +5035,7 @@ class SystemConfigService:
             model for model in fallback_models
             if SystemConfigService._matches_route_set(model, mixed_hermes_routes)
         ]
-        if mixed_fallbacks:
+        if (validate_all or "LITELLM_FALLBACK_MODELS" in updated_keys) and mixed_fallbacks:
             issues.append(
                 {
                     "key": "LITELLM_FALLBACK_MODELS",
@@ -5018,7 +5053,7 @@ class SystemConfigService:
             if not SystemConfigService._matches_exact_route(model, available_model_set)
             and not _uses_direct_env_provider(model)
         ]
-        if invalid_fallbacks:
+        if (validate_all or "LITELLM_FALLBACK_MODELS" in updated_keys) and invalid_fallbacks:
             issues.append(
                 {
                     "key": "LITELLM_FALLBACK_MODELS",
@@ -5034,7 +5069,11 @@ class SystemConfigService:
             )
 
         vision_model = (effective_map.get("VISION_MODEL") or "").strip()
-        if vision_model and SystemConfigService._matches_route_set(vision_model, hermes_route_set):
+        if (
+            (validate_all or "VISION_MODEL" in updated_keys)
+            and vision_model
+            and SystemConfigService._matches_route_set(vision_model, hermes_route_set)
+        ):
             issues.append(
                 {
                     "key": "VISION_MODEL",
@@ -5049,6 +5088,8 @@ class SystemConfigService:
                 }
             )
         elif (
+            (validate_all or "VISION_MODEL" in updated_keys)
+            and
             vision_model
             and not SystemConfigService._matches_exact_route(vision_model, available_model_set)
             and not _uses_direct_env_provider(vision_model)

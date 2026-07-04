@@ -33,6 +33,24 @@ from src.config import Config
 from src.core.config_manager import ConfigManager
 from src.services.system_config_service import SystemConfigService
 
+_RUNTIME_CONFIG_ENV_KEYS = (
+    "GENERATION_BACKEND",
+    "GENERATION_FALLBACK_BACKEND",
+    "LITELLM_MODEL",
+    "LITELLM_FALLBACK_MODELS",
+    "LITELLM_CONFIG",
+    "LLM_CHANNELS",
+    "GEMINI_API_KEY",
+    "GEMINI_API_KEYS",
+    "OPENAI_API_KEY",
+    "OPENAI_API_KEYS",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_API_KEYS",
+    "DEEPSEEK_API_KEY",
+    "DEEPSEEK_API_KEYS",
+    "REPORT_LANGUAGE",
+)
+
 
 class SystemConfigApiTestCase(unittest.TestCase):
     """System config API tests in isolation without loading the full app."""
@@ -59,6 +77,9 @@ class SystemConfigApiTestCase(unittest.TestCase):
             + "\n",
             encoding="utf-8",
         )
+        self._orig_env = {key: os.environ.get(key) for key in _RUNTIME_CONFIG_ENV_KEYS}
+        for key in _RUNTIME_CONFIG_ENV_KEYS:
+            os.environ.pop(key, None)
         self._orig_dsa_desktop_mode = os.environ.get("DSA_DESKTOP_MODE")
         self._orig_database_path = os.environ.get("DATABASE_PATH")
         os.environ["ENV_FILE"] = str(self.env_path)
@@ -74,6 +95,11 @@ class SystemConfigApiTestCase(unittest.TestCase):
         Config.reset_instance()
         self._verify_session_patch.stop()
         os.environ.pop("ENV_FILE", None)
+        for key, value in self._orig_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
         if self._orig_dsa_desktop_mode is None:
             os.environ.pop("DSA_DESKTOP_MODE", None)
         else:
