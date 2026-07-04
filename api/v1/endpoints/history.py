@@ -10,7 +10,7 @@
 """
 
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Depends, Body
 
@@ -78,6 +78,29 @@ def _extract_report_language(*payloads: object) -> str:
             if language:
                 return normalize_report_language(language)
     return normalize_report_language(None)
+
+
+def _extract_guardrail_reason(raw_result: Any) -> Optional[str]:
+    if not isinstance(raw_result, dict):
+        return None
+    for reason in (
+        raw_result.get("guardrail_reason"),
+        raw_result.get("downgrade_reason"),
+        raw_result.get("decision_score_guardrail_reason"),
+    ):
+        if reason is not None:
+            text = str(reason).strip()
+            if text:
+                return text
+
+    metadata = raw_result.get("metadata")
+    if isinstance(metadata, dict):
+        metadata_reason = metadata.get("guardrail_reason") or metadata.get("downgrade_reason")
+        if metadata_reason is not None:
+            text = str(metadata_reason).strip()
+            if text:
+                return text
+    return None
 
 
 @router.get(
@@ -305,14 +328,20 @@ def get_stock_bar(
             raw_result = parse_json_field(getattr(record, "raw_result", None))
             model_used = raw_result.get("model_used") if isinstance(raw_result, dict) else None
             report_language = _extract_report_language(raw_result)
+            sentiment_score = record.sentiment_score
+            if sentiment_score is None and isinstance(raw_result, dict):
+                sentiment_score = raw_result.get("sentiment_score")
             action_fields = build_action_fields(
                 operation_advice=(
                     raw_result.get("operation_advice") if isinstance(raw_result, dict) else None
                 )
-                or record.operation_advice,
+                    or record.operation_advice,
                 explicit_action=raw_result.get("action") if isinstance(raw_result, dict) else None,
                 report_type=record.report_type,
                 report_language=report_language,
+                sentiment_score=sentiment_score,
+                guardrail_reason=_extract_guardrail_reason(raw_result),
+                align_with_score=True,
             )
 
             display_stock_code = service._display_stock_code(record.code)
@@ -330,8 +359,11 @@ def get_stock_bar(
                         report_language,
                     ),
                     report_type=record.report_type,
-                    sentiment_score=record.sentiment_score,
-                    operation_advice=record.operation_advice,
+                    sentiment_score=sentiment_score,
+                    operation_advice=(
+                        raw_result.get("operation_advice") if isinstance(raw_result, dict) else None
+                    )
+                    or record.operation_advice,
                     action=action_fields["action"],
                     action_label=action_fields["action_label"],
                     analysis_count=analysis_count,
@@ -501,6 +533,7 @@ def get_history_detail(
             dividend_metrics=extracted_fundamental.get("dividend_metrics"),
             belong_boards=extracted_boards.get("belong_boards"),
             sector_rankings=extracted_boards.get("sector_rankings"),
+            concept_rankings=extracted_boards.get("concept_rankings"),
         )
         
         return AnalysisReport(

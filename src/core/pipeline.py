@@ -223,6 +223,8 @@ class StockAnalysisPipeline:
         self.notifier = NotificationService(source_message=source_message)
         self._single_stock_notify_lock = threading.Lock()
         self._daily_market_context_service_lock = threading.Lock()
+        self._concept_rankings_cache_lock = threading.Lock()
+        self._concept_rankings_cache: Dict[str, Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]] = {}
         
         # 初始化搜索服务（可选，初始化失败不应阻断主分析流程）
         try:
@@ -418,11 +420,14 @@ class StockAnalysisPipeline:
 
             self._emit_progress(18, f"{code}：正在获取行情与筹码数据")
             # 获取股票名称（先走轻量名称路径，后续若 realtime_quote 有 name 再覆盖）
-            stock_name = self.fetcher_manager.get_stock_name(
-                code,
-                allow_realtime=False,
-                report_language=report_language,
-            )
+            if report_language == "zh":
+                stock_name = self.fetcher_manager.get_stock_name(code, allow_realtime=False)
+            else:
+                stock_name = self.fetcher_manager.get_stock_name(
+                    code,
+                    allow_realtime=False,
+                    report_language=report_language,
+                )
 
             # Step 1: 获取实时行情（量比、换手率等）- 使用统一入口，自动故障切换
             realtime_quote = None
@@ -469,9 +474,10 @@ class StockAnalysisPipeline:
             # switched to Agent mode (which is slower and more expensive).
             use_agent = getattr(self.config, 'agent_mode', False)
             if not use_agent:
-                if self.analysis_skills:
+                analysis_skills = getattr(self, "analysis_skills", None)
+                if analysis_skills:
                     use_agent = True
-                    logger.info(f"{stock_name}({code}) Auto-enabled agent mode due to request skills: {self.analysis_skills}")
+                    logger.info(f"{stock_name}({code}) Auto-enabled agent mode due to request skills: {analysis_skills}")
             if not use_agent:
                 # Auto-enable agent mode when specific skills are configured (e.g., scheduled task with strategy)
                 configured_skills = getattr(self.config, 'agent_skills', [])
@@ -1077,29 +1083,32 @@ class StockAnalysisPipeline:
                 "invalid fundamental context",
             )
 
+        market = enriched_context.get("market")
+        if not isinstance(market, str) or not market.strip():
+            market = get_market_for_stock(normalize_stock_code(code))
+
         existing_boards = enriched_context.get("belong_boards")
-        if isinstance(existing_boards, list):
-            enriched_context["belong_boards"] = list(existing_boards)
+        existing_board_list = list(existing_boards) if isinstance(existing_boards, list) else None
+        if existing_board_list:
+            enriched_context["belong_boards"] = existing_board_list
+            self._attach_concept_rankings_to_fundamental_context(code, enriched_context, market)
             return enriched_context
 
         boards_block = enriched_context.get("boards")
         boards_status = boards_block.get("status") if isinstance(boards_block, dict) else None
         coverage = enriched_context.get("coverage")
         boards_coverage = coverage.get("boards") if isinstance(coverage, dict) else None
-        market = enriched_context.get("market")
-        if not isinstance(market, str) or not market.strip():
-            market = get_market_for_stock(normalize_stock_code(code))
 
         # For HK/US: the offshore adapter already populates belong_boards from
         # yfinance sector/industry. Don't overwrite it (and we have no AkShare
         # 板块 endpoint for those markets anyway). Default to [] when callers
         # pass a minimal context without the key.
         if market != "cn":
-            enriched_context.setdefault("belong_boards", [])
+            enriched_context["belong_boards"] = existing_board_list or []
             return enriched_context
 
         if boards_status == "not_supported" or boards_coverage == "not_supported":
-            enriched_context["belong_boards"] = []
+            enriched_context["belong_boards"] = existing_board_list or []
             return enriched_context
 
         boards: List[Dict[str, Any]] = []
@@ -1110,8 +1119,71 @@ class StockAnalysisPipeline:
         except Exception as e:
             logger.debug("%s attach belong_boards failed (fail-open): %s", code, e)
 
-        enriched_context["belong_boards"] = boards
+        enriched_context["belong_boards"] = boards or existing_board_list or []
+        self._attach_concept_rankings_to_fundamental_context(code, enriched_context, market)
         return enriched_context
+
+    def _attach_concept_rankings_to_fundamental_context(
+        self,
+        code: str,
+        enriched_context: Dict[str, Any],
+        market: str,
+    ) -> None:
+        """Attach concept/theme rankings for A-share related-board signals."""
+        if market != "cn" or isinstance(enriched_context.get("concept_boards"), dict):
+            return
+
+        top_concepts, bottom_concepts = self._get_concept_rankings_for_market(market)
+
+        if top_concepts or bottom_concepts:
+            enriched_context["concept_boards"] = {
+                "status": "ok" if top_concepts and bottom_concepts else "partial",
+                "data": {
+                    "top": top_concepts,
+                    "bottom": bottom_concepts,
+                },
+            }
+
+    def _get_concept_rankings_for_market(
+        self,
+        market: str,
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """Fetch market-wide concept rankings once per pipeline run."""
+        if market != "cn":
+            return [], []
+
+        cache = getattr(self, "_concept_rankings_cache", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._concept_rankings_cache = cache
+
+        lock = getattr(self, "_concept_rankings_cache_lock", None)
+        if lock is None:
+            lock = threading.Lock()
+            self._concept_rankings_cache_lock = lock
+
+        with lock:
+            if market in cache:
+                top_concepts, bottom_concepts = cache[market]
+                return list(top_concepts), list(bottom_concepts)
+
+            top_concepts: List[Dict[str, Any]] = []
+            bottom_concepts: List[Dict[str, Any]] = []
+            try:
+                fetch_rankings = getattr(self.fetcher_manager, "get_concept_rankings", None)
+                if callable(fetch_rankings):
+                    rankings = fetch_rankings(5)
+                    if isinstance(rankings, tuple) and len(rankings) == 2:
+                        raw_top, raw_bottom = rankings
+                        if isinstance(raw_top, list):
+                            top_concepts = list(raw_top)
+                        if isinstance(raw_bottom, list):
+                            bottom_concepts = list(raw_bottom)
+            except Exception as e:
+                logger.debug("attach concept_rankings failed (fail-open): %s", e)
+
+            cache[market] = (top_concepts, bottom_concepts)
+            return list(top_concepts), list(bottom_concepts)
 
     def _ensure_agent_history(self, code: str, min_days: int = 240) -> None:
         """Ensure at least *min_days* of K-line history is in DB for agent tools."""
@@ -1828,10 +1900,13 @@ class StockAnalysisPipeline:
     ) -> AnalysisResult:
         previous_advice = str(previous_operation_advice or "").strip()
         current_advice = str(getattr(result, "operation_advice", None) or "").strip()
+        explicit_action = current_advice if previous_advice != current_advice else None
         return populate_decision_action_fields(
             result,
+            explicit_action=explicit_action,
             report_type=report_type,
             use_existing_action=(previous_advice == current_advice),
+            align_with_score=(previous_advice == current_advice),
         )
 
     @staticmethod
@@ -2317,6 +2392,7 @@ class StockAnalysisPipeline:
                 query_source=getattr(self, "query_source", None) or "system",
                 report_type=report_type,
                 portfolio_context=portfolio_context,
+                profile_source="auto_default",
             )
             if isinstance(signal_result, dict):
                 summary = summarize_decision_signal(signal_result.get("item"))
@@ -2819,6 +2895,15 @@ class StockAnalysisPipeline:
         # === 批量预取实时行情（优化：避免每只股票都触发全量拉取）===
         # 只有股票数量 >= 5 时才进行预取，少量股票直接逐个查询更高效
         if len(stock_codes) >= 5:
+            daily_prefetch_count = self.fetcher_manager.prefetch_daily_klines(stock_codes, days=30)
+            if daily_prefetch_count > 0:
+                logger.info(
+                    "[prefetch] component=daily_kline_prefetch action=complete "
+                    "provider=TickFlowFetcher cached=%d stock_count=%d",
+                    daily_prefetch_count,
+                    len(stock_codes),
+                )
+
             prefetch_count = self.fetcher_manager.prefetch_realtime_quotes(stock_codes)
             if prefetch_count > 0:
                 logger.info(f"已启用批量预取架构：一次拉取全市场数据，{len(stock_codes)} 只股票共享缓存")

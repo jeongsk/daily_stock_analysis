@@ -32,8 +32,33 @@ type BoardSignal = {
   changePct?: number;
 };
 
+type BoardSignalMaps = {
+  sectors: Map<string, BoardSignal>;
+  concepts: Map<string, BoardSignal>;
+};
+
+type PreparedBoard = {
+  key: string;
+  name: string;
+  signal?: BoardSignal;
+};
+
 const normalizeBoardName = (value?: string): string =>
   (value || '').trim().replace(/\s+/g, ' ');
+
+const normalizeBoardType = (value?: string): 'sector' | 'concept' | null => {
+  const normalized = (value || '').trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  if (['行业', '行业板块', 'industry', 'sector'].includes(normalized)) {
+    return 'sector';
+  }
+  if (['概念', '概念板块', '题材', 'concept', 'theme'].includes(normalized)) {
+    return 'concept';
+  }
+  return null;
+};
 
 const coerceFiniteNumber = (value: unknown): number | undefined => {
   if (typeof value === 'number') {
@@ -50,34 +75,89 @@ const coerceFiniteNumber = (value: unknown): number | undefined => {
   return undefined;
 };
 
-const buildBoardSignalMap = (details?: ReportDetailsType): Map<string, BoardSignal> => {
+const buildRankingSignalMap = (rankings?: ReportDetailsType['sectorRankings']): Map<string, BoardSignal> => {
   const signalMap = new Map<string, BoardSignal>();
-  const topBoards = Array.isArray(details?.sectorRankings?.top) ? details.sectorRankings.top : [];
-  const bottomBoards = Array.isArray(details?.sectorRankings?.bottom) ? details.sectorRankings.bottom : [];
+  const topBoards = Array.isArray(rankings?.top) ? rankings.top : [];
+  const bottomBoards = Array.isArray(rankings?.bottom) ? rankings.bottom : [];
 
   topBoards.forEach((item) => {
     const normalizedName = normalizeBoardName(item?.name);
-    if (!normalizedName) {
+    const changePct = coerceFiniteNumber(item?.changePct);
+    if (!normalizedName || changePct === undefined) {
       return;
     }
     signalMap.set(normalizedName, {
       status: 'leading',
-      changePct: coerceFiniteNumber(item.changePct),
+      changePct,
     });
   });
 
   bottomBoards.forEach((item) => {
     const normalizedName = normalizeBoardName(item?.name);
-    if (!normalizedName) {
+    const changePct = coerceFiniteNumber(item?.changePct);
+    if (!normalizedName || changePct === undefined) {
       return;
     }
     signalMap.set(normalizedName, {
       status: 'lagging',
-      changePct: coerceFiniteNumber(item.changePct),
+      changePct,
     });
   });
 
   return signalMap;
+};
+
+const buildBoardSignalMaps = (details?: ReportDetailsType): BoardSignalMaps => ({
+  sectors: buildRankingSignalMap(details?.sectorRankings),
+  concepts: buildRankingSignalMap(details?.conceptRankings),
+});
+
+const resolveBoardSignal = (
+  board: { name?: string; type?: string },
+  signalMaps: BoardSignalMaps,
+): BoardSignal | undefined => {
+  const boardName = normalizeBoardName(board.name);
+  if (!boardName) {
+    return undefined;
+  }
+  const boardType = normalizeBoardType(board.type);
+  if (boardType === 'sector') {
+    return signalMaps.sectors.get(boardName);
+  }
+  if (boardType === 'concept') {
+    return signalMaps.concepts.get(boardName);
+  }
+  const sectorSignal = signalMaps.sectors.get(boardName);
+  const conceptSignal = signalMaps.concepts.get(boardName);
+  if (sectorSignal && !conceptSignal) {
+    return sectorSignal;
+  }
+  if (conceptSignal && !sectorSignal) {
+    return conceptSignal;
+  }
+  return undefined;
+};
+
+const buildPreparedRelatedBoards = (
+  boards: ReportDetailsType['belongBoards'],
+  signalMaps: BoardSignalMaps,
+): PreparedBoard[] => {
+  if (!Array.isArray(boards)) {
+    return [];
+  }
+
+  return boards.reduce<PreparedBoard[]>((preparedBoards, board, index) => {
+    const boardName = normalizeBoardName(board?.name);
+    if (!boardName) {
+      return preparedBoards;
+    }
+    preparedBoards.push({
+      key: `${boardName}-${board?.code || index}`,
+      name: boardName,
+      signal: resolveBoardSignal(board, signalMaps),
+    });
+    return preparedBoards;
+  }, []);
 };
 
 /**
@@ -99,7 +179,8 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
     : null;
   const relatedBoards = (Array.isArray(details?.belongBoards) ? details.belongBoards : [])
     .filter((board) => normalizeBoardName(board?.name).length > 0);
-  const boardSignals = buildBoardSignalMap(details);
+  const boardSignals = buildBoardSignalMaps(details);
+  const preparedRelatedBoards = buildPreparedRelatedBoards(relatedBoards, boardSignals);
 
   const getPriceChangeStyle = (changePct: number | undefined): React.CSSProperties | undefined => {
     if (changePct === undefined || changePct === null) {
@@ -141,6 +222,33 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
     || formatReportDisplayText(summary.actionLabel, reportLanguage)
     || formatReportDisplayText(summary.operationAdvice, reportLanguage);
   const trendPrediction = formatReportDisplayText(summary.trendPrediction, reportLanguage);
+
+  const renderBoardChip = (board: PreparedBoard) => (
+    <div
+      key={board.key}
+      className="inline-flex shrink-0 items-center gap-2 text-sm"
+    >
+      <span className="home-accent-chip px-2 py-0.5 text-xs font-medium">
+        {board.name}
+      </span>
+      {board.signal && (
+        <Badge
+          variant={getBoardStatusVariant(board.signal.status)}
+          className="home-board-status-badge shadow-none"
+        >
+          {getBoardStatusLabel(board.signal.status)}
+        </Badge>
+      )}
+      {board.signal && board.signal.changePct !== undefined && board.signal.changePct !== null && (
+        <span
+          className="text-xs font-mono"
+          style={getPriceChangeStyle(board.signal.changePct)}
+        >
+          {formatChangePct(board.signal.changePct)}
+        </span>
+      )}
+    </div>
+  );
 
   return (
     <div className="space-y-5">
@@ -237,7 +345,7 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
                     <div className="home-related-board-list flex flex-nowrap items-center gap-2 overflow-x-auto pb-1">
                       {relatedBoards.map((board, index) => {
                         const boardName = normalizeBoardName(board.name);
-                        const signal = boardSignals.get(boardName);
+                        const signal = resolveBoardSignal(board, boardSignals);
                         return (
                           <div
                             key={`${boardName}-${board.code || index}`}
@@ -299,6 +407,21 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
               </div>
             </Card>
           </div>
+
+          {preparedRelatedBoards.length > 0 && (
+            <Card variant="bordered" padding="sm" className="home-panel-card min-w-0 max-w-full text-left">
+              <section aria-label={text.relatedBoards} className="min-w-0 max-w-full">
+                <div className="mb-3 flex min-w-0 items-baseline gap-2">
+                  <span className="label-uppercase">{text.boardLinkage}</span>
+                  <h3 className="mt-0.5 text-base font-semibold text-foreground">{text.relatedBoards}</h3>
+                </div>
+
+                <div className="home-related-board-list flex min-h-6 w-full min-w-0 max-w-full flex-nowrap items-center gap-2 overflow-x-auto overscroll-x-contain touch-pan-x pb-1">
+                  {preparedRelatedBoards.map(renderBoardChip)}
+                </div>
+              </section>
+            </Card>
+          )}
         </div>
 
         {/* 右侧：情绪指标 / 自选操作 */}

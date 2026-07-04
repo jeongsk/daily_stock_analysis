@@ -173,6 +173,38 @@ def _run_market_review_background(
         _release_market_review_lock(lock_token)
 
 
+def _coalesce_text(*values: Any) -> Optional[str]:
+    for value in values:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return None
+
+
+def _extract_guardrail_reason(raw_result: Any) -> Optional[str]:
+    if not isinstance(raw_result, dict):
+        return None
+    for reason in (
+        raw_result.get("guardrail_reason"),
+        raw_result.get("downgrade_reason"),
+        raw_result.get("decision_score_guardrail_reason"),
+    ):
+        if reason is not None:
+            text = str(reason).strip()
+            if text:
+                return text
+    metadata = raw_result.get("metadata")
+    if isinstance(metadata, dict):
+        metadata_reason = metadata.get("guardrail_reason") or metadata.get("downgrade_reason")
+        if metadata_reason is not None:
+            text = str(metadata_reason).strip()
+            if text:
+                return text
+    return None
+
+
 def _invalid_analysis_input_error() -> HTTPException:
     return api_error(400, "validation_error", "请输入有效的股票代码或股票名称")
 
@@ -204,6 +236,11 @@ def _resolve_and_normalize_input(raw_value: str) -> str:
 
     if is_code_like(text):
         return resolve_index_stock_code_for_analysis(text)
+
+    if text.isdigit() and len(text) == 4:
+        resolved_index_code = resolve_index_stock_code_for_analysis(text)
+        if resolved_index_code != canonical_stock_code(text):
+            return resolved_index_code
 
     if _is_obviously_invalid_analysis_input(text):
         raise _invalid_analysis_input_error()
@@ -848,6 +885,16 @@ def _prepare_report_for_task_enrichment(
     return enriched_report
 
 
+def _first_non_empty_report_value(*values: Any) -> Any:
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        return value
+    return None
+
+
 def _ensure_report_action_fields(report_data: Dict[str, Any]) -> Dict[str, Any]:
     enriched_report = dict(report_data)
     meta = dict(enriched_report.get("meta") or {})
@@ -862,6 +909,12 @@ def _ensure_report_action_fields(report_data: Dict[str, Any]) -> Dict[str, Any]:
         explicit_action=raw_result.get("action") or summary.get("action"),
         report_type=meta.get("report_type"),
         report_language=report_language,
+        sentiment_score=_first_non_empty_report_value(
+            summary.get("sentiment_score"),
+            raw_result.get("sentiment_score"),
+        ),
+        guardrail_reason=_extract_guardrail_reason(raw_result),
+        align_with_score=True,
     )
     summary["action"] = action_fields["action"]
     summary["action_label"] = action_fields["action_label"]
@@ -1086,7 +1139,11 @@ def get_analysis_status(task_id: str) -> TaskStatus:
                 context_snapshot=context_snapshot,
                 fallback_fundamental_payload=fallback_fundamental,
             )
-            has_board_details = bool(extracted_boards.get("belong_boards")) or extracted_boards.get("sector_rankings") is not None
+            has_board_details = (
+                bool(extracted_boards.get("belong_boards"))
+                or extracted_boards.get("sector_rankings") is not None
+                or extracted_boards.get("concept_rankings") is not None
+            )
             details = None
             if any(extracted_fundamental.values()) or has_board_details or context_snapshot is not None or analysis_context_pack_overview is not None:
                 details = ReportDetails(
@@ -1098,6 +1155,7 @@ def get_analysis_status(task_id: str) -> TaskStatus:
                     dividend_metrics=extracted_fundamental.get("dividend_metrics"),
                     belong_boards=extracted_boards.get("belong_boards"),
                     sector_rankings=extracted_boards.get("sector_rankings"),
+                    concept_rankings=extracted_boards.get("concept_rankings"),
                 )
 
             raw_dict = raw_result if isinstance(raw_result, dict) else {}
@@ -1106,6 +1164,9 @@ def get_analysis_status(task_id: str) -> TaskStatus:
                 explicit_action=raw_dict.get("action"),
                 report_type=getattr(record, 'report_type', None),
                 report_language=report_language,
+                sentiment_score=record.sentiment_score if record.sentiment_score is not None else raw_dict.get("sentiment_score"),
+                guardrail_reason=_extract_guardrail_reason(raw_dict),
+                align_with_score=True,
             )
 
             # Build report from DB record so completed tasks return real data
@@ -1291,6 +1352,13 @@ def _build_analysis_report(
         explicit_action=raw_result_data.get("action") or details_data.get("action") or summary_data.get("action"),
         report_type=meta.report_type,
         report_language=report_language,
+        sentiment_score=_first_non_empty_report_value(
+            summary_data.get("sentiment_score"),
+            raw_result_data.get("sentiment_score"),
+            details_data.get("sentiment_score"),
+        ),
+        guardrail_reason=_extract_guardrail_reason(raw_result_data),
+        align_with_score=True,
     )
 
     summary = ReportSummary(
@@ -1323,7 +1391,11 @@ def _build_analysis_report(
     analysis_context_pack_overview = extract_analysis_context_pack_overview(context_snapshot)
     api_context_snapshot = sanitize_context_snapshot_for_api(context_snapshot)
     details = None
-    has_board_details = bool(extracted_boards.get("belong_boards")) or extracted_boards.get("sector_rankings") is not None
+    has_board_details = (
+        bool(extracted_boards.get("belong_boards"))
+        or extracted_boards.get("sector_rankings") is not None
+        or extracted_boards.get("concept_rankings") is not None
+    )
     if details_data or any(extracted_fundamental.values()) or has_board_details or context_snapshot is not None or analysis_context_pack_overview is not None:
         details = ReportDetails(
             news_content=details_data.get("news_summary") or details_data.get("news_content"),
@@ -1334,6 +1406,7 @@ def _build_analysis_report(
             dividend_metrics=extracted_fundamental.get("dividend_metrics"),
             belong_boards=extracted_boards.get("belong_boards"),
             sector_rankings=extracted_boards.get("sector_rankings"),
+            concept_rankings=extracted_boards.get("concept_rankings"),
         )
 
     return AnalysisReport(

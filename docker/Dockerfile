@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.7
+
 # ===================================
 # A股自选股智能分析系统 - Docker 镜像
 # ===================================
@@ -8,7 +10,7 @@ FROM node:20-slim AS web-builder
 WORKDIR /app/apps/dsa-web
 
 COPY apps/dsa-web/package.json apps/dsa-web/package-lock.json ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm npm ci
 
 COPY apps/dsa-web/ ./
 RUN npm run build

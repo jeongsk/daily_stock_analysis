@@ -562,8 +562,8 @@ class AnalysisHistoryTestCase(unittest.TestCase):
         self.assertEqual(item["trend_prediction"], "看多")
         self.assertEqual(item["analysis_summary"], "基本面稳健，短期震荡")
         self.assertEqual(item["operation_advice"], "持有")
-        self.assertEqual(item["action"], "hold")
-        self.assertEqual(item["action_label"], "持有")
+        self.assertEqual(item["action"], "buy")
+        self.assertEqual(item["action_label"], "买入")
         self.assertEqual(item["model_used"], "gemini/gemini-2.5-pro")
         self.assertEqual(item["current_price"], 51.5)
         self.assertEqual(item["change_pct"], -4.61)
@@ -737,6 +737,76 @@ class AnalysisHistoryTestCase(unittest.TestCase):
         self.assertEqual(response.items[0].operation_advice, "不建议买入")
         self.assertEqual(response.items[0].action, "avoid")
         self.assertEqual(response.items[0].action_label, "回避")
+
+    def test_stock_bar_item_aligns_score_and_legacy_advice(self) -> None:
+        if get_stock_bar is None:
+            self.skipTest("fastapi is not installed in this test environment")
+
+        result = self._build_result()
+        result.operation_advice = "持有"
+        result.sentiment_score = 78
+
+        saved = self.db.save_analysis_history(
+            result=result,
+            query_id="query_stock_bar_score_align",
+            report_type="detailed",
+            news_content="个股正文",
+            context_snapshot=None,
+            save_snapshot=False,
+        )
+        self.assertGreater(saved, 0)
+
+        response = get_stock_bar(
+            start_date=None,
+            end_date=None,
+            limit=10,
+            db_manager=self.db,
+        )
+
+        self.assertEqual(len(response.items), 1)
+        self.assertEqual(response.items[0].operation_advice, "持有")
+        self.assertEqual(response.items[0].sentiment_score, 78)
+        self.assertEqual(response.items[0].action, "buy")
+        self.assertEqual(response.items[0].action_label, "买入")
+
+    def test_stock_bar_item_falls_back_to_raw_result_summary_fields(self) -> None:
+        if get_stock_bar is None:
+            self.skipTest("fastapi is not installed in this test environment")
+
+        result = self._build_result()
+        result.operation_advice = "Hold"
+        result.report_language = "en"
+
+        saved = self.db.save_analysis_history(
+            result=result,
+            query_id="query_stock_bar_raw_fallback",
+            report_type="detailed",
+            news_content="stock report",
+            context_snapshot=None,
+            save_snapshot=False,
+        )
+        self.assertGreater(saved, 0)
+
+        with self.db.session_scope() as session:
+            row = session.query(AnalysisHistory).filter(
+                AnalysisHistory.query_id == "query_stock_bar_raw_fallback"
+            ).first()
+            self.assertIsNotNone(row)
+            row.sentiment_score = None
+            row.operation_advice = None
+
+        response = get_stock_bar(
+            start_date=None,
+            end_date=None,
+            limit=10,
+            db_manager=self.db,
+        )
+
+        self.assertEqual(len(response.items), 1)
+        self.assertEqual(response.items[0].sentiment_score, 78)
+        self.assertEqual(response.items[0].operation_advice, "Hold")
+        self.assertEqual(response.items[0].action, "buy")
+        self.assertEqual(response.items[0].action_label, "Buy")
 
     def test_history_api_localizes_ko_stock_name_for_list_and_stock_bar(self) -> None:
         if get_history_list is None or get_stock_bar is None:
@@ -1187,6 +1257,12 @@ class AnalysisHistoryTestCase(unittest.TestCase):
                         "bottom": [],
                     }
                 },
+                "concept_boards": {
+                    "data": {
+                        "top": [{"name": "机器人概念", "change_pct": 4.2}],
+                        "bottom": [],
+                    }
+                },
                 "earnings": {
                     "data": {
                         "financial_report": {"report_date": "2025-12-31", "revenue": 1000},
@@ -1208,6 +1284,7 @@ class AnalysisHistoryTestCase(unittest.TestCase):
         self.assertEqual(report.details.dividend_metrics["ttm_dividend_yield_pct"], 2.6)
         self.assertEqual(report.details.belong_boards, [{"name": "白酒", "type": "行业"}])
         self.assertEqual(report.details.sector_rankings["top"][0]["name"], "白酒")
+        self.assertEqual(report.details.concept_rankings["top"][0]["name"], "机器人概念")
 
     def test_history_detail_uses_raw_code_for_legacy_jp_kr_fundamental_snapshot(self) -> None:
         """Legacy bare JP/KR history rows should display suffixes but read snapshots by stored code."""

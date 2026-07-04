@@ -34,10 +34,11 @@ MARKET_REVIEW_HISTORY_CODE = "MARKET"
 MARKET_REVIEW_REPORT_TYPE = "market_review"
 
 
-_REGION_LABEL_ZH = {"cn": "A股", "hk": "港股", "us": "美股"}
-_REGION_LABEL_EN = {"cn": "A-share", "hk": "HK", "us": "US"}
-_REGION_LABEL_KO = {"cn": "A주", "hk": "홍콩", "us": "미국"}
+_REGION_LABEL_ZH = {"cn": "A股", "hk": "港股", "us": "美股", "jp": "日股", "kr": "韩股"}
+_REGION_LABEL_EN = {"cn": "A-share", "hk": "HK", "us": "US", "jp": "Japan", "kr": "Korea"}
+_REGION_LABEL_KO = {"cn": "A주", "hk": "홍콩", "us": "미국", "jp": "일본", "kr": "한국"}
 _VALID_REGIONS = frozenset(_REGION_LABEL_ZH)
+_LEGACY_BOTH_REGIONS = frozenset({"cn", "hk", "us"})
 _UNTRUSTED_MARKET_SUMMARY_SENTINELS = (
     "BEGIN_UNTRUSTED_MARKET_SUMMARY",
     "END_UNTRUSTED_MARKET_SUMMARY",
@@ -119,7 +120,13 @@ class DailyMarketContextService:
         current_query_id: Optional[str] = None,
         require_query_id_match: bool = False,
     ) -> Optional[DailyMarketContext]:
-        normalized_region = _normalize_region(region)
+        normalized_region = _normalize_context_region(region)
+        if normalized_region is None:
+            logger.info(
+                "跳过多市场或不支持区域的大盘上下文复用: region=%s",
+                region,
+            )
+            return None
         context_date = target_date or self._today_fn()
         report_language = resolve_report_language(config)
         cache_key = self._cache_key(
@@ -732,6 +739,13 @@ def _normalize_region(region: str) -> str:
     return normalized if normalized in _VALID_REGIONS else "cn"
 
 
+def _normalize_context_region(region: str) -> Optional[str]:
+    normalized = str(region or "cn").strip().lower()
+    if normalized in _VALID_REGIONS:
+        return normalized
+    return None
+
+
 def _loads_mapping(value: Any) -> Dict[str, Any]:
     if isinstance(value, Mapping):
         return dict(value)
@@ -882,7 +896,7 @@ def _region_matches(value: Any, region: str) -> bool:
         return False
     text = str(value).strip().lower()
     if text == "both":
-        return True
+        return region in _LEGACY_BOTH_REGIONS
     parts = {item.strip() for item in text.split(",") if item.strip()}
     return region in parts
 

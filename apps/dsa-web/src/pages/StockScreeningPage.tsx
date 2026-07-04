@@ -98,6 +98,16 @@ const clearPersistedScreenTask = () => {
 const isUnrecoverableScreenTaskError = (error: ParsedApiError) =>
   error.title === '选股任务不可恢复';
 
+const formatRecoverableScreenTaskPollingError = (error: ParsedApiError) => {
+  if (error.category === 'upstream_timeout') {
+    return '选股任务仍在后台运行，状态轮询暂时超时，将自动重试。';
+  }
+  if (error.category === 'upstream_network' || error.category === 'local_connection_failed') {
+    return '选股任务仍在后台运行，暂时无法连接本地服务获取状态，将自动重试。';
+  }
+  return formatParsedApiError(error) || '暂时无法获取选股任务状态，稍后将自动重试。';
+};
+
 const formatScore = (score: AlphaSiftCandidate['score']) => {
   if (score == null || Number.isNaN(Number(score))) {
     return '-';
@@ -203,6 +213,7 @@ const SCREENING_LOCAL_TEXT = {
     taskCompletedWithoutResult: '选股任务已完成，但服务端未返回候选结果。',
     unknownTaskStatus: '选股任务返回未知状态：{status}',
     taskStatusFetchFailed: '暂时无法获取选股任务状态，稍后将自动重试。',
+    taskUnrecoverable: '选股任务不可恢复，请重新提交。',
   },
   en: {
     noOpenTradingDays: 'No open trading days are available in the trading calendar',
@@ -239,6 +250,7 @@ const SCREENING_LOCAL_TEXT = {
     taskCompletedWithoutResult: 'Screening task completed, but the server returned no candidate results.',
     unknownTaskStatus: 'Screening task returned unknown status: {status}',
     taskStatusFetchFailed: 'Unable to fetch screening task status for now; will retry automatically.',
+    taskUnrecoverable: 'Screening task is unrecoverable, please resubmit.',
   },
   ko: {
     noOpenTradingDays: '거래 달력에 사용 가능한 개장일이 없습니다',
@@ -275,6 +287,7 @@ const SCREENING_LOCAL_TEXT = {
     taskCompletedWithoutResult: '스크리닝 작업은 완료되었지만 서버가 후보 결과를 반환하지 않았습니다.',
     unknownTaskStatus: '스크리닝 작업이 알 수 없는 상태를 반환했습니다: {status}',
     taskStatusFetchFailed: '현재 스크리닝 작업 상태를 가져올 수 없습니다. 잠시 후 자동으로 다시 시도합니다.',
+    taskUnrecoverable: '스크리닝 작업을 복구할 수 없습니다. 다시 제출해 주세요.',
   },
 } as const;
 
@@ -864,11 +877,13 @@ const StockScreeningPage: React.FC = () => {
         const parsedError = getParsedApiError(err);
         setError(formatParsedApiError(parsedError) || localText.taskStatusFetchFailed);
         if (isUnrecoverableScreenTaskError(parsedError)) {
+          setError(formatParsedApiError(parsedError) || localText.taskUnrecoverable);
           setCandidates([]);
           setScreenMeta(null);
           finishTask();
           return;
         }
+        setError(formatRecoverableScreenTaskPollingError(parsedError));
         setLoading(true);
         timer = window.setTimeout(pollTask, SCREEN_TASK_POLL_INTERVAL_MS);
       }

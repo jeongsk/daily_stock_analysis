@@ -7,6 +7,7 @@ import re
 from typing import Any, Dict, Optional
 
 from src.data.stock_index_loader import get_index_stock_name
+from src.schemas.decision_scale import signal_key_for_score
 
 SUPPORTED_REPORT_LANGUAGES = ("zh", "en", "ko")
 
@@ -332,13 +333,29 @@ _REPORT_LABELS: Dict[str, Dict[str, str]] = {
         "ttm_event_count_label": "近12月分红次数",
         "ttm_dividend_yield_label": "TTM 股息率",
         "latest_ex_dividend_label": "最近除息日",
+        "institutional_flow_heading": "三大法人动向",
+        "institutional_flow_note": "正数=净买超，负数=净卖超；单位为股。",
+        "inst_foreign_label": "外资",
+        "inst_trust_label": "投信",
+        "inst_dealer_label": "自营商",
+        "inst_total_label": "三大法人合计",
         "related_boards_heading": "关联板块",
+        "industry_boards_heading": "行业板块",
+        "concept_boards_heading": "概念板块",
         "board_name_label": "板块",
         "board_type_label": "类型",
         "board_status_label": "板块表现",
         "board_change_pct_label": "板块涨跌幅",
         "leading_board_label": "领涨",
         "lagging_board_label": "领跌",
+        "signal_attribution_heading": "信号归因分析",
+        "attribution_weights_label": "归因权重",
+        "technical_indicators_label": "技术指标",
+        "news_sentiment_label": "新闻舆情",
+        "fundamentals_label": "基本面",
+        "market_conditions_label": "市场环境",
+        "strongest_bullish_signal_label": "最强看多信号",
+        "strongest_bearish_signal_label": "最强看空信号",
     },
     "en": {
         "dashboard_title": "Decision Dashboard",
@@ -440,13 +457,29 @@ _REPORT_LABELS: Dict[str, Dict[str, str]] = {
         "ttm_event_count_label": "TTM Dividend Events",
         "ttm_dividend_yield_label": "TTM Dividend Yield",
         "latest_ex_dividend_label": "Latest Ex-dividend Date",
+        "institutional_flow_heading": "Institutional Flows (3 Majors)",
+        "institutional_flow_note": "Positive = net buy, negative = net sell; unit: shares.",
+        "inst_foreign_label": "Foreign",
+        "inst_trust_label": "Inv. Trust",
+        "inst_dealer_label": "Dealer",
+        "inst_total_label": "Total (3 Majors)",
         "related_boards_heading": "Related Boards",
+        "industry_boards_heading": "Industry Sectors",
+        "concept_boards_heading": "Concept Themes",
         "board_name_label": "Board",
         "board_type_label": "Type",
         "board_status_label": "Status",
         "board_change_pct_label": "Change %",
         "leading_board_label": "Leading",
         "lagging_board_label": "Lagging",
+        "signal_attribution_heading": "Signal Attribution",
+        "attribution_weights_label": "Attribution Weights",
+        "technical_indicators_label": "Technical Indicators",
+        "news_sentiment_label": "News Sentiment",
+        "fundamentals_label": "Fundamentals",
+        "market_conditions_label": "Market Conditions",
+        "strongest_bullish_signal_label": "Strongest Bullish Signal",
+        "strongest_bearish_signal_label": "Strongest Bearish Signal",
     },
     "ko": {
         "dashboard_title": "의사결정 대시보드",
@@ -548,7 +581,15 @@ _REPORT_LABELS: Dict[str, Dict[str, str]] = {
         "ttm_event_count_label": "최근 12개월 배당 횟수",
         "ttm_dividend_yield_label": "TTM 배당수익률",
         "latest_ex_dividend_label": "최근 배당락일",
+        "institutional_flow_heading": "3대 기관 동향",
+        "institutional_flow_note": "양수=순매수, 음수=순매도; 단위: 주.",
+        "inst_foreign_label": "외국인",
+        "inst_trust_label": "투신",
+        "inst_dealer_label": "딜러",
+        "inst_total_label": "3대 기관 합계",
         "related_boards_heading": "관련 테마",
+        "industry_boards_heading": "업종 섹터",
+        "concept_boards_heading": "테마 섹터",
         "board_name_label": "테마",
         "board_type_label": "유형",
         "board_status_label": "테마 동향",
@@ -987,15 +1028,14 @@ def get_signal_level(advice: Any, score: Any, language: Optional[str]) -> tuple[
     except (TypeError, ValueError):
         numeric_score = 50
 
-    if numeric_score >= 80:
+    score_signal = signal_key_for_score(numeric_score)
+    if score_signal == "strong_buy":
         return (_OPERATION_ADVICE_TRANSLATIONS["strong_buy"][normalized_language], "💚", "strong_buy")
-    if numeric_score >= 65:
+    if score_signal == "buy":
         return (_OPERATION_ADVICE_TRANSLATIONS["buy"][normalized_language], "🟢", "buy")
-    if numeric_score >= 55:
-        return (_OPERATION_ADVICE_TRANSLATIONS["hold"][normalized_language], "🟡", "hold")
-    if numeric_score >= 45:
+    if score_signal == "watch":
         return (_OPERATION_ADVICE_TRANSLATIONS["watch"][normalized_language], "⚪", "watch")
-    if numeric_score >= 35:
+    if score_signal == "reduce":
         return (_OPERATION_ADVICE_TRANSLATIONS["reduce"][normalized_language], "🟠", "reduce")
     return (_OPERATION_ADVICE_TRANSLATIONS["sell"][normalized_language], "🔴", "sell")
 
@@ -1014,7 +1054,10 @@ def get_localized_stock_name(value: Any, code: Any, language: Optional[str]) -> 
                 not raw_text
                 or raw_text == zh_index_name
                 or (_is_jp_kr_stock_code(code_text) and _looks_like_a_share_status_name(raw_text))
-                or _is_placeholder_stock_name(raw_text, code)
+                or (
+                    _is_jp_kr_stock_code(code_text)
+                    and _is_placeholder_stock_name(raw_text, code)
+                )
             ):
                 return localized_index_name
 

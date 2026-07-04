@@ -10,7 +10,6 @@ from typing import Any, Dict, Optional
 from sqlalchemy import desc
 
 from src.core.market_review import MARKET_REVIEW_HISTORY_CODE, MARKET_REVIEW_REPORT_TYPE
-from src.config import get_config
 from src.market_analyzer import MarketAnalyzer
 from src.schemas.market_light import MarketLightSnapshot
 from src.storage import AnalysisHistory, DatabaseManager
@@ -18,14 +17,22 @@ from src.storage import AnalysisHistory, DatabaseManager
 
 logger = logging.getLogger(__name__)
 
-MARKET_LIGHT_REGIONS = frozenset({"cn", "hk", "us"})
+MARKET_LIGHT_REGIONS = frozenset({"cn", "hk", "us", "jp", "kr"})
+MARKET_LIGHT_ALERT_REGIONS = frozenset({"cn", "hk", "us"})
 MARKET_LIGHT_HISTORY_BATCH_SIZE = 100
 
 
 def normalize_market_region(region: str) -> str:
     value = str(region or "").strip().lower()
     if value not in MARKET_LIGHT_REGIONS:
-        raise ValueError(f"market target must be one of cn, hk, us: {region}")
+        raise ValueError(f"market target must be one of cn, hk, us, jp, kr: {region}")
+    return value
+
+
+def normalize_market_alert_region(region: str) -> str:
+    value = str(region or "").strip().lower()
+    if value not in MARKET_LIGHT_ALERT_REGIONS:
+        raise ValueError(f"market alert target must be one of cn, hk, us: {region}")
     return value
 
 
@@ -33,7 +40,7 @@ def build_current_snapshot(region: str) -> Dict[str, Any]:
     """Build the current structured Market Light snapshot without LLM review."""
 
     normalized_region = normalize_market_region(region)
-    analyzer = MarketAnalyzer(region=normalized_region, config=get_config())
+    analyzer = MarketAnalyzer(region=normalized_region)
     overview = analyzer.get_market_overview()
     return analyzer.build_market_light_snapshot(overview)
 
