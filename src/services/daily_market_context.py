@@ -17,7 +17,11 @@ from src.core.market_review_lock import (
     release_market_review_lock,
     try_acquire_market_review_lock,
 )
-from src.report_language import normalize_report_language
+from src.report_language import (
+    detect_report_script_mismatch,
+    normalize_report_language,
+    resolve_report_language,
+)
 from src.services.run_diagnostics import (
     activate_run_diagnostic_context,
     reset_run_diagnostic_context,
@@ -117,7 +121,7 @@ class DailyMarketContextService:
     ) -> Optional[DailyMarketContext]:
         normalized_region = _normalize_region(region)
         context_date = target_date or self._today_fn()
-        report_language = normalize_report_language(getattr(config, "report_language", "zh"))
+        report_language = resolve_report_language(config)
         cache_key = self._cache_key(
             context_date=context_date,
             region=normalized_region,
@@ -393,7 +397,7 @@ class DailyMarketContextService:
         owns_lock = lock_token is None
         if lock_token is None:
             lock_token = try_acquire_market_review_lock(config)
-        report_language = normalize_report_language(getattr(config, "report_language", "zh"))
+        report_language = resolve_report_language(config)
         cache_key = self._cache_key(
             context_date=target_date,
             region=region,
@@ -854,9 +858,19 @@ def _record_matches_target_date(
 
 def _record_report_language_matches(record: Any, report_language: str) -> bool:
     snapshot = _loads_mapping(getattr(record, "context_snapshot", None))
-    return normalize_report_language(snapshot.get("report_language")) == normalize_report_language(
-        report_language,
-    )
+    tag_matches = normalize_report_language(
+        snapshot.get("report_language"),
+    ) == normalize_report_language(report_language)
+    if not tag_matches:
+        return False
+    if report_language == "en":
+        return True
+    body = str(getattr(record, "news_content", None) or "")
+    if len(body.strip()) < 20:
+        return True
+    if detect_report_script_mismatch(report_language, body):
+        return False
+    return True
 
 
 def _history_lookup_days(*, target_date: date, today: date) -> int:

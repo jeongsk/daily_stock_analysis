@@ -3,8 +3,11 @@
 
 import unittest
 import unittest.mock
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from src.report_language import (
+    detect_report_script_mismatch,
     get_bias_status_emoji,
     get_localized_stock_name,
     get_sentiment_label,
@@ -14,6 +17,7 @@ from src.report_language import (
     localize_confidence_level,
     localize_operation_advice,
     localize_trend_prediction,
+    resolve_report_language,
 )
 
 
@@ -132,7 +136,6 @@ class ReportLanguageTestCase(unittest.TestCase):
         self.assertEqual(localize_confidence_level("medium", "ko"), "보통")
 
     def test_canonical_maps_recognize_korean_source(self) -> None:
-        # 역방향 인식: LLM이 한국어로 출력해도 decision 분류/신호가 정상 동작해야 함
         self.assertEqual(infer_decision_type_from_advice("매수"), "buy")
         self.assertEqual(infer_decision_type_from_advice("매도"), "sell")
         self.assertEqual(infer_decision_type_from_advice("보유"), "hold")
@@ -140,7 +143,6 @@ class ReportLanguageTestCase(unittest.TestCase):
         signal_text, _emoji, signal_tag = get_signal_level("매수", 60, "ko")
         self.assertEqual(signal_tag, "buy")
         self.assertEqual(signal_text, "매수")
-        # 한국어 입력 -> 영어 출력 역방향 변환
         self.assertEqual(localize_operation_advice("매수", "en"), "Buy")
         self.assertEqual(localize_trend_prediction("횡보", "en"), "Sideways")
         self.assertEqual(localize_confidence_level("높음", "en"), "High")
@@ -150,6 +152,79 @@ class ReportLanguageTestCase(unittest.TestCase):
         self.assertEqual(get_sentiment_label(60, "ko"), "낙관")
         self.assertEqual(get_sentiment_label(40, "ko"), "중립")
         self.assertEqual(get_sentiment_label(20, "ko"), "비관")
+
+    # ------------------------------------------------------------------
+    # resolve_report_language
+    # ------------------------------------------------------------------
+
+    @patch("src.config.get_config")
+    def test_resolve_report_language_uses_config_attribute(self, mock_get_config):
+        config = SimpleNamespace(report_language="ko")
+        result = resolve_report_language(config)
+        self.assertEqual(result, "ko")
+        mock_get_config.assert_not_called()
+
+    @patch("src.config.get_config")
+    def test_resolve_report_language_falls_back_to_global_config(self, mock_get_config):
+        mock_get_config.return_value = SimpleNamespace(report_language="ko")
+        result = resolve_report_language(None)
+        self.assertEqual(result, "ko")
+        mock_get_config.assert_called_once()
+
+    @patch("src.config.get_config")
+    def test_resolve_report_language_falls_back_to_global_when_missing(self, mock_get_config):
+        mock_get_config.return_value = SimpleNamespace(report_language="en")
+        result = resolve_report_language(SimpleNamespace(other="value"))
+        self.assertEqual(result, "en")
+        mock_get_config.assert_called_once()
+
+    @patch("src.config.get_config")
+    def test_resolve_report_language_uses_default_when_both_unset(self, mock_get_config):
+        mock_get_config.return_value = SimpleNamespace(report_language=None)
+        result = resolve_report_language(None)
+        self.assertEqual(result, "zh")
+
+    @patch("src.config.get_config")
+    def test_resolve_report_language_invalid_config_attr_falls_back(self, mock_get_config):
+        mock_get_config.return_value = SimpleNamespace(report_language="en")
+        result = resolve_report_language(SimpleNamespace(report_language="invalid_lang"))
+        self.assertEqual(result, "en")
+        mock_get_config.assert_called_once()
+
+    # ------------------------------------------------------------------
+    # detect_report_script_mismatch
+    # ------------------------------------------------------------------
+
+    def test_detect_script_mismatch_ko_with_hangul_passes(self):
+        text = "오늘 시장은 반등했습니다. 거래대금이 증가했습니다."
+        self.assertFalse(detect_report_script_mismatch("ko", text))
+
+    def test_detect_script_mismatch_ko_with_chinese_fails(self):
+        text = "今日市场反弹，成交额放大，市场情绪回暖。"
+        self.assertTrue(detect_report_script_mismatch("ko", text))
+
+    def test_detect_script_mismatch_zh_with_chinese_passes(self):
+        text = "今日市场反弹，成交额放大，市场情绪回暖。"
+        self.assertFalse(detect_report_script_mismatch("zh", text))
+
+    def test_detect_script_mismatch_zh_with_hangul_fails(self):
+        text = "오늘 시장은 반등했습니다. 거래대금이 증가했습니다."
+        self.assertTrue(detect_report_script_mismatch("zh", text))
+
+    def test_detect_script_mismatch_en_never_fails(self):
+        self.assertFalse(detect_report_script_mismatch("en", "今日市场反弹"))
+        self.assertFalse(detect_report_script_mismatch("en", "오늘 시장은 반등"))
+
+    def test_detect_script_mismatch_short_text_returns_false(self):
+        self.assertFalse(detect_report_script_mismatch("ko", "안녕"))
+
+    def test_detect_script_mismatch_mixed_content_ko_with_some_hanzi(self):
+        text = "오늘 삼성전자와 SK하이닉스가 상승을 주도했습니다."
+        self.assertFalse(detect_report_script_mismatch("ko", text))
+
+    def test_detect_script_mismatch_zh_with_some_hangul_loanwords_fails(self):
+        text = "今日市场由三星电子和SK하이닉스领涨。"
+        self.assertFalse(detect_report_script_mismatch("zh", text))
 
 
 if __name__ == "__main__":

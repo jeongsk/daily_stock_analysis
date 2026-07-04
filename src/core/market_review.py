@@ -19,7 +19,7 @@ import uuid
 from src.config import get_config
 from src.notification import NotificationService
 from src.market_analyzer import MarketAnalyzer
-from src.report_language import normalize_report_language, get_localized_text, get_report_labels
+from src.report_language import normalize_report_language, get_localized_text, get_report_labels, resolve_report_language
 from src.search_service import SearchService
 from src.analyzer import AnalysisResult, GeminiAnalyzer
 from src.llm.generation_backend import GenerationError
@@ -183,7 +183,7 @@ def run_market_review(
     """
     runtime_config = config or get_config()
     history_query_id = query_id or f"market_review_{uuid.uuid4().hex}"
-    review_text = _get_market_review_text(getattr(runtime_config, "report_language", "zh"))
+    review_text = _get_market_review_text(resolve_report_language(runtime_config))
     raw_region = (
         override_region
         if override_region is not None
@@ -271,7 +271,7 @@ def run_market_review(
                 review_report=review_report,
                 payloads=market_review_payloads,
                 region=persist_region,
-                language=getattr(runtime_config, "report_language", "zh"),
+                language=resolve_report_language(runtime_config),
                 root_title=review_text["root_title"],
             )
             markdown_report = _render_market_review_payload_markdown(
@@ -537,7 +537,7 @@ def _persist_market_review_history(
     try:
         from src.storage import DatabaseManager
 
-        report_language = normalize_report_language(getattr(config, "report_language", "zh"))
+        report_language = resolve_report_language(config)
         summary = _summarize_market_review(review_report, report_language)
         labels = get_report_labels(report_language)
         stock_name = labels.get("buy_label", "Market Review")

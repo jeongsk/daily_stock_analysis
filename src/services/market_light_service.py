@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional
 from sqlalchemy import desc
 
 from src.core.market_review import MARKET_REVIEW_HISTORY_CODE, MARKET_REVIEW_REPORT_TYPE
+from src.config import get_config
 from src.market_analyzer import MarketAnalyzer
 from src.schemas.market_light import MarketLightSnapshot
 from src.storage import AnalysisHistory, DatabaseManager
@@ -32,7 +33,7 @@ def build_current_snapshot(region: str) -> Dict[str, Any]:
     """Build the current structured Market Light snapshot without LLM review."""
 
     normalized_region = normalize_market_region(region)
-    analyzer = MarketAnalyzer(region=normalized_region)
+    analyzer = MarketAnalyzer(region=normalized_region, config=get_config())
     overview = analyzer.get_market_overview()
     return analyzer.build_market_light_snapshot(overview)
 

@@ -21,7 +21,11 @@ from typing import Optional, Dict, Any, List
 import pandas as pd
 
 from src.config import get_config
-from src.report_language import normalize_report_language
+from src.report_language import (
+    detect_report_script_mismatch,
+    normalize_report_language,
+    resolve_report_language,
+)
 from src.search_service import SearchService
 from src.core.market_profile import get_profile, MarketProfile
 from src.core.market_strategy import get_market_strategy_blueprint
@@ -159,14 +163,10 @@ class MarketAnalyzer:
         return f"component=market_review region={self.region}"
 
     def _get_review_language(self) -> str:
-        return normalize_report_language(
-            getattr(getattr(self, "config", None), "report_language", "zh")
-        )
+        return resolve_report_language(self.config)
 
     def _get_template_review_language(self) -> str:
-        return normalize_report_language(
-            getattr(getattr(self, "config", None), "report_language", "zh")
-        )
+        return resolve_report_language(self.config)
 
     def _get_market_scope_name(self, review_language: str | None = None) -> str:
         review_language = review_language or self._get_review_language()
@@ -640,6 +640,8 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
             )
             return self._generate_template_review(overview, news)
 
+        review_language = self._get_review_language()
+
         # 构建 Prompt
         prompt = self._build_review_prompt(overview, news)
 
@@ -676,6 +678,38 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
         )
 
         if review:
+            if detect_report_script_mismatch(review_language, review):
+                logger.warning(
+                    "[大盘] %s action=generate_review status=script_mismatch "
+                    "requested=%s retry=1",
+                    self._log_context(),
+                    review_language,
+                )
+                retry_prompt = (
+                    f"[IMPORTANT] The entire report MUST be written in "
+                    f"{'Korean' if review_language == 'ko' else 'Chinese'}.\n\n"
+                    f"{prompt}"
+                )
+                try:
+                    review = self.analyzer.generate_text(
+                        retry_prompt, max_tokens=8192, temperature=0.7
+                    )
+                    if review and detect_report_script_mismatch(review_language, review):
+                        logger.warning(
+                            "[大盘] %s action=generate_review status=script_mismatch "
+                            "requested=%s retry=2 abandoning",
+                            self._log_context(),
+                            review_language,
+                        )
+                        return ""
+                except Exception:
+                    logger.warning(
+                        "[大盘] %s action=generate_review status=retry_failed "
+                        "requested=%s",
+                        self._log_context(),
+                        review_language,
+                    )
+                    return ""
             logger.info(
                 "[大盘] %s action=generate_review status=success length=%d",
                 self._log_context(),

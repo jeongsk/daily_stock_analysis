@@ -612,6 +612,54 @@ def normalize_report_language(value: Optional[str], default: str = "zh") -> str:
     return default
 
 
+def resolve_report_language(config: Any = None, default: str = "zh") -> str:
+    """Resolve the effective report language from a config object.
+
+    Checks ``config.report_language`` first.  Falls back to the global
+    ``get_config()`` when the attribute is missing, ``None``, or invalid.
+    Falls back to ``default`` (``"zh"``) when neither source provides a
+    supported value.
+
+    This is the preferred helper for market-review-critical code paths
+    where a missing or stale config should not silently default to ``zh``.
+    """
+    lang = getattr(config, "report_language", None) if config is not None else None
+    if lang is not None and is_supported_report_language_value(lang):
+        return normalize_report_language(lang)
+    from src.config import get_config as _get_config
+
+    global_config = _get_config()
+    return normalize_report_language(
+        getattr(global_config, "report_language", None),
+        default=default,
+    )
+
+
+def detect_report_script_mismatch(requested_language: str, text: str, threshold: float = 0.4) -> bool:
+    """Return ``True`` when the text script does not match the requested language.
+
+    Conservative heuristic based on Unicode ranges:
+    - ``ko`` expects Hangul syllables (U+AC00–U+D7A3) ≥ ``threshold``
+    - ``zh`` expects CJK Unified Ideographs (U+4E00–U+9FFF) ≥ ``threshold``
+    - ``en`` never triggers a mismatch
+
+    Uses thresholds to avoid false positives on reports that legitimately
+    quote Chinese stock/sector names in a Korean report or vice versa.
+    """
+    if requested_language == "en":
+        return False
+    non_ws = len(text.strip())
+    if non_ws < 20:
+        return False
+    hangul = sum(1 for c in text if 0xAC00 <= ord(c) <= 0xD7A3)
+    hanzi = sum(1 for c in text if 0x4E00 <= ord(c) <= 0x9FFF)
+    if requested_language == "ko":
+        return hangul / non_ws < threshold and hanzi / non_ws > threshold
+    if requested_language == "zh":
+        return hanzi / non_ws < threshold and hangul / non_ws > threshold
+    return False
+
+
 def is_supported_report_language_value(value: Optional[str]) -> bool:
     """Return whether the raw value is a supported language code or alias."""
     candidate = (value or "").strip().lower().replace(" ", "_")

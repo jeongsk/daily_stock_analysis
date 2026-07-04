@@ -1990,6 +1990,69 @@ class TestMarketAnalyzerBypassFix:
             ma.region = "cn"
             return ma
 
+    def test_retries_when_script_mismatch_detected(self):
+        """generate_market_review retries once when LLM output script mismatches request."""
+        from src.market_analyzer import MarketOverview, MarketIndex
+
+        first_response = "## 今日大盘复盘\n\n> 市场反弹，成交额放大。"
+        second_response = "## 오늘의 시장 리뷰\n\n> 시장이 반등했습니다."
+        mock = MagicMock(side_effect=[first_response, second_response])
+
+        ma = self._make_market_analyzer_with_mock_generate_text(return_value="ignored")
+        ma.analyzer.generate_text = mock
+        ma.config.report_language = "ko"
+
+        overview = MarketOverview(
+            date="2026-07-03",
+            indices=[
+                MarketIndex(
+                    code="000001", name="上证指数", current=3300.0, change=12.0,
+                    change_pct=0.36, amount=145000000000.0,
+                )
+            ],
+            up_count=3200, down_count=1800, flat_count=100,
+            limit_up_count=85, limit_down_count=12,
+            total_amount=9800,
+            top_sectors=[{"name": "AI", "change_pct": 3.25}],
+            bottom_sectors=[{"name": "煤炭", "change_pct": -1.12}],
+        )
+
+        result = ma.generate_market_review(overview, [])
+
+        assert second_response in result
+        assert mock.call_count == 2
+
+    def test_abandons_after_second_script_mismatch(self):
+        """generate_market_review returns empty after second consecutive script mismatch."""
+        from src.market_analyzer import MarketOverview, MarketIndex
+
+        chinese_body = "## 今日大盘复盘\n\n> 市场反弹，成交额放大。"
+        mock = MagicMock(return_value=chinese_body)
+
+        ma = self._make_market_analyzer_with_mock_generate_text(return_value="ignored")
+        ma.analyzer.generate_text = mock
+        ma.config.report_language = "ko"
+
+        overview = MarketOverview(
+            date="2026-07-03",
+            indices=[
+                MarketIndex(
+                    code="000001", name="上证指数", current=3300.0, change=12.0,
+                    change_pct=0.36, amount=145000000000.0,
+                )
+            ],
+            up_count=3200, down_count=1800, flat_count=100,
+            limit_up_count=85, limit_down_count=12,
+            total_amount=9800,
+            top_sectors=[{"name": "AI", "change_pct": 3.25}],
+            bottom_sectors=[{"name": "煤炭", "change_pct": -1.12}],
+        )
+
+        result = ma.generate_market_review(overview, [])
+
+        assert result == ""
+        assert mock.call_count == 2
+
     def test_no_access_to_private_model_attribute(self):
         """generate_text() must be called; _model must never be accessed."""
         ma = self._make_market_analyzer_with_mock_generate_text("复盘结果")
