@@ -220,20 +220,23 @@ type PortfolioSignalLookupResult = {
   error: string | null;
 };
 
-type PortfolioPageLanguage = 'zh' | 'en';
+type PortfolioPageLanguage = 'zh' | 'en' | 'ko';
 
 const PORTFOLIO_LIMITATION_LABELS: Record<string, Record<PortfolioPageLanguage, string>> = {
   realtime_quote_best_effort: {
     zh: '实时行情为尽力获取',
     en: 'Realtime quotes are best-effort',
+    ko: '실시간 시세는 최선 노력 기반',
   },
   fx_and_cost_basis_partial: {
     zh: '汇率与成本基础为部分口径',
     en: 'FX and cost basis are partial',
+    ko: '환율과 원가 기준은 부분적',
   },
   sector_and_risk_metrics_limited: {
     zh: '行业与风险指标覆盖有限',
     en: 'Sector and risk metrics are limited',
+    ko: '섹터 및 리스크 지표 범위 제한',
   },
 };
 

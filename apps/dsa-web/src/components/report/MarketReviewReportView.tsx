@@ -343,6 +343,10 @@ const MARKET_REVIEW_TEXT: Record<ReportLanguage, {
     last: '최신',
     change: '등락률',
     highLow: '고/저',
+    industryBoards: '업종 섹터',
+    conceptBoards: '테마 섹터',
+    leading: '상승 주도',
+    lagging: '하락 주도',
   },
 };
 
