@@ -631,6 +631,114 @@ class AnalysisApiContractTestCase(unittest.TestCase):
         self.assertEqual(status.result.report["summary"]["action"], "watch")
         self.assertEqual(status.result.report["summary"]["action_label"], "观望")
 
+    def test_get_analysis_status_preserves_zero_sentiment_score_when_aligning_action(self) -> None:
+        if get_analysis_status is None or analysis_endpoint_module is None:
+            self.skipTest("analysis endpoint helpers unavailable in this environment")
+
+        created_at = datetime(2026, 5, 21, 17, 40, 0)
+        queue = MagicMock()
+        queue.get_task.return_value = SimpleNamespace(
+            task_id="task-queue-zero-score",
+            stock_code="600519",
+            stock_name="贵州茅台",
+            status=analysis_endpoint_module.TaskStatusEnum.COMPLETED,
+            progress=100,
+            result={
+                "stock_code": "600519",
+                "stock_name": "贵州茅台",
+                "report": {
+                    "meta": {
+                        "query_id": "task-queue-zero-score",
+                        "stock_code": "600519",
+                        "report_type": "detailed",
+                        "report_language": "zh",
+                    },
+                    "summary": {
+                        "analysis_summary": "趋势显著恶化",
+                        "operation_advice": "持有",
+                        "sentiment_score": 0,
+                    },
+                    "details": {
+                        "raw_result": {
+                            "operation_advice": "持有",
+                            "report_language": "zh",
+                        },
+                    },
+                },
+            },
+            error=None,
+            original_query=None,
+            selection_source=None,
+            analysis_phase="auto",
+            created_at=created_at,
+            completed_at=datetime(2026, 5, 21, 17, 45, 0),
+        )
+
+        with patch("api.v1.endpoints.analysis.get_task_queue", return_value=queue):
+            status = get_analysis_status("task-queue-zero-score")
+
+        self.assertEqual(status.status, "completed")
+        self.assertIsNotNone(status.result)
+        self.assertEqual(status.result.report["summary"]["sentiment_score"], 0)
+        self.assertEqual(status.result.report["summary"]["action"], "sell")
+        self.assertEqual(status.result.report["summary"]["action_label"], "卖出")
+
+    def test_get_analysis_status_preserves_zero_sentiment_score_when_enriching_report(self) -> None:
+        if get_analysis_status is None or analysis_endpoint_module is None:
+            self.skipTest("analysis endpoint helpers unavailable in this environment")
+
+        created_at = datetime(2026, 5, 21, 17, 40, 0)
+        queue = MagicMock()
+        queue.get_task.return_value = SimpleNamespace(
+            task_id="task-queue-zero-score-enriched",
+            stock_code="600519",
+            stock_name="贵州茅台",
+            status=analysis_endpoint_module.TaskStatusEnum.COMPLETED,
+            progress=100,
+            result={
+                "stock_code": "600519",
+                "stock_name": "贵州茅台",
+                "report": {
+                    "meta": {
+                        "query_id": "task-queue-zero-score-enriched",
+                        "stock_code": "600519",
+                        "report_type": "detailed",
+                        "report_language": "zh",
+                    },
+                    "summary": {
+                        "analysis_summary": "趋势显著恶化",
+                        "operation_advice": "持有",
+                        "sentiment_score": 0,
+                    },
+                    "details": {
+                        "raw_result": {
+                            "operation_advice": "持有",
+                            "report_language": "zh",
+                        },
+                    },
+                },
+            },
+            error=None,
+            original_query=None,
+            selection_source=None,
+            analysis_phase="auto",
+            created_at=created_at,
+            completed_at=datetime(2026, 5, 21, 17, 45, 0),
+        )
+
+        with patch("api.v1.endpoints.analysis.get_task_queue", return_value=queue), \
+             patch(
+                 "api.v1.endpoints.analysis._load_sync_fundamental_sources",
+                 return_value=({}, None),
+             ):
+            status = get_analysis_status("task-queue-zero-score-enriched")
+
+        self.assertEqual(status.status, "completed")
+        self.assertIsNotNone(status.result)
+        self.assertEqual(status.result.report["summary"]["sentiment_score"], 0)
+        self.assertEqual(status.result.report["summary"]["action"], "sell")
+        self.assertEqual(status.result.report["summary"]["action_label"], "卖出")
+
     def test_get_analysis_status_preserves_queue_report_created_at_when_enriching(self) -> None:
         if get_analysis_status is None or analysis_endpoint_module is None:
             self.skipTest("analysis endpoint helpers unavailable in this environment")
