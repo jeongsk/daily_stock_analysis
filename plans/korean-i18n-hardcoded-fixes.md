@@ -142,17 +142,16 @@ export const ALERT_TRIGGER_TEXT = {
 **技能预设标签（L34-39）：**
 - `'用缠论分析茅台'` / `'波浪理论看宁德时代'` / `'分析比亚迪趋势'` 等
 
-#### 5. `src/pages/StockScreeningPage.tsx`（~95 处用户可见中文）
-**完全无 i18n。** 这是最大的文件。需要：
-- 在 `featureText.ts` 新增 `SCREENING_TEXT`
-- 添加 `useUiLanguage` import 和 hook
+#### 5. `src/pages/StockScreeningPage.tsx`（~95 处用户可见中文） ✅ 완료
+`SCREENING_TEXT`와 파일 내 `SCREENING_LOCAL_TEXT` 3언어 객체를 사용하여 모든 하드코딩 중국어를 i18n 처리.
+- 헬퍼 함수(`formatRecoverableScreenTaskPollingError`, `formatAmount`, `getCandidateReason`, `getSignal`, `getRouteTimeLabel`, `formatHotspotMetric`, `getHotspotLeadersText`, `getHotspotSampleText`, `formatStockChangeText`, `getHotspotStrength`)에 `text`/`locale` 매개변수 추가
+- `formatAmount`를 `Intl.NumberFormat` compact 모드로 전환하여 언어별 숫자 단위 자동 처리
+- `MARKETS` 라벨을 `localText.marketCN`으로 교체
+- JSX 본문의 모든 하드코딩 중국어 라벨/에러/힌트를 `localText.*` / `tx.*`로 교체
+- 기능적 정규식(`HOTSPOT_ICON_RULES`, `error.title` 매칭)은 i18n 범위 외로 유지
 
-主要字符串类别：
-- 错误/状态消息（~20条）：`'选股任务失败，请稍后重试。'`, `'请求超时'`, `'网络连接中断'` 等
-- JSX 文本节点（~35条）：section 标题（`热点题材`, `选择策略`, `选股结果`），表头（`代码`/`名称`/`行业`/`价格`/`涨跌幅`/`评分`/`风险`/`详情`），label（`摘要`/`操作信号`/`风险标签`/`主要因子`/`成交额`/`催化因素`），空状态（`暂无结果`, `无`, `无因子明细`）
-- 任务状态（~10条）：`'正在提交选股任务...'`, `'选股运行中'`, `'选股完成'`, `'等待运行'` 等
-- LLM/AlphaSift 提示（~10条）：`'AlphaSift 提示'`, `'LLM 已降级'`, `'未返回（LLM 已降级）'` 等
-- JSX title 属性（5条）：`"AlphaSift 未开启"`, `"实验功能与风险提示"` 等
+#### 5b. `src/components/StockAutocomplete/SuggestionsList.tsx`（~11 处 배지 라벨） ✅ 완료
+`featureText.ts`에 `SUGGESTION_BADGE_TEXT` 3언어 객체를 추가하고, 컴포넌트에 `useUiLanguage()` hook 적용. 시장 배지(CN/HK/US/JP/KR/INDEX/ETF/BSE)와 매치 타입 배지(exact/prefix/contains/fuzzy) 라벨을 언어별로 표시.
 
 #### 6. `src/components/settings/LLMChannelEditor.tsx`（~11 处 JSX 属性 + 多处字符串字面量）
 **完全无 i18n。** 需要：

@@ -43,7 +43,7 @@ import { useUiLanguage } from '../contexts/UiLanguageContext';
 import type { UiLanguage } from '../i18n/uiText';
 import { SCREENING_TEXT } from '../locales/featureText';
 
-const MARKETS = [{ id: 'cn', label: 'A 股' }];
+const MARKETS = [{ id: 'cn' }];
 const SCREEN_TASK_STORAGE_KEY = 'dsa.alphasift.activeScreenTask.v1';
 const SCREEN_TASK_POLL_INTERVAL_MS = 2000;
 
@@ -98,14 +98,14 @@ const clearPersistedScreenTask = () => {
 const isUnrecoverableScreenTaskError = (error: ParsedApiError) =>
   error.title === '选股任务不可恢复';
 
-const formatRecoverableScreenTaskPollingError = (error: ParsedApiError) => {
+const formatRecoverableScreenTaskPollingError = (error: ParsedApiError, text: ScreeningLocalText) => {
   if (error.category === 'upstream_timeout') {
-    return '选股任务仍在后台运行，状态轮询暂时超时，将自动重试。';
+    return text.recoverableTimeout;
   }
   if (error.category === 'upstream_network' || error.category === 'local_connection_failed') {
-    return '选股任务仍在后台运行，暂时无法连接本地服务获取状态，将自动重试。';
+    return text.recoverableNetwork;
   }
-  return formatParsedApiError(error) || '暂时无法获取选股任务状态，稍后将自动重试。';
+  return formatParsedApiError(error) || text.recoverableDefault;
 };
 
 const formatScore = (score: AlphaSiftCandidate['score']) => {
@@ -122,18 +122,15 @@ const formatNumber = (value: unknown, digits = 2) => {
   return Number(value).toFixed(digits);
 };
 
-const formatAmount = (value: unknown) => {
+const formatAmount = (value: unknown, locale: string) => {
   if (value == null || value === '' || Number.isNaN(Number(value))) {
     return '-';
   }
-  const amount = Number(value);
-  if (Math.abs(amount) >= 100_000_000) {
-    return `${(amount / 100_000_000).toFixed(2)} 亿`;
-  }
-  if (Math.abs(amount) >= 10_000) {
-    return `${(amount / 10_000).toFixed(2)} 万`;
-  }
-  return amount.toFixed(2);
+  return new Intl.NumberFormat(locale, {
+    notation: 'compact',
+    compactDisplay: 'short',
+    maximumFractionDigits: 2,
+  }).format(Number(value));
 };
 
 const formatPercent = (value: unknown) => {
@@ -143,7 +140,7 @@ const formatPercent = (value: unknown) => {
   return `${(Number(value) * 100).toFixed(0)}%`;
 };
 
-const getCandidateReason = (item: AlphaSiftCandidate) => {
+const getCandidateReason = (item: AlphaSiftCandidate, text: ScreeningLocalText) => {
   if (item.reason) {
     return item.reason;
   }
@@ -152,12 +149,12 @@ const getCandidateReason = (item: AlphaSiftCandidate) => {
   if (typeof summary === 'string') {
     return summary;
   }
-  return 'AlphaSift 返回候选，但没有给出文字摘要。请查看下方因子、风险和原始字段。';
+  return text.candidateReasonFallback;
 };
 
-const getSignal = (item: AlphaSiftCandidate) => {
+const getSignal = (item: AlphaSiftCandidate, text: ScreeningLocalText) => {
   const rawSignal = item.raw.action ?? item.raw.signal ?? item.raw.recommendation;
-  return typeof rawSignal === 'string' && rawSignal.trim() ? rawSignal : '观察';
+  return typeof rawSignal === 'string' && rawSignal.trim() ? rawSignal : text.signalFallback;
 };
 
 const getFactorEntries = (item: AlphaSiftCandidate) =>
@@ -214,6 +211,78 @@ const SCREENING_LOCAL_TEXT = {
     unknownTaskStatus: '选股任务返回未知状态：{status}',
     taskStatusFetchFailed: '暂时无法获取选股任务状态，稍后将自动重试。',
     taskUnrecoverable: '选股任务不可恢复，请重新提交。',
+    observing: '观察中',
+    activeObserving: '活跃股观察中',
+    coverStocks: '覆盖 {count} 股',
+    marketPending: '行情待取',
+    unconfirmed: '待确认',
+    strongLeader: '强势领先',
+    strong: '强势',
+    fairlyStrong: '较强',
+    candidateReasonFallback: 'AlphaSift 返回候选，但没有给出文字摘要。请查看下方因子、风险和原始字段。',
+    signalFallback: '观察',
+    recoverableTimeout: '选股任务仍在后台运行，状态轮询暂时超时，将自动重试。',
+    recoverableNetwork: '选股任务仍在后台运行，暂时无法连接本地服务获取状态，将自动重试。',
+    recoverableDefault: '暂时无法获取选股任务状态，稍后将自动重试。',
+    enableFailed: '开启 AlphaSift 失败',
+    taskSubmitted: 'AlphaSift 选股任务已提交',
+    taskSubmitFailed: '选股任务提交失败，请稍后重试。',
+    enableHint: '点击后写入 ALPHASIFT_ENABLED=true；AlphaSift 已随后端依赖安装，若适配层缺失请先更新依赖或重建后端。',
+    unavailableHint: '适配层当前不可用，请先确认后端已安装依赖并重启服务，必要时执行 pip install -r requirements.txt 或使用设置页/服务端 /install 接口进行修复安装。',
+    experimentalNotice: 'AlphaSift 选股仍处于实验性质，结果仅用于研究和辅助判断，不构成投资建议；市场有风险，交易决策和损益由使用者自行承担。',
+    marketCN: 'A 股',
+    changePctLabel: '涨跌幅',
+    trendLabel: '趋势',
+    persistenceLabel: '持续',
+    leaderLabel: '龙头',
+    loadingRouteHint: '正在读取发酵路线与概念股...',
+    clickRouteHint: '点击题材查看发酵路线与概念股。',
+    canonicalTopicLabel: '标准题材：',
+    qualityLabel: '质量',
+    cacheFallbackLabel: '缓存回退',
+    cacheFallbackWithHours: '缓存回退 {hours}h',
+    conceptStockCountLabel: '概念股 {count}',
+    degradedDetailLabel: '详情数据已降级，展开查看原因',
+    missingFieldsLabel: '缺失字段：',
+    timelineLabel: '发酵时间线',
+    sourceLabel: '来源',
+    conceptStocksLabel: '概念股',
+    conceptStockRole: '概念股',
+    analyzeAriaLabel: '分析 {name}',
+    analyzeLabel: '分析',
+    hotStockScoreLabel: '热度',
+    sourceConfidenceLabel: '置信',
+    fallbackLabel: '回退',
+    strategySourceHint: '策略来自 AlphaSift；DSA 会对候选补充行情、基本面和新闻上下文。',
+    loadingStrategies: '正在读取可用策略...',
+    strategyLoadHint: 'AlphaSift 策略列表暂未载入，可在下方手动输入策略参数。',
+    taskLabel: '任务：',
+    runIdLabel: 'Run ID：',
+    snapshotLabel: '快照',
+    filteredLabel: '过滤后',
+    candidateLabel: '候选',
+    llmLabel: 'LLM：',
+    llmReranked: '已重排',
+    llmNotReranked: '未重排',
+    llmCoverageLabel: '覆盖',
+    dsaEnrichmentLabel: 'DSA增强：',
+    candidateResultHint: 'AlphaSift 返回候选后，DSA 会对前几名补充行情、基本面、新闻和辅助摘要。',
+    candidatesCount: '{count} 条候选',
+    noCandidatesHint: '开启 AlphaSift 后点击"运行选股"生成候选列表。',
+    llmDegradedResultHint: '本次 LLM 重排失败或未返回判断，当前展示的是本地因子评分结果。',
+    noLlmJudgement: '暂无 LLM 判断',
+    notReranked: '未重排',
+    collapseLabel: '收起',
+    expandLabel: '展开查看',
+    dsaEnhancedSummary: 'DSA 增强摘要',
+    llmJudgement: 'LLM 判断',
+    sectorLabel: '板块',
+    themeLabel: '主题',
+    confidenceLabel: '置信度',
+    llmMetadataMissing: 'LLM 元数据未返回',
+    llmWatchItems: 'LLM 关注项',
+    dsaNews: 'DSA 新闻',
+    dsaEnhancementHint: 'DSA 增强提示',
   },
   en: {
     noOpenTradingDays: 'No open trading days are available in the trading calendar',
@@ -251,6 +320,78 @@ const SCREENING_LOCAL_TEXT = {
     unknownTaskStatus: 'Screening task returned unknown status: {status}',
     taskStatusFetchFailed: 'Unable to fetch screening task status for now; will retry automatically.',
     taskUnrecoverable: 'Screening task is unrecoverable, please resubmit.',
+    observing: 'Observing',
+    activeObserving: 'Active stocks observing',
+    coverStocks: 'Covering {count} stocks',
+    marketPending: 'Market data pending',
+    unconfirmed: 'Unconfirmed',
+    strongLeader: 'Strong leader',
+    strong: 'Strong',
+    fairlyStrong: 'Fairly strong',
+    candidateReasonFallback: 'AlphaSift returned candidates but no text summary. See factors, risks, and raw fields below.',
+    signalFallback: 'Observe',
+    recoverableTimeout: 'Screening task is still running in the background; status polling timed out and will retry automatically.',
+    recoverableNetwork: 'Screening task is still running in the background; temporarily unable to connect to local service for status, will retry automatically.',
+    recoverableDefault: 'Unable to fetch screening task status for now; will retry automatically.',
+    enableFailed: 'Failed to enable AlphaSift',
+    taskSubmitted: 'AlphaSift screening task submitted',
+    taskSubmitFailed: 'Screening task submission failed, please retry.',
+    enableHint: 'Click to set ALPHASIFT_ENABLED=true; AlphaSift is installed with backend dependencies. If the adapter layer is missing, update dependencies or rebuild the backend first.',
+    unavailableHint: 'The adapter layer is currently unavailable. Confirm the backend has dependencies installed and restart the service. If needed, run pip install -r requirements.txt or use the settings page / server /install endpoint to repair the installation.',
+    experimentalNotice: 'AlphaSift screening is still experimental. Results are for research and auxiliary judgment only and do not constitute investment advice. Markets carry risk; trading decisions and losses are borne by the user.',
+    marketCN: 'A-shares',
+    changePctLabel: 'Change',
+    trendLabel: 'Trend',
+    persistenceLabel: 'Persistence',
+    leaderLabel: 'Leaders',
+    loadingRouteHint: 'Loading evolution route and concept stocks...',
+    clickRouteHint: 'Click a theme to view its evolution route and concept stocks.',
+    canonicalTopicLabel: 'Canonical theme: ',
+    qualityLabel: 'Quality',
+    cacheFallbackLabel: 'Cache fallback',
+    cacheFallbackWithHours: 'Cache fallback {hours}h',
+    conceptStockCountLabel: 'Concept stocks {count}',
+    degradedDetailLabel: 'Detail data degraded. Expand for details.',
+    missingFieldsLabel: 'Missing fields: ',
+    timelineLabel: 'Evolution timeline',
+    sourceLabel: 'Source',
+    conceptStocksLabel: 'Concept stocks',
+    conceptStockRole: 'Concept stock',
+    analyzeAriaLabel: 'Analyze {name}',
+    analyzeLabel: 'Analyze',
+    hotStockScoreLabel: 'Heat',
+    sourceConfidenceLabel: 'Confidence',
+    fallbackLabel: 'Fallback',
+    strategySourceHint: 'Strategies come from AlphaSift; DSA supplements candidates with market data, fundamentals, and news context.',
+    loadingStrategies: 'Loading available strategies...',
+    strategyLoadHint: 'AlphaSift strategy list not loaded yet. You can manually enter strategy parameters below.',
+    taskLabel: 'Task: ',
+    runIdLabel: 'Run ID: ',
+    snapshotLabel: 'Snapshot',
+    filteredLabel: 'Filtered',
+    candidateLabel: 'Candidates',
+    llmLabel: 'LLM: ',
+    llmReranked: 'Reranked',
+    llmNotReranked: 'Not reranked',
+    llmCoverageLabel: 'Coverage',
+    dsaEnrichmentLabel: 'DSA enrichment: ',
+    candidateResultHint: 'After AlphaSift returns candidates, DSA supplements the top results with market data, fundamentals, news, and auxiliary summaries.',
+    candidatesCount: '{count} candidates',
+    noCandidatesHint: 'Enable AlphaSift and click "Run screening" to generate candidates.',
+    llmDegradedResultHint: 'LLM reranking failed or returned no judgement. Showing local factor scoring results.',
+    noLlmJudgement: 'No LLM judgement',
+    notReranked: 'Not reranked',
+    collapseLabel: 'Collapse',
+    expandLabel: 'Expand',
+    dsaEnhancedSummary: 'DSA enhanced summary',
+    llmJudgement: 'LLM judgement',
+    sectorLabel: 'Sector',
+    themeLabel: 'Theme',
+    confidenceLabel: 'Confidence',
+    llmMetadataMissing: 'LLM metadata not returned',
+    llmWatchItems: 'LLM watch items',
+    dsaNews: 'DSA news',
+    dsaEnhancementHint: 'DSA enhancement hints',
   },
   ko: {
     noOpenTradingDays: '거래 달력에 사용 가능한 개장일이 없습니다',
@@ -288,6 +429,78 @@ const SCREENING_LOCAL_TEXT = {
     unknownTaskStatus: '스크리닝 작업이 알 수 없는 상태를 반환했습니다: {status}',
     taskStatusFetchFailed: '현재 스크리닝 작업 상태를 가져올 수 없습니다. 잠시 후 자동으로 다시 시도합니다.',
     taskUnrecoverable: '스크리닝 작업을 복구할 수 없습니다. 다시 제출해 주세요.',
+    observing: '관찰 중',
+    activeObserving: '활발한 종목 관찰 중',
+    coverStocks: '{count}개 종목 커버',
+    marketPending: '시장 데이터 대기',
+    unconfirmed: '미확인',
+    strongLeader: '강세 선도',
+    strong: '강세',
+    fairlyStrong: '다소 강세',
+    candidateReasonFallback: 'AlphaSift가 후보를 반환했지만 텍스트 요약이 없습니다. 아래 팩터, 리스크 및 원본 필드를 확인하세요.',
+    signalFallback: '관찰',
+    recoverableTimeout: '스크리닝 작업이 백그라운드에서 계속 실행 중입니다. 상태 폴링이 일시적으로 시간 초과되어 자동으로 재시도합니다.',
+    recoverableNetwork: '스크리닝 작업이 백그라운드에서 계속 실행 중입니다. 일시적으로 로컬 서비스에 연결할 수 없어 자동으로 재시도합니다.',
+    recoverableDefault: '현재 스크리닝 작업 상태를 가져올 수 없습니다. 잠시 후 자동으로 재시도합니다.',
+    enableFailed: 'AlphaSift 활성화 실패',
+    taskSubmitted: 'AlphaSift 스크리닝 작업이 제출되었습니다',
+    taskSubmitFailed: '스크리닝 작업 제출 실패, 다시 시도하세요.',
+    enableHint: '클릭하면 ALPHASIFT_ENABLED=true가 설정됩니다. AlphaSift는 백엔드 의존성과 함께 설치됩니다. 어댑터 레이어가 누락된 경우 먼저 의존성을 업데이트하거나 백엔드를 재빌드하세요.',
+    unavailableHint: '어댑터 레이어를 현재 사용할 수 없습니다. 백엔드에 의존성이 설치되었는지 확인하고 서비스를 재시작하세요. 필요한 경우 pip install -r requirements.txt를 실행하거나 설정 페이지 / 서버 /install 엔드포인트를 사용하여 설치를 복구하세요.',
+    experimentalNotice: 'AlphaSift 스크리닝은 여전히 실험 단계입니다. 결과는 연구 및 보조 판단용이며 투자 조언을 구성하지 않습니다. 시장에는 리스크가 수반되며, 거래 결정과 손실은 사용자에게 있습니다.',
+    marketCN: 'A주',
+    changePctLabel: '등락률',
+    trendLabel: '추세',
+    persistenceLabel: '지속',
+    leaderLabel: '주도주',
+    loadingRouteHint: '발효 경로와 컨셉 종목을 불러오는 중...',
+    clickRouteHint: '테마를 클릭하면 발효 경로와 컨셉 종목을 볼 수 있습니다.',
+    canonicalTopicLabel: '표준 테마: ',
+    qualityLabel: '품질',
+    cacheFallbackLabel: '캐시 폴백',
+    cacheFallbackWithHours: '캐시 폴백 {hours}h',
+    conceptStockCountLabel: '컨셉 종목 {count}',
+    degradedDetailLabel: '상세 데이터가 저하되었습니다. 펼치면 원인을 확인할 수 있습니다.',
+    missingFieldsLabel: '누락된 필드: ',
+    timelineLabel: '발효 타임라인',
+    sourceLabel: '출처',
+    conceptStocksLabel: '컨셉 종목',
+    conceptStockRole: '컨셉 종목',
+    analyzeAriaLabel: '{name} 분석',
+    analyzeLabel: '분석',
+    hotStockScoreLabel: '열도',
+    sourceConfidenceLabel: '신뢰도',
+    fallbackLabel: '폴백',
+    strategySourceHint: '전략은 AlphaSift에서 제공됩니다. DSA는 후보에 시장 데이터, 펀더멘털, 뉴스 컨텍스트를 보충합니다.',
+    loadingStrategies: '사용 가능한 전략을 불러오는 중...',
+    strategyLoadHint: 'AlphaSift 전략 목록이 아직 로드되지 않았습니다. 아래에서 전략 매개변수를 수동으로 입력할 수 있습니다.',
+    taskLabel: '작업: ',
+    runIdLabel: 'Run ID: ',
+    snapshotLabel: '스냅샷',
+    filteredLabel: '필터 후',
+    candidateLabel: '후보',
+    llmLabel: 'LLM: ',
+    llmReranked: '재정렬됨',
+    llmNotReranked: '재정렬 안 됨',
+    llmCoverageLabel: '커버리지',
+    dsaEnrichmentLabel: 'DSA 보강: ',
+    candidateResultHint: 'AlphaSift가 후보를 반환한 후 DSA는 상위 결과에 시장 데이터, 펀더멘털, 뉴스 및 보조 요약을 보충합니다.',
+    candidatesCount: '{count}개 후보',
+    noCandidatesHint: 'AlphaSift를 활성화하고 "스크리닝 실행"을 클릭하여 후보를 생성하세요.',
+    llmDegradedResultHint: 'LLM 재정렬이 실패했거나 판단을 반환하지 않았습니다. 로컬 팩터 점수 결과를 표시합니다.',
+    noLlmJudgement: 'LLM 판단 없음',
+    notReranked: '재정렬 안 됨',
+    collapseLabel: '접기',
+    expandLabel: '펼쳐서 보기',
+    dsaEnhancedSummary: 'DSA 보강 요약',
+    llmJudgement: 'LLM 판단',
+    sectorLabel: '섹터',
+    themeLabel: '테마',
+    confidenceLabel: '신뢰도',
+    llmMetadataMissing: 'LLM 메타데이터 미반환',
+    llmWatchItems: 'LLM 관심 항목',
+    dsaNews: 'DSA 뉴스',
+    dsaEnhancementHint: 'DSA 보강 힌트',
   },
 } as const;
 
@@ -449,17 +662,17 @@ const hasLlmInsight = (item: AlphaSiftCandidate) =>
       item.llmCatalysts?.length,
   );
 
-const getRouteTimeLabel = (item: AlphaSiftHotspotDetail['route'][number]) => {
+const getRouteTimeLabel = (item: AlphaSiftHotspotDetail['route'][number], text: ScreeningLocalText, locale: string) => {
   const rawTime = item.publishedAt || item.date || item.time || '';
   if (!rawTime) {
-    return item.source || '待确认';
+    return item.source || text.unconfirmed;
   }
   if (/^\d{4}-\d{2}-\d{2}$/.test(rawTime)) {
     return rawTime;
   }
   const parsed = new Date(rawTime);
   if (!Number.isNaN(parsed.getTime())) {
-    return parsed.toLocaleString('zh-CN', {
+    return parsed.toLocaleString(locale, {
       month: '2-digit',
       day: '2-digit',
       hour: '2-digit',
@@ -478,29 +691,29 @@ const getHotspotRouteItems = (detail: AlphaSiftHotspotDetail) => {
   return detail.timeline || [];
 };
 
-const formatHotspotMetric = (value: unknown, digits = 1) => {
+const formatHotspotMetric = (value: unknown, text: ScreeningLocalText, digits = 1) => {
   const formatted = formatNumber(value, digits);
-  return formatted === '-' ? '观察中' : formatted;
+  return formatted === '-' ? text.observing : formatted;
 };
 
-const getHotspotLeadersText = (item: AlphaSiftHotspot) => {
+const getHotspotLeadersText = (item: AlphaSiftHotspot, text: ScreeningLocalText) => {
   const leaders = (item.leaders || []).map((value) => String(value).trim()).filter(Boolean);
   if (leaders.length > 0) {
     return leaders.slice(0, 2).join('、');
   }
-  return '观察中';
+  return text.observing;
 };
 
-const getHotspotSampleText = (item: AlphaSiftHotspot) => {
+const getHotspotSampleText = (item: AlphaSiftHotspot, text: ScreeningLocalText) => {
   if (item.sampleStockCount == null || Number.isNaN(Number(item.sampleStockCount))) {
-    return '活跃股观察中';
+    return text.activeObserving;
   }
-  return `覆盖 ${item.sampleStockCount} 股`;
+  return formatLocalText(text.coverStocks, { count: item.sampleStockCount });
 };
 
-const formatStockChangeText = (value: unknown) => {
+const formatStockChangeText = (value: unknown, text: ScreeningLocalText) => {
   const formatted = formatNumber(value);
-  return formatted === '-' ? '行情待取' : `${formatted}%`;
+  return formatted === '-' ? text.marketPending : `${formatted}%`;
 };
 
 const formatHotspotUpdatedAt = (value: string | null, locale: string, text: ScreeningLocalText) => {
@@ -522,16 +735,16 @@ const formatHotspotUpdatedAt = (value: string | null, locale: string, text: Scre
   });
 };
 
-const getHotspotStrength = (item: AlphaSiftHotspot, index: number) => {
+const getHotspotStrength = (item: AlphaSiftHotspot, index: number, text: ScreeningLocalText) => {
   const heat = Number(item.heatScore ?? 0);
   const changePct = Number(item.changePct ?? 0);
   if (index === 0 || heat >= 90 || changePct >= 8) {
-    return { label: '强势领先', className: 'bg-red-500/10 text-red-500' };
+    return { label: text.strongLeader, className: 'bg-red-500/10 text-red-500' };
   }
   if (heat >= 80 || changePct >= 5) {
-    return { label: '强势', className: 'bg-blue-500/10 text-blue-500' };
+    return { label: text.strong, className: 'bg-blue-500/10 text-blue-500' };
   }
-  return { label: '较强', className: 'bg-cyan/10 text-cyan' };
+  return { label: text.fairlyStrong, className: 'bg-cyan/10 text-cyan' };
 };
 
 const HOTSPOT_ICON_RULES: Array<{
@@ -883,7 +1096,7 @@ const StockScreeningPage: React.FC = () => {
           finishTask();
           return;
         }
-        setError(formatRecoverableScreenTaskPollingError(parsedError));
+        setError(formatRecoverableScreenTaskPollingError(parsedError, localText));
         setLoading(true);
         timer = window.setTimeout(pollTask, SCREEN_TASK_POLL_INTERVAL_MS);
       }
@@ -916,7 +1129,7 @@ const StockScreeningPage: React.FC = () => {
         setEnabled(false);
         setAvailable(false);
       }
-      setError(err instanceof Error ? err.message : '开启 AlphaSift 失败');
+      setError(err instanceof Error ? err.message : localText.enableFailed);
     } finally {
       setEnabling(false);
     }
@@ -959,11 +1172,11 @@ const StockScreeningPage: React.FC = () => {
       });
       setActiveTaskId(task.taskId);
       setTaskProgress(0);
-      setTaskMessage(task.message || 'AlphaSift 选股任务已提交');
+      setTaskMessage(task.message || localText.taskSubmitted);
     } catch (err) {
       setCandidates([]);
       setLoading(false);
-      setError(toApiErrorMessage(err, '选股任务提交失败，请稍后重试。'));
+      setError(toApiErrorMessage(err, localText.taskSubmitFailed));
     }
   };
 
@@ -990,7 +1203,7 @@ const StockScreeningPage: React.FC = () => {
         <InlineAlert
           variant="info"
           title={tx.alphaSiftDisabled}
-          message="点击后写入 ALPHASIFT_ENABLED=true；AlphaSift 已随后端依赖安装，若适配层缺失请先更新依赖或重建后端。"
+          message={localText.enableHint}
           action={
             <Button size="sm" isLoading={enabling} loadingText={tx.enabling} onClick={() => void handleEnable()}>
               {tx.enableAlphaSift}
@@ -1003,14 +1216,14 @@ const StockScreeningPage: React.FC = () => {
         <InlineAlert
           variant="warning"
           title={tx.alphaSiftUnavailable}
-          message="适配层当前不可用，请先确认后端已安装依赖并重启服务，必要时执行 pip install -r requirements.txt 或使用设置页/服务端 /install 接口进行修复安装。"
+          message={localText.unavailableHint}
         />
       ) : null}
 
       <InlineAlert
         variant="warning"
         title={tx.experimentalWarning}
-        message="AlphaSift 选股仍处于实验性质，结果仅用于研究和辅助判断，不构成投资建议；市场有风险，交易决策和损益由使用者自行承担。"
+        message={localText.experimentalNotice}
       />
 
       {loading ? (
@@ -1089,7 +1302,7 @@ const StockScreeningPage: React.FC = () => {
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
             {hotspots.map((item, index) => {
               const selected = selectedHotspotTopic === item.topic;
-              const strength = getHotspotStrength(item, index);
+              const strength = getHotspotStrength(item, index, localText);
               const iconMeta = getHotspotIcon(item.name || item.topic);
               const Icon = iconMeta.icon;
               return (
@@ -1127,9 +1340,9 @@ const StockScreeningPage: React.FC = () => {
                   </span>
                 </div>
                 <div className="mt-4 grid max-w-[72%] gap-1 text-[11px] text-secondary-text">
-                  <span>涨跌幅 <strong className="font-semibold text-foreground">{formatHotspotMetric(item.changePct)}%</strong></span>
-                  <span>趋势 <strong className="font-semibold text-foreground">{formatHotspotMetric(item.trendScore)}</strong> · 持续 <strong className="font-semibold text-foreground">{formatHotspotMetric(item.persistenceScore)}</strong></span>
-                  <span>{getHotspotSampleText(item)} · 龙头 {getHotspotLeadersText(item)}</span>
+                  <span>{localText.changePctLabel} <strong className="font-semibold text-foreground">{formatHotspotMetric(item.changePct, localText)}%</strong></span>
+                  <span>{localText.trendLabel} <strong className="font-semibold text-foreground">{formatHotspotMetric(item.trendScore, localText)}</strong> · {localText.persistenceLabel} <strong className="font-semibold text-foreground">{formatHotspotMetric(item.persistenceScore, localText)}</strong></span>
+                  <span>{getHotspotSampleText(item, localText)} · {localText.leaderLabel} {getHotspotLeadersText(item, localText)}</span>
                 </div>
                 <div className="absolute bottom-3 right-3 opacity-95 transition-transform group-hover:scale-105">
                   <MiniSparkline score={item.heatScore} selected={selected} />
@@ -1148,26 +1361,26 @@ const StockScreeningPage: React.FC = () => {
                   {hotspotDetail?.name || selectedHotspotTopic}
                 </h3>
                 <p className="mt-1 text-xs leading-5 text-secondary-text">
-                  {loadingHotspotDetail ? '正在读取发酵路线与概念股...' : hotspotDetail?.summary || '点击题材查看发酵路线与概念股。'}
+                  {loadingHotspotDetail ? localText.loadingRouteHint : hotspotDetail?.summary || localText.clickRouteHint}
                 </p>
                 {hotspotDetail?.canonicalTopic && hotspotDetail.canonicalTopic !== selectedHotspotTopic ? (
-                  <p className="mt-1 text-[11px] text-secondary-text">标准题材：{hotspotDetail.canonicalTopic}</p>
+                  <p className="mt-1 text-[11px] text-secondary-text">{localText.canonicalTopicLabel}{hotspotDetail.canonicalTopic}</p>
                 ) : null}
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 {hotspotDetail?.qualityStatus ? (
                   <span className="w-fit rounded-full bg-warning/10 px-3 py-1 text-xs font-semibold text-warning">
-                    质量 {hotspotDetail.qualityStatus}
+                    {localText.qualityLabel} {hotspotDetail.qualityStatus}
                   </span>
                 ) : null}
                 {hotspotDetail?.fallbackUsed || hotspotDetail?.stale ? (
                   <span className="w-fit rounded-full bg-warning/10 px-3 py-1 text-xs font-semibold text-warning">
-                    {hotspotDetail.staleAgeHours != null ? `缓存回退 ${formatNumber(hotspotDetail.staleAgeHours, 1)}h` : '缓存回退'}
+                    {hotspotDetail.staleAgeHours != null ? formatLocalText(localText.cacheFallbackWithHours, { hours: formatNumber(hotspotDetail.staleAgeHours, 1) }) : localText.cacheFallbackLabel}
                   </span>
                 ) : null}
                 {hotspotDetail?.stockCount != null ? (
                   <span className="w-fit rounded-full bg-orange-500/10 px-3 py-1 text-xs font-semibold text-orange-500">
-                    概念股 {hotspotDetail.stockCount}
+                    {formatLocalText(localText.conceptStockCountLabel, { count: hotspotDetail.stockCount })}
                   </span>
                 ) : null}
               </div>
@@ -1181,10 +1394,10 @@ const StockScreeningPage: React.FC = () => {
 
             {hotspotDetail && ((hotspotDetail.missingFields || []).length > 0 || (hotspotDetail.sourceErrors || []).length > 0) ? (
               <details className="mb-3 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
-                <summary className="cursor-pointer font-semibold">详情数据已降级，展开查看原因</summary>
+                <summary className="cursor-pointer font-semibold">{localText.degradedDetailLabel}</summary>
                 <div className="mt-2 space-y-1 leading-5">
                   {(hotspotDetail.missingFields || []).length > 0 ? (
-                    <p>缺失字段：{(hotspotDetail.missingFields || []).join('、')}</p>
+                    <p>{localText.missingFieldsLabel}{(hotspotDetail.missingFields || []).join('、')}</p>
                   ) : null}
                   {(hotspotDetail.sourceErrors || []).slice(0, 4).map((message, index) => (
                     <p key={`${message}-${index}`}>{message}</p>
@@ -1198,24 +1411,24 @@ const StockScreeningPage: React.FC = () => {
                 <div>
                   <p className="mb-3 flex items-center gap-1.5 text-xs font-semibold text-secondary-text">
                     <Clock3 className="h-3.5 w-3.5 text-orange-500" />
-                    发酵时间线
+                    {localText.timelineLabel}
                   </p>
                   <div className="relative space-y-0 pl-4 before:absolute before:bottom-3 before:left-[5px] before:top-2 before:w-px before:bg-border">
                     {getHotspotRouteItems(hotspotDetail).map((item, index) => (
                       <div key={`${item.title}-${index}`} className="relative pb-4 last:pb-0">
                         <span className="absolute -left-4 top-1 h-2.5 w-2.5 rounded-full border border-orange-400 bg-card" />
                         <div className="rounded-lg border border-border/70 bg-card/80 p-3">
-                          <p className="text-[11px] font-semibold text-orange-500">{getRouteTimeLabel(item)}</p>
+                          <p className="text-[11px] font-semibold text-orange-500">{getRouteTimeLabel(item, localText, uiLocale)}</p>
                           <p className="mt-1 text-xs font-semibold text-foreground">{item.title}</p>
                           <p className="mt-1 text-xs leading-5 text-secondary-text">{item.description}</p>
-                          {item.source ? <p className="mt-2 text-[11px] text-secondary-text">来源 {item.source}</p> : null}
+                          {item.source ? <p className="mt-2 text-[11px] text-secondary-text">{localText.sourceLabel} {item.source}</p> : null}
                         </div>
                       </div>
                     ))}
                   </div>
                 </div>
                 <div>
-                  <p className="mb-2 text-xs font-semibold text-secondary-text">概念股</p>
+                  <p className="mb-2 text-xs font-semibold text-secondary-text">{localText.conceptStocksLabel}</p>
                   <div className="grid gap-2 sm:grid-cols-2">
                     {(hotspotDetail.stocks || []).slice(0, 10).map((stock) => (
                       <div key={`${stock.code || stock.name}`} className="rounded-lg border border-border/70 bg-card/80 p-3">
@@ -1226,29 +1439,29 @@ const StockScreeningPage: React.FC = () => {
                           </div>
                           <div className="flex shrink-0 items-center gap-1">
                             <span className="rounded-full bg-cyan/10 px-2 py-1 text-[11px] font-semibold text-cyan">
-                              {stock.role || '概念股'}
+                              {stock.role || localText.conceptStockRole}
                             </span>
                             {stock.code ? (
                               <button
                                 type="button"
-                                aria-label={`分析 ${stock.name || stock.code}`}
+                                aria-label={formatLocalText(localText.analyzeAriaLabel, { name: stock.name || stock.code || '' })}
                                 className="inline-flex h-7 items-center gap-1 rounded-full border border-cyan/30 bg-cyan/10 px-2 text-[11px] font-semibold text-cyan transition-colors hover:border-cyan hover:bg-cyan/15 hover:text-foreground"
                                 onClick={() => handleAnalyzeHotspotStock(stock)}
                               >
                                 <Play className="h-3 w-3" />
-                                分析
+                                {localText.analyzeLabel}
                               </button>
                             ) : null}
                           </div>
                         </div>
                         <p className="mt-2 text-[11px] text-secondary-text">
-                          涨跌幅 {formatStockChangeText(stock.changePct)} · 热度 {formatNumber(stock.hotStockScore, 0)}
+                          {localText.changePctLabel} {formatStockChangeText(stock.changePct, localText)} · {localText.hotStockScoreLabel} {formatNumber(stock.hotStockScore, 0)}
                         </p>
                         {stock.source || stock.sourceConfidence != null || stock.fallbackUsed ? (
                           <p className="mt-1 text-[11px] text-secondary-text">
-                            来源 {stock.source || '-'}
-                            {stock.sourceConfidence != null ? ` · 置信 ${formatPercent(stock.sourceConfidence)}` : ''}
-                            {stock.fallbackUsed ? ' · 回退' : ''}
+                            {localText.sourceLabel} {stock.source || '-'}
+                            {stock.sourceConfidence != null ? ` · ${localText.sourceConfidenceLabel} ${formatPercent(stock.sourceConfidence)}` : ''}
+                            {stock.fallbackUsed ? ` · ${localText.fallbackLabel}` : ''}
                           </p>
                         ) : null}
                       </div>
@@ -1265,7 +1478,7 @@ const StockScreeningPage: React.FC = () => {
         <div className="mb-4 flex items-center justify-between gap-3">
           <div>
             <h2 className="text-sm font-semibold text-foreground">{tx.selectStrategy}</h2>
-            <p className="mt-1 text-xs text-secondary-text">策略来自 AlphaSift；DSA 会对候选补充行情、基本面和新闻上下文。</p>
+            <p className="mt-1 text-xs text-secondary-text">{localText.strategySourceHint}</p>
           </div>
           <span className="rounded-full border border-cyan/30 bg-cyan/10 px-3 py-1 text-xs font-semibold text-cyan">
             {selectedStrategyTag}
@@ -1275,11 +1488,11 @@ const StockScreeningPage: React.FC = () => {
         <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
           {loadingStrategies ? (
             <div className="rounded-xl border border-dashed border-border bg-surface/70 p-4 text-sm text-secondary-text">
-              正在读取可用策略...
+              {localText.loadingStrategies}
             </div>
           ) : strategies.length === 0 ? (
             <div className="rounded-xl border border-dashed border-border bg-surface/70 p-4 text-sm text-secondary-text">
-              {strategyLoadError || 'AlphaSift 策略列表暂未载入，可在下方手动输入策略参数。'}
+              {strategyLoadError || localText.strategyLoadHint}
             </div>
           ) : (
             strategies.map((item) => {
@@ -1325,7 +1538,7 @@ const StockScreeningPage: React.FC = () => {
             >
               {MARKETS.map((item) => (
                 <option key={item.id} value={item.id}>
-                  {item.label}
+                  {localText.marketCN}
                 </option>
               ))}
             </select>
@@ -1384,22 +1597,22 @@ const StockScreeningPage: React.FC = () => {
               <p className="mt-1 text-xs text-secondary-text">
                 {loading
                   ? `${taskMessage || localText.runningTask} · ${taskProgress}%`
-                  : `当前策略：${displayedStrategy} · ${MARKETS.find((item) => item.id === market)?.label}`}
+                  : `当前策略：${displayedStrategy} · ${localText.marketCN}`}
               </p>
             </div>
           </div>
           <div className="grid gap-1 text-xs text-secondary-text sm:text-right">
-            <span>任务：{activeTaskId ? activeTaskId.slice(0, 12) : '-'}</span>
-            <span>Run ID：{screenMeta?.runId || '-'}</span>
+            <span>{localText.taskLabel}{activeTaskId ? activeTaskId.slice(0, 12) : '-'}</span>
+            <span>{localText.runIdLabel}{screenMeta?.runId || '-'}</span>
             <span>
-              快照 {screenMeta?.snapshotCount ?? '-'} · 过滤后 {screenMeta?.afterFilterCount ?? '-'} · 候选 {screenMeta?.candidateCount ?? candidates.length}
+              {localText.snapshotLabel} {screenMeta?.snapshotCount ?? '-'} · {localText.filteredLabel} {screenMeta?.afterFilterCount ?? '-'} · {localText.candidateLabel} {screenMeta?.candidateCount ?? candidates.length}
             </span>
             <span>
-              LLM：{screenMeta?.llmRanked ? '已重排' : screenMeta ? '未重排' : '-'}
-              {screenMeta?.llmCoverage != null ? ` · 覆盖 ${formatPercent(screenMeta.llmCoverage)}` : ''}
+              {localText.llmLabel}{screenMeta?.llmRanked ? localText.llmReranked : screenMeta ? localText.llmNotReranked : '-'}
+              {screenMeta?.llmCoverage != null ? ` · ${localText.llmCoverageLabel} ${formatPercent(screenMeta.llmCoverage)}` : ''}
             </span>
             <span>
-              DSA增强：{screenMeta?.dsaEnrichment?.enrichedCount ?? '-'} / {screenMeta?.dsaEnrichment?.requestedCount ?? '-'}
+              {localText.dsaEnrichmentLabel}{screenMeta?.dsaEnrichment?.enrichedCount ?? '-'} / {screenMeta?.dsaEnrichment?.requestedCount ?? '-'}
             </span>
           </div>
         </div>
@@ -1418,19 +1631,19 @@ const StockScreeningPage: React.FC = () => {
           <div>
             <h2 className="text-base font-semibold text-foreground">{tx.screeningResults}</h2>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-secondary-text">
-              AlphaSift 返回候选后，DSA 会对前几名补充行情、基本面、新闻和辅助摘要。
+              {localText.candidateResultHint}
             </p>
           </div>
           <div className="flex items-center gap-2 rounded-full border border-border bg-surface px-3 py-2 text-xs text-secondary-text">
             <Search className="h-4 w-4 text-cyan" />
-            {candidates.length} 条候选
+            {formatLocalText(localText.candidatesCount, { count: candidates.length })}
           </div>
         </div>
 
         {candidates.length === 0 ? (
           <div className="rounded-xl border border-dashed border-border bg-surface/70 px-5 py-10 text-center">
             <p className="text-sm font-medium text-foreground">{tx.noResults}</p>
-            <p className="mt-2 text-sm text-secondary-text">开启 AlphaSift 后点击“运行选股”生成候选列表。</p>
+            <p className="mt-2 text-sm text-secondary-text">{localText.noCandidatesHint}</p>
           </div>
         ) : (
           <div className="overflow-hidden rounded-xl border border-border">
@@ -1455,8 +1668,8 @@ const StockScreeningPage: React.FC = () => {
                   const llmInsightAvailable = hasLlmInsight(item);
                   const llmFallbackText =
                     llmDegraded && !llmInsightAvailable
-                      ? '本次 LLM 重排失败或未返回判断，当前展示的是本地因子评分结果。'
-                      : '暂无 LLM 判断';
+                      ? localText.llmDegradedResultHint
+                      : localText.noLlmJudgement;
                   const dsaWarnings = item.dsaContext?.warnings || [];
                   const dsaNews = item.dsaNews || [];
                   return (
@@ -1469,7 +1682,7 @@ const StockScreeningPage: React.FC = () => {
                         <td className="px-4 py-3 text-secondary-text">{formatNumber(item.price)}</td>
                         <td className="px-4 py-3 text-secondary-text">{formatNumber(item.changePct)}%</td>
                         <td className="px-4 py-3 font-bold text-cyan">{formatScore(item.score)}</td>
-                        <td className="px-4 py-3 text-secondary-text">{llmDegraded ? '未重排' : formatScore(item.llmScore)}</td>
+                        <td className="px-4 py-3 text-secondary-text">{llmDegraded ? localText.notReranked : formatScore(item.llmScore)}</td>
                         <td className="px-4 py-3">
                           <span className="rounded-lg bg-success/10 px-2.5 py-1 text-xs font-semibold text-success">
                             {item.riskLevel || 'unknown'}
@@ -1481,7 +1694,7 @@ const StockScreeningPage: React.FC = () => {
                             type="button"
                             onClick={() => setExpandedCode(expanded ? null : item.code)}
                           >
-                            {expanded ? '收起' : '展开查看'}
+                            {expanded ? localText.collapseLabel : localText.expandLabel}
                           </button>
                         </td>
                       </tr>
@@ -1491,44 +1704,44 @@ const StockScreeningPage: React.FC = () => {
                             <div className="grid gap-4 lg:grid-cols-[1.1fr_1fr]">
                               <div className="space-y-3">
                                 <div>
-                                  <p className="text-xs font-semibold text-secondary-text">摘要</p>
-                                  <p className="mt-1 text-sm leading-6 text-foreground">{getCandidateReason(item)}</p>
+                                  <p className="text-xs font-semibold text-secondary-text">{tx.summary}</p>
+                                  <p className="mt-1 text-sm leading-6 text-foreground">{getCandidateReason(item, localText)}</p>
                                 </div>
                                 <div>
-                                  <p className="text-xs font-semibold text-secondary-text">操作信号</p>
-                                  <p className="mt-1 text-sm text-foreground">{getSignal(item)}</p>
+                                  <p className="text-xs font-semibold text-secondary-text">{tx.operationSignal}</p>
+                                  <p className="mt-1 text-sm text-foreground">{getSignal(item, localText)}</p>
                                 </div>
                                 {item.dsaAnalysisSummary ? (
                                   <div>
-                                    <p className="text-xs font-semibold text-secondary-text">DSA 增强摘要</p>
+                                    <p className="text-xs font-semibold text-secondary-text">{localText.dsaEnhancedSummary}</p>
                                     <p className="mt-1 text-sm leading-6 text-foreground">{item.dsaAnalysisSummary}</p>
                                   </div>
                                 ) : null}
                                 <div>
-                                  <p className="text-xs font-semibold text-secondary-text">LLM 判断</p>
+                                  <p className="text-xs font-semibold text-secondary-text">{localText.llmJudgement}</p>
                                   <p className="mt-1 text-sm leading-6 text-foreground">
                                     {item.llmThesis || llmFallbackText}
                                   </p>
                                   {llmInsightAvailable ? (
                                     <p className="mt-1 text-xs text-secondary-text">
-                                      板块 {item.llmSector || '-'} · 主题 {item.llmTheme || '-'} · 置信度 {formatPercent(item.llmConfidence)}
+                                      {localText.sectorLabel} {item.llmSector || '-'} · {localText.themeLabel} {item.llmTheme || '-'} · {localText.confidenceLabel} {formatPercent(item.llmConfidence)}
                                     </p>
                                   ) : (
-                                    <p className="mt-1 text-xs text-secondary-text">LLM 元数据未返回</p>
+                                    <p className="mt-1 text-xs text-secondary-text">{localText.llmMetadataMissing}</p>
                                   )}
                                 </div>
                                 <div>
-                                  <p className="text-xs font-semibold text-secondary-text">风险标签</p>
+                                  <p className="text-xs font-semibold text-secondary-text">{tx.riskTags}</p>
                                   <p className="mt-1 text-sm text-foreground">
                                     {[...(item.riskFlags || []), ...(item.llmRisks || [])].length
                                       ? [...(item.riskFlags || []), ...(item.llmRisks || [])].join('，')
-                                      : '无'}
+                                      : tx.na}
                                   </p>
                                 </div>
                               </div>
                               <div className="space-y-3">
                                 <div>
-                                  <p className="text-xs font-semibold text-secondary-text">主要因子</p>
+                                  <p className="text-xs font-semibold text-secondary-text">{tx.mainFactors}</p>
                                   <div className="mt-2 grid grid-cols-2 gap-2">
                                     {factors.length > 0 ? (
                                       factors.map(([key, value]) => (
@@ -1538,28 +1751,28 @@ const StockScreeningPage: React.FC = () => {
                                         </div>
                                       ))
                                     ) : (
-                                      <span className="text-sm text-secondary-text">无因子明细</span>
+                                      <span className="text-sm text-secondary-text">{tx.noFactorDetails}</span>
                                     )}
                                   </div>
                                 </div>
                                 <div>
-                                  <p className="text-xs font-semibold text-secondary-text">成交额</p>
-                                  <p className="mt-1 text-sm text-foreground">{formatAmount(item.amount)}</p>
+                                  <p className="text-xs font-semibold text-secondary-text">{tx.turnover}</p>
+                                  <p className="mt-1 text-sm text-foreground">{formatAmount(item.amount, uiLocale)}</p>
                                 </div>
                                 <div>
-                                  <p className="text-xs font-semibold text-secondary-text">LLM 关注项</p>
+                                  <p className="text-xs font-semibold text-secondary-text">{localText.llmWatchItems}</p>
                                   <p className="mt-1 text-sm text-foreground">
-                                    {item.llmWatchItems?.length ? item.llmWatchItems.join('，') : llmDegraded ? '未返回（LLM 已降级）' : '无'}
+                                    {item.llmWatchItems?.length ? item.llmWatchItems.join('，') : llmDegraded ? tx.noReturnDegraded : tx.na}
                                   </p>
                                 </div>
                                 <div>
-                                  <p className="text-xs font-semibold text-secondary-text">催化因素</p>
+                                  <p className="text-xs font-semibold text-secondary-text">{tx.catalysts}</p>
                                   <p className="mt-1 text-sm text-foreground">
-                                    {item.llmCatalysts?.length ? item.llmCatalysts.join('，') : llmDegraded ? '未返回（LLM 已降级）' : '无'}
+                                    {item.llmCatalysts?.length ? item.llmCatalysts.join('，') : llmDegraded ? tx.noReturnDegraded : tx.na}
                                   </p>
                                 </div>
                                 <div>
-                                  <p className="text-xs font-semibold text-secondary-text">DSA 新闻</p>
+                                  <p className="text-xs font-semibold text-secondary-text">{localText.dsaNews}</p>
                                   {dsaNews.length > 0 ? (
                                     <ul className="mt-1 space-y-1 text-sm text-foreground">
                                       {dsaNews.slice(0, 3).map((newsItem, newsIndex) => (
@@ -1569,12 +1782,12 @@ const StockScreeningPage: React.FC = () => {
                                       ))}
                                     </ul>
                                   ) : (
-                                    <p className="mt-1 text-sm text-secondary-text">无</p>
+                                    <p className="mt-1 text-sm text-secondary-text">{tx.na}</p>
                                   )}
                                 </div>
                                 {dsaWarnings.length > 0 ? (
                                   <div>
-                                    <p className="text-xs font-semibold text-secondary-text">DSA 增强提示</p>
+                                    <p className="text-xs font-semibold text-secondary-text">{localText.dsaEnhancementHint}</p>
                                     <p className="mt-1 text-sm text-secondary-text">{dsaWarnings.join('，')}</p>
                                   </div>
                                 ) : null}
