@@ -18,7 +18,7 @@ from src.core.market_review_lock import (
     try_acquire_market_review_lock,
 )
 from src.report_language import (
-    detect_report_script_mismatch,
+    has_disallowed_report_script,
     normalize_report_language,
     resolve_report_language,
 )
@@ -882,7 +882,7 @@ def _record_report_language_matches(record: Any, report_language: str) -> bool:
     body = str(getattr(record, "news_content", None) or "")
     if len(body.strip()) < 20:
         return True
-    if detect_report_script_mismatch(report_language, body):
+    if has_disallowed_report_script(report_language, body):
         return False
     return True
 

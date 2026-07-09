@@ -20,7 +20,13 @@ import uuid
 from src.config import get_config
 from src.notification import NotificationService
 from src.market_analyzer import MarketAnalyzer
-from src.report_language import normalize_report_language, get_localized_text, get_report_labels, resolve_report_language
+from src.report_language import (
+    get_localized_text,
+    get_report_labels,
+    localize_market_review_label,
+    normalize_report_language,
+    resolve_report_language,
+)
 from src.search_service import SearchService
 from src.analyzer import AnalysisResult, GeminiAnalyzer
 from src.llm.generation_backend import GenerationError
@@ -661,7 +667,12 @@ def _render_sector_payload_markdown_block(
     if not sector_block:
         return ""
     language = normalize_report_language(payload.get("language"))
-    title = "Sector Highlights" if language == "en" else "板块主线"
+    if language == "en":
+        title = "Sector Highlights"
+    elif language == "ko":
+        title = "섹터 하이라이트"
+    else:
+        title = "板块主线"
     heading = f"{title_prefix} / {title}" if title_prefix else title
     return f"### {heading}\n\n{sector_block}".strip()
 
@@ -673,6 +684,7 @@ def _markdown_has_sector_table(markdown: Any, *, title_prefix: str = "") -> bool
         prefixed_markers = (
             f"### {title} / 板块主线",
             f"### {title} / Sector Highlights",
+            f"### {title} / 섹터 하이라이트",
         )
         if any(marker in text for marker in prefixed_markers):
             return True
@@ -718,9 +730,12 @@ def _markdown_contains_sector_markers(text: str) -> bool:
         "#### Lagging Sectors",
         "#### Leading Industry Sectors",
         "#### Lagging Industry Sectors",
+        "#### 상승 주도 섹터",
+        "#### 하락 주도 섹터",
         "| 排名 | 板块 |",
         "| 排名 | 行业板块 |",
         "| Rank | Sector |",
+        "| 순위 | 섹터 |",
     )
     return any(marker in text for marker in markers)
 
@@ -739,24 +754,30 @@ def _render_sector_payload_block(payload: Dict[str, Any]) -> str:
     if top:
         if language == "en":
             lines.extend(["#### Leading Sectors", "| Rank | Sector | Change |", "|------|--------|--------|"])
+        elif language == "ko":
+            lines.extend(["#### 상승 주도 섹터 Top 5", "| 순위 | 섹터 | 등락률 |", "|------|------|--------|"])
         else:
             lines.extend(["#### 领涨板块 Top 5", "| 排名 | 板块 | 涨跌幅 |", "|------|------|--------|"])
         for rank, sector in enumerate(top[:5], 1):
             if not isinstance(sector, dict):
                 continue
             name = str(sector.get("name") or "-").strip() or "-"
+            name = localize_market_review_label(name, language, fallback="중국 업종")
             lines.append(f"| {rank} | {name} | {_format_sector_change_pct(sector)} |")
     if bottom:
         if lines:
             lines.append("")
         if language == "en":
             lines.extend(["#### Lagging Sectors", "| Rank | Sector | Change |", "|------|--------|--------|"])
+        elif language == "ko":
+            lines.extend(["#### 하락 주도 섹터 Top 5", "| 순위 | 섹터 | 등락률 |", "|------|------|--------|"])
         else:
             lines.extend(["#### 领跌板块 Top 5", "| 排名 | 板块 | 涨跌幅 |", "|------|------|--------|"])
         for rank, sector in enumerate(bottom[:5], 1):
             if not isinstance(sector, dict):
                 continue
             name = str(sector.get("name") or "-").strip() or "-"
+            name = localize_market_review_label(name, language, fallback="중국 업종")
             lines.append(f"| {rank} | {name} | {_format_sector_change_pct(sector)} |")
     return "\n".join(lines).strip()
 

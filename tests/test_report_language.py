@@ -13,6 +13,7 @@ from src.report_language import (
     get_sentiment_label,
     get_signal_level,
     infer_decision_type_from_advice,
+    has_disallowed_report_script,
     localize_bias_status,
     localize_confidence_level,
     localize_operation_advice,
@@ -244,6 +245,10 @@ class ReportLanguageTestCase(unittest.TestCase):
     def test_detect_script_mismatch_mixed_content_ko_with_some_hanzi(self):
         text = "오늘 삼성전자와 SK하이닉스가 상승을 주도했습니다."
         self.assertFalse(detect_report_script_mismatch("ko", text))
+
+    def test_korean_report_disallows_even_a_single_chinese_label(self):
+        text = "오늘 상하이종합지수(上证指数)가 상승했습니다."
+        self.assertTrue(has_disallowed_report_script("ko", text))
 
     def test_detect_script_mismatch_zh_with_some_hangul_loanwords_fails(self):
         text = "今日市场由三星电子和SK하이닉스领涨。"

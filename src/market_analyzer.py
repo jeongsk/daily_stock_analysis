@@ -22,7 +22,8 @@ import pandas as pd
 
 from src.config import get_config
 from src.report_language import (
-    detect_report_script_mismatch,
+    has_disallowed_report_script,
+    localize_market_review_label,
     normalize_report_language,
     resolve_report_language,
 )
@@ -169,6 +170,25 @@ class MarketAnalyzer:
 
     def _get_template_review_language(self) -> str:
         return resolve_report_language(self.config)
+
+    def _localize_market_label(
+        self,
+        value: Any,
+        *,
+        code: Any = None,
+        label_type: str = "sector",
+    ) -> str:
+        fallback_by_type = {
+            "index": "중국 주요 지수",
+            "sector": "중국 업종",
+            "concept": "중국 테마",
+        }
+        return localize_market_review_label(
+            value,
+            self._get_review_language(),
+            code=code,
+            fallback=fallback_by_type.get(label_type, "중국 시장 분류"),
+        )
 
     def _get_market_scope_name(self, review_language: str | None = None) -> str:
         review_language = review_language or self._get_review_language()
@@ -803,7 +823,7 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
         )
 
         if review:
-            if detect_report_script_mismatch(review_language, review):
+            if has_disallowed_report_script(review_language, review):
                 logger.warning(
                     "[大盘] %s action=generate_review status=script_mismatch "
                     "requested=%s retry=1",
@@ -819,7 +839,7 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
                     review = self.analyzer.generate_text(
                         retry_prompt, max_tokens=8192, temperature=0.7
                     )
-                    if review and detect_report_script_mismatch(review_language, review):
+                    if review and has_disallowed_report_script(review_language, review):
                         logger.warning(
                             "[大盘] %s action=generate_review status=script_mismatch "
                             "requested=%s retry=2 abandoning",
@@ -1041,11 +1061,12 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
                 sector_block,
             )
             if review == original_review and sector_block not in review:
-                fallback_heading = (
-                    "### 4. Sector Highlights"
-                    if self._get_review_language() == "en"
-                    else "### 三、板块主线"
-                )
+                fallback_headings = {
+                    "en": "### 4. Sector Highlights",
+                    "ko": "### 4. 섹터 하이라이트",
+                    "zh": "### 三、板块主线",
+                }
+                fallback_heading = fallback_headings[language]
                 review = f"{review.rstrip()}\n\n{fallback_heading}\n{sector_block}\n"
 
         return review
@@ -1284,7 +1305,8 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
             amount_raw = idx.amount or 0.0
             amount_str = self._format_turnover_value(amount_raw)
             lines.append(
-                f"| {idx.name} | {idx.current:.2f} | {arrow} {idx.change_pct:+.2f}% | "
+                f"| {self._localize_market_label(idx.name, code=idx.code, label_type='index')} | "
+                f"{idx.current:.2f} | {arrow} {idx.change_pct:+.2f}% | "
                 f"{self._format_optional_number(idx.open)} | {self._format_optional_number(idx.high)} | "
                 f"{self._format_optional_number(idx.low)} | {self._format_optional_pct(idx.amplitude)} | {amount_str} |"
             )
@@ -1302,7 +1324,12 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
         lines = []
         language = self._get_review_language()
 
-        def append_ranking(title: str, name_label: str, rows: List[Dict]) -> None:
+        def append_ranking(
+            title: str,
+            name_label: str,
+            rows: List[Dict],
+            label_type: str,
+        ) -> None:
             if not rows:
                 return
             if lines:
@@ -1320,24 +1347,25 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
             ])
             for rank, item in enumerate(rows[:5], 1):
                 lines.append(
-                    f"| {rank} | {item.get('name', '-')} | {self._format_signed_pct(item.get('change_pct'))} |"
+                    f"| {rank} | {self._localize_market_label(item.get('name', '-'), label_type=label_type)} | "
+                    f"{self._format_signed_pct(item.get('change_pct'))} |"
                 )
 
         if language == "en":
-            append_ranking("#### Leading Industry Sectors", "Sector", overview.top_sectors)
-            append_ranking("#### Lagging Industry Sectors", "Sector", overview.bottom_sectors)
-            append_ranking("#### Leading Concept Themes", "Concept", overview.top_concepts)
-            append_ranking("#### Lagging Concept Themes", "Concept", overview.bottom_concepts)
+            append_ranking("#### Leading Industry Sectors", "Sector", overview.top_sectors, "sector")
+            append_ranking("#### Lagging Industry Sectors", "Sector", overview.bottom_sectors, "sector")
+            append_ranking("#### Leading Concept Themes", "Concept", overview.top_concepts, "concept")
+            append_ranking("#### Lagging Concept Themes", "Concept", overview.bottom_concepts, "concept")
         elif language == "ko":
-            append_ranking("#### 상승 주도 섹터 Top 5", "섹터", overview.top_sectors)
-            append_ranking("#### 하락 주도 섹터 Top 5", "섹터", overview.bottom_sectors)
-            append_ranking("#### 상승 개념 섹터 Top 5", "개념", overview.top_concepts)
-            append_ranking("#### 하락 개념 섹터 Top 5", "개념", overview.bottom_concepts)
+            append_ranking("#### 상승 주도 섹터 Top 5", "섹터", overview.top_sectors, "sector")
+            append_ranking("#### 하락 주도 섹터 Top 5", "섹터", overview.bottom_sectors, "sector")
+            append_ranking("#### 상승 개념 섹터 Top 5", "개념", overview.top_concepts, "concept")
+            append_ranking("#### 하락 개념 섹터 Top 5", "개념", overview.bottom_concepts, "concept")
         else:
-            append_ranking("#### 行业板块领涨 Top 5", "行业板块", overview.top_sectors)
-            append_ranking("#### 行业板块领跌 Top 5", "行业板块", overview.bottom_sectors)
-            append_ranking("#### 概念板块领涨 Top 5", "概念板块", overview.top_concepts)
-            append_ranking("#### 概念板块领跌 Top 5", "概念板块", overview.bottom_concepts)
+            append_ranking("#### 行业板块领涨 Top 5", "行业板块", overview.top_sectors, "sector")
+            append_ranking("#### 行业板块领跌 Top 5", "行业板块", overview.bottom_sectors, "sector")
+            append_ranking("#### 概念板块领涨 Top 5", "概念板块", overview.top_concepts, "concept")
+            append_ranking("#### 概念板块领跌 Top 5", "概念板块", overview.bottom_concepts, "concept")
         return "\n".join(lines)
 
     def _build_news_block(self, news: List) -> str:
@@ -1417,8 +1445,13 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
             return "N/A"
         return f"{numeric_value:+.2f}%"
 
-    @classmethod
-    def _format_ranking_summary(cls, rows: List[Dict], limit: int = 3) -> str:
+    def _format_ranking_summary(
+        self,
+        rows: List[Dict],
+        limit: int = 3,
+        *,
+        label_type: str = "sector",
+    ) -> str:
         parts = []
         for item in (rows or [])[:limit]:
             if not isinstance(item, dict):
@@ -1426,7 +1459,10 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
             name = str(item.get("name") or "").strip()
             if not name:
                 continue
-            parts.append(f"{name}({cls._format_signed_pct(item.get('change_pct'))})")
+            parts.append(
+                f"{self._localize_market_label(name, label_type=label_type)}"
+                f"({self._format_signed_pct(item.get('change_pct'))})"
+            )
         return ", ".join(parts)
 
     @staticmethod
@@ -1614,13 +1650,16 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
         indices_text = ""
         for idx in overview.indices:
             direction = "↑" if idx.change_pct > 0 else "↓" if idx.change_pct < 0 else "-"
-            indices_text += f"- {idx.name}: {idx.current:.2f} ({direction}{abs(idx.change_pct):.2f}%)\n"
+            indices_text += (
+                f"- {self._localize_market_label(idx.name, code=idx.code, label_type='index')}: "
+                f"{idx.current:.2f} ({direction}{abs(idx.change_pct):.2f}%)\n"
+            )
         
         # 板块信息
         top_sectors_text = self._format_ranking_summary(overview.top_sectors)
         bottom_sectors_text = self._format_ranking_summary(overview.bottom_sectors)
-        top_concepts_text = self._format_ranking_summary(overview.top_concepts)
-        bottom_concepts_text = self._format_ranking_summary(overview.bottom_concepts)
+        top_concepts_text = self._format_ranking_summary(overview.top_concepts, label_type="concept")
+        bottom_concepts_text = self._format_ranking_summary(overview.bottom_concepts, label_type="concept")
         
         # 新闻信息 - 支持 SearchResult 对象或字典
         news_text = ""
@@ -1837,6 +1876,8 @@ Output the report content directly, no extra commentary.
 - 코드 블록은 금지합니다
 - 이모지는 제목에서만 제한적으로 사용하세요(제목당 최대 1개)
 - 고정된 제목, 안내 문구, 결론은 모두 한국어로 작성하세요
+- 입력 데이터의 중국어 지수·섹터·뉴스 원문 라벨을 그대로 인용하지 말고 자연스러운 한국어로 번역하거나 설명하세요
+- 중국어 한자는 출력하지 마세요
 - 보고서는 트레이더의 장마감 워크스테이션처럼 결론을 먼저 제시하고, 데이터 표, 주도 흐름, 촉매, 계획 순서로 전개하세요
 - 시스템이 주입한 표 데이터를 반복 나열하지 말고, 본문은 그 데이터가 의미하는 바를 설명하세요
 
@@ -1982,14 +2023,33 @@ Output the report content directly, no extra commentary.
         indices_text = ""
         for idx in overview.indices[:4]:
             direction = "↑" if idx.change_pct > 0 else "↓" if idx.change_pct < 0 else "-"
-            indices_text += f"- **{idx.name}**: {idx.current:.2f} ({direction}{abs(idx.change_pct):.2f}%)\n"
+            indices_text += (
+                f"- **{self._localize_market_label(idx.name, code=idx.code, label_type='index')}**: "
+                f"{idx.current:.2f} ({direction}{abs(idx.change_pct):.2f}%)\n"
+            )
         
         # 板块信息
         separator = ", " if template_language in {"en", "ko"} else "、"
-        top_text = separator.join([s['name'] for s in overview.top_sectors[:3]])
-        bottom_text = separator.join([s['name'] for s in overview.bottom_sectors[:3]])
-        top_concept_text = separator.join([s['name'] for s in overview.top_concepts[:3]])
-        bottom_concept_text = separator.join([s['name'] for s in overview.bottom_concepts[:3]])
+        top_text = separator.join(
+            self._localize_market_label(s.get("name"), label_type="sector")
+            for s in overview.top_sectors[:3]
+            if isinstance(s, dict)
+        )
+        bottom_text = separator.join(
+            self._localize_market_label(s.get("name"), label_type="sector")
+            for s in overview.bottom_sectors[:3]
+            if isinstance(s, dict)
+        )
+        top_concept_text = separator.join(
+            self._localize_market_label(s.get("name"), label_type="concept")
+            for s in overview.top_concepts[:3]
+            if isinstance(s, dict)
+        )
+        bottom_concept_text = separator.join(
+            self._localize_market_label(s.get("name"), label_type="concept")
+            for s in overview.bottom_concepts[:3]
+            if isinstance(s, dict)
+        )
 
         if template_language == "en":
             stats_section = ""

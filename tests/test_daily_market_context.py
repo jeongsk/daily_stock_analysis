@@ -314,6 +314,52 @@ def test_does_not_reuse_same_day_history_when_body_script_mismatches_tag() -> No
     run_review.assert_called_once()
 
 
+def test_does_not_reuse_korean_history_with_a_single_chinese_label() -> None:
+    db = MagicMock()
+    db.get_analysis_history.return_value = [
+        _history_record(
+            created_at=datetime(2026, 7, 9, 9, 30),
+            report_language="ko",
+            summary="오늘 상하이종합지수(上证指数)가 상승했습니다.",
+        )
+    ]
+    service = DailyMarketContextService(
+        db_manager=db,
+        today_fn=lambda: date(2026, 7, 9),
+    )
+    result = MarketReviewRunResult(
+        report="2026-07-09 A주 시장 리뷰 - 상하이종합지수가 상승했습니다.",
+        market_review_payload={
+            "kind": "market_review",
+            "region": "cn",
+            "date": "2026-07-09",
+            "sections": [
+                {
+                    "key": "overview",
+                    "title": "시장 요약",
+                    "markdown": "상하이종합지수가 상승했습니다.",
+                }
+            ],
+        },
+    )
+
+    with patch(
+        "src.services.daily_market_context.run_market_review",
+        return_value=result,
+    ) as run_review:
+        context = service.get_context(
+            region="cn",
+            config=SimpleNamespace(report_language="ko"),
+            notifier=MagicMock(),
+            analyzer=MagicMock(),
+            search_service=MagicMock(),
+        )
+
+    assert context is not None
+    assert context.source == "market_review_runtime"
+    run_review.assert_called_once()
+
+
 def test_query_scoped_fallback_reuses_current_run_runtime_cache() -> None:
     db = MagicMock()
     db.get_analysis_history.return_value = []

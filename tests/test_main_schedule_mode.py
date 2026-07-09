@@ -132,6 +132,23 @@ class MainScheduleModeTestCase(unittest.TestCase):
         defaults.update(overrides)
         return _DummyConfig(**defaults)
 
+    def test_market_review_notification_heading_uses_report_language(self) -> None:
+        korean_config = self._make_config(report_language="ko")
+        english_config = self._make_config(report_language="en")
+
+        self.assertEqual(
+            main._market_review_notification_heading(korean_config),
+            "# 📈 시장 리뷰",
+        )
+        self.assertEqual(
+            main._market_review_notification_heading(english_config),
+            "# 📈 Market Review",
+        )
+        self.assertEqual(
+            main._dashboard_notification_heading(korean_config),
+            "# 🚀 의사결정 대시보드",
+        )
+
     def test_daily_market_context_target_date_routes_jp_kr_calendars(self) -> None:
         current_time = datetime(2026, 5, 7, 0, 30, tzinfo=timezone.utc)
         calls = []

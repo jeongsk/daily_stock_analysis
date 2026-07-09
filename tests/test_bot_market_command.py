@@ -39,10 +39,12 @@ class MarketCommandRegionFilterTestCase(unittest.TestCase):
         market_review_region: str,
         open_markets: set,
         trading_day_check_enabled: bool = True,
+        report_language: str = "zh",
     ):
         config = SimpleNamespace(
             market_review_region=market_review_region,
             trading_day_check_enabled=trading_day_check_enabled,
+            report_language=report_language,
             has_search_capability_enabled=lambda: False,
             gemini_api_key=None,
             openai_api_key=None,
@@ -173,6 +175,25 @@ class MarketCommandRegionFilterTestCase(unittest.TestCase):
         sent = notify_notifier.send.call_args.args[0]
         self.assertIn("休市", sent)
         self.assertEqual(notify_notifier.send.call_args.kwargs["route_type"], "report")
+
+    def test_korean_market_command_localizes_start_and_closed_messages(self) -> None:
+        message = _make_message()
+        config, *_unused, notify_notifier = self._patch_dependencies(
+            market_review_region="us,kr",
+            open_markets=set(),
+            report_language="ko",
+        )
+        cmd = MarketCommand()
+
+        started = cmd._text(config, "started")
+        cmd._run_market_review(message, config, None)
+
+        self.assertIn("시장 리뷰", started)
+        self.assertFalse(any("\u4e00" <= char <= "\u9fff" for char in started))
+        sent = notify_notifier.send.call_args.args[0]
+        self.assertIn("🎯 시장 리뷰", sent)
+        self.assertIn("휴장", sent)
+        self.assertFalse(any("\u4e00" <= char <= "\u9fff" for char in sent))
 
     def test_trading_day_check_disabled_does_not_pass_override(self) -> None:
         """When TRADING_DAY_CHECK_ENABLED=false, override_region stays None."""

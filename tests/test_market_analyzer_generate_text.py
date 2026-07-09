@@ -2787,6 +2787,64 @@ class TestMarketAnalyzerBypassFix:
         assert "### 七、风险提示" not in result
         assert "大盘复盘" not in result
 
+    def test_korean_market_review_localizes_chinese_provider_labels(self):
+        from src.market_analyzer import MarketOverview, MarketIndex
+
+        ma = self._make_market_analyzer_with_mock_generate_text(return_value="review")
+        ma.config.report_language = "ko"
+        overview = MarketOverview(
+            date="2026-07-09",
+            indices=[
+                MarketIndex(code="000001", name="上证指数", current=4036.59, change_pct=1.66),
+                MarketIndex(code="399001", name="深证成指", current=15398.73, change_pct=3.07),
+                MarketIndex(code="399006", name="创业板指", current=4018.17, change_pct=4.49),
+            ],
+            top_sectors=[
+                {"name": "机动车、电子产品和日用产品修理业", "change_pct": 9.56},
+                {"name": "计算机、通信和其他电子设备制造业", "change_pct": 6.46},
+                {"name": "未知板块", "change_pct": 1.0},
+            ],
+            bottom_sectors=[
+                {"name": "房屋建筑业", "change_pct": -9.09},
+                {"name": "水利管理业", "change_pct": -6.50},
+            ],
+        )
+
+        prompt = ma._build_review_prompt(overview, [])
+        table_block = ma._build_sector_block(overview)
+        indices_block = ma._build_indices_block(overview)
+        fallback_report = ma._generate_template_review(overview, [])
+
+        rendered_content = "\n".join((prompt, table_block, indices_block, fallback_report))
+        assert "상하이종합지수" in rendered_content
+        assert "선전성분지수" in rendered_content
+        assert "창업판 지수" in rendered_content
+        assert "자동차·전자제품·생활용품 수리업" in rendered_content
+        assert "컴퓨터·통신·기타 전자장비 제조업" in rendered_content
+        assert "건축업" in rendered_content
+        assert "수자원 관리업" in rendered_content
+        assert "중국 업종" in rendered_content
+        assert not any("\u4e00" <= char <= "\u9fff" for char in rendered_content)
+
+    def test_korean_market_review_retries_when_any_chinese_label_leaks(self):
+        from src.market_analyzer import MarketOverview, MarketIndex
+
+        first_response = "## 시장 리뷰\n\n상하이종합지수(上证指数)가 상승했습니다."
+        second_response = "## 시장 리뷰\n\n상하이종합지수가 상승했습니다."
+        ma = self._make_market_analyzer_with_mock_generate_text(return_value="ignored")
+        ma.config.report_language = "ko"
+        ma.analyzer.generate_text = MagicMock(side_effect=[first_response, second_response])
+        overview = MarketOverview(
+            date="2026-07-09",
+            indices=[MarketIndex(code="000001", name="上证指数", current=4036.59, change_pct=1.66)],
+        )
+
+        result = ma.generate_market_review(overview, [])
+
+        assert second_response in result
+        assert ma.analyzer.generate_text.call_count == 2
+        assert not any("\u4e00" <= char <= "\u9fff" for char in result)
+
     def test_generate_template_review_uses_jp_title_for_english_fallback(self):
         from src.core.market_profile import JP_PROFILE
         from src.core.market_strategy import get_market_strategy_blueprint
@@ -3032,6 +3090,29 @@ Sector text.
         assert "| 1 | AI算力 | +3.25% |" in result
         assert "#### 行业板块领跌 Top 5" in result
         assert "| 1 | 煤炭 | -1.12% |" in result
+
+    def test_korean_review_appends_korean_sector_fallback_when_heading_drifts(self):
+        from src.market_analyzer import MarketOverview
+
+        ma = self._make_market_analyzer_with_mock_generate_text(return_value="review")
+        ma.config.report_language = "ko"
+        overview = MarketOverview(
+            date="2026-07-09",
+            top_sectors=[{"name": "计算机、通信和其他电子设备制造业", "change_pct": 6.46}],
+            bottom_sectors=[{"name": "未知板块", "change_pct": -1.12}],
+        )
+        review = """## 2026-07-09 A주 시장 리뷰
+
+### 오늘의 주도 흐름
+본문.
+"""
+
+        result = ma._inject_data_into_review(review, overview)
+
+        assert "### 4. 섹터 하이라이트" in result
+        assert "컴퓨터·통신·기타 전자장비 제조업" in result
+        assert "중국 업종" in result
+        assert not any("\u4e00" <= char <= "\u9fff" for char in result)
 
     def test_market_review_payload_sections_skip_top_report_title(self):
         from src.market_analyzer import MarketAnalyzer

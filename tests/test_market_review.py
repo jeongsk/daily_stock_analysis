@@ -586,6 +586,33 @@ class MarketReviewLocalizationTestCase(unittest.TestCase):
         self.assertIn("#### 领跌板块 Top 5", markdown)
         self.assertIn("| 1 | 煤炭 | -1.12% |", markdown)
 
+    def test_render_market_review_payload_localizes_korean_sector_fallback(self) -> None:
+        markdown = market_review_module._render_market_review_payload_markdown(
+            {
+                "title": "2026-07-09 A주 시장 리뷰",
+                "language": "ko",
+                "sections": [
+                    {
+                        "key": "overview",
+                        "title": "개요",
+                        "markdown": "> 시장 흐름을 확인합니다.",
+                    }
+                ],
+                "sectors": {
+                    "top": [{"name": "计算机、通信和其他电子设备制造业", "change_pct": 6.46}],
+                    "bottom": [{"name": "未知板块", "change_pct": -1.12}],
+                },
+            },
+            wrapper_title="🎯 시장 리뷰",
+        )
+
+        self.assertIn("### 섹터 하이라이트", markdown)
+        self.assertIn("#### 상승 주도 섹터 Top 5", markdown)
+        self.assertIn("컴퓨터·통신·기타 전자장비 제조업", markdown)
+        self.assertIn("#### 하락 주도 섹터 Top 5", markdown)
+        self.assertIn("중국 업종", markdown)
+        self.assertFalse(any("\u4e00" <= char <= "\u9fff" for char in markdown))
+
     def test_render_market_review_payload_markdown_keeps_injected_chinese_sector_block_once(self) -> None:
         markdown = market_review_module._render_market_review_payload_markdown(
             {

@@ -68,7 +68,12 @@ from datetime import date, datetime, timezone, timedelta
 from src.webui_frontend import prepare_webui_frontend_assets
 from src.config import get_config, Config
 from src.logging_config import setup_logging
-from src.report_language import get_localized_text, normalize_report_language, resolve_report_language
+from src.report_language import (
+    get_localized_text,
+    get_report_labels,
+    normalize_report_language,
+    resolve_report_language,
+)
 from src.services.stock_code_utils import resolve_index_stock_code_for_analysis
 
 
@@ -616,6 +621,16 @@ def _market_review_report_text(review_result: Any) -> str:
     return review_result if isinstance(review_result, str) else ""
 
 
+def _market_review_notification_heading(config: Config) -> str:
+    title = get_localized_text("market_review_title", resolve_report_language(config))
+    return f"# 📈 {title}"
+
+
+def _dashboard_notification_heading(config: Config) -> str:
+    labels = get_report_labels(resolve_report_language(config))
+    return f"# 🚀 {labels['dashboard_title']}"
+
+
 def _save_reused_market_review_report(
     notifier: Any,
     market_report: str,
@@ -627,10 +642,7 @@ def _save_reused_market_review_report(
     body = str(market_report or "").strip()
     if not body:
         return
-    title = get_localized_text(
-        "market_review_title",
-        resolve_report_language(config),
-    )
+    title = get_localized_text("market_review_title", resolve_report_language(config))
     title = f"# 🎯 {title}"
     if not any(body.startswith(item) for item in ("# 🎯 大盘复盘", "# 🎯 Market Review", "# 🎯 시장 리뷰")):
         body = f"{title}\n\n{body}"
@@ -833,7 +845,7 @@ def run_full_analysis(
                     and pipeline.notifier.is_available()
                 ):
                     if pipeline.notifier.send(
-                        f"# 📈 大盘复盘\n\n{market_report}",
+                        f"{_market_review_notification_heading(config)}\n\n{market_report}",
                         email_send_to_all=True,
                         route_type="report",
                     ):
@@ -891,13 +903,13 @@ def run_full_analysis(
         if merge_notification and (results or market_report) and not args.no_notify:
             parts = []
             if market_report:
-                parts.append(f"# 📈 大盘复盘\n\n{market_report}")
+                parts.append(f"{_market_review_notification_heading(config)}\n\n{market_report}")
             if results:
                 dashboard_content = pipeline.notifier.generate_aggregate_report(
                     results,
                     getattr(config, 'report_type', 'simple'),
                 )
-                parts.append(f"# 🚀 个股决策仪表盘\n\n{dashboard_content}")
+                parts.append(f"{_dashboard_notification_heading(config)}\n\n{dashboard_content}")
             if parts:
                 combined_content = "\n\n---\n\n".join(parts)
                 if pipeline.notifier.is_available():
@@ -929,14 +941,21 @@ def run_full_analysis(
                 # 1. 准备标题 "01-01 13:01大盘复盘"
                 tz_cn = timezone(timedelta(hours=8))
                 now = datetime.now(tz_cn)
-                doc_title = f"{now.strftime('%Y-%m-%d %H:%M')} 大盘复盘"
+                market_review_title = get_localized_text(
+                    "market_review_title",
+                    resolve_report_language(config),
+                )
+                doc_title = f"{now.strftime('%Y-%m-%d %H:%M')} {market_review_title}"
 
                 # 2. 准备内容 (拼接个股分析和大盘复盘)
                 full_content = ""
 
                 # 添加大盘复盘内容（如果有）
                 if market_report:
-                    full_content += f"# 📈 大盘复盘\n\n{market_report}\n\n---\n\n"
+                    full_content += (
+                        f"{_market_review_notification_heading(config)}\n\n"
+                        f"{market_report}\n\n---\n\n"
+                    )
 
                 # 添加个股决策仪表盘（使用 NotificationService 生成，按 report_type 分支）
                 if results:
@@ -944,7 +963,7 @@ def run_full_analysis(
                         results,
                         getattr(config, 'report_type', 'simple'),
                     )
-                    full_content += f"# 🚀 个股决策仪表盘\n\n{dashboard_content}"
+                    full_content += f"{_dashboard_notification_heading(config)}\n\n{dashboard_content}"
 
                 # 3. 创建文档
                 doc_url = feishu_doc.create_daily_doc(doc_title, full_content)

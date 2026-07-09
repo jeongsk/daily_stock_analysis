@@ -13,8 +13,58 @@ from typing import Any, List, Optional
 
 from bot.commands.base import BotCommand
 from bot.models import BotMessage, BotResponse
+from src.report_language import get_localized_text, normalize_report_language
 
 logger = logging.getLogger(__name__)
+
+
+_MARKET_COMMAND_TEXT = {
+    "zh": {
+        "description": "大盘复盘分析",
+        "busy": "⚠️ 大盘复盘正在执行中，请稍后再试。",
+        "start_failed": "大盘复盘启动失败，已释放运行锁；请稍后重试",
+        "started": (
+            "✅ **大盘复盘任务已启动**\n\n"
+            "正在分析：\n"
+            "• 主要指数表现\n"
+            "• 板块热点分析\n"
+            "• 市场情绪判断\n"
+            "• 后市展望\n\n"
+            "分析完成后将自动推送结果。"
+        ),
+        "markets_closed": "今日相关市场休市，已跳过大盘复盘。",
+    },
+    "en": {
+        "description": "Market review analysis",
+        "busy": "⚠️ A market review is already running. Please try again shortly.",
+        "start_failed": "Failed to start the market review; the run lock was released. Please try again.",
+        "started": (
+            "✅ **Market review started**\n\n"
+            "Analyzing:\n"
+            "• Major indices\n"
+            "• Sector themes\n"
+            "• Market sentiment\n"
+            "• Near-term outlook\n\n"
+            "The result will be sent automatically when ready."
+        ),
+        "markets_closed": "The relevant markets are closed today, so the market review was skipped.",
+    },
+    "ko": {
+        "description": "시장 리뷰 분석",
+        "busy": "⚠️ 시장 리뷰가 이미 실행 중입니다. 잠시 후 다시 시도하세요.",
+        "start_failed": "시장 리뷰를 시작하지 못해 실행 잠금을 해제했습니다. 잠시 후 다시 시도하세요.",
+        "started": (
+            "✅ **시장 리뷰를 시작했습니다**\n\n"
+            "분석 항목:\n"
+            "• 주요 지수 흐름\n"
+            "• 섹터 주도력\n"
+            "• 시장 심리\n"
+            "• 단기 전망\n\n"
+            "완료되면 결과를 자동으로 전송합니다."
+        ),
+        "markets_closed": "관련 시장이 오늘 휴장하여 시장 리뷰를 건너뛰었습니다.",
+    },
+}
 
 
 class MarketCommand(BotCommand):
@@ -41,7 +91,7 @@ class MarketCommand(BotCommand):
 
     @property
     def description(self) -> str:
-        return "大盘复盘分析"
+        return self._text(self._get_config(), "description")
 
     @property
     def usage(self) -> str:
@@ -52,7 +102,7 @@ class MarketCommand(BotCommand):
         config = self._get_config()
         lock_token = self._try_acquire_market_review_lock(config)
         if lock_token is None:
-            return BotResponse.markdown_response("⚠️ 大盘复盘正在执行中，请稍后再试。")
+            return BotResponse.markdown_response(self._text(config, "busy"))
 
         thread = threading.Thread(
             target=self._run_market_review,
@@ -67,23 +117,18 @@ class MarketCommand(BotCommand):
                 exc,
             )
             self._release_market_review_lock(lock_token)
-            return BotResponse.error_response(
-                "大盘复盘启动失败，已释放运行锁；请稍后重试"
-            )
+            return BotResponse.error_response(self._text(config, "start_failed"))
 
-        return BotResponse.markdown_response(
-            "✅ **大盘复盘任务已启动**\n\n"
-            "正在分析：\n"
-            "• 主要指数表现\n"
-            "• 板块热点分析\n"
-            "• 市场情绪判断\n"
-            "• 后市展望\n\n"
-            "分析完成后将自动推送结果。"
-        )
+        return BotResponse.markdown_response(self._text(config, "started"))
 
     def _get_config(self):
         from src.config import get_config
         return get_config()
+
+    @staticmethod
+    def _text(config: Any, key: str) -> str:
+        language = normalize_report_language(getattr(config, "report_language", None))
+        return _MARKET_COMMAND_TEXT[language][key]
 
     def _try_acquire_market_review_lock(self, config):
         from src.core.market_review_lock import try_acquire_market_review_lock
@@ -126,8 +171,10 @@ class MarketCommand(BotCommand):
                 notifier = NotificationService(source_message=message)
                 logger.info("[MarketCommand] 今日相关市场休市，跳过大盘复盘")
                 if notifier.is_available():
+                    language = normalize_report_language(getattr(config, "report_language", None))
+                    title = get_localized_text("market_review_title", language)
                     notifier.send(
-                        "🎯 大盘复盘\n\n今日相关市场休市，已跳过大盘复盘。",
+                        f"🎯 {title}\n\n{self._text(config, 'markets_closed')}",
                         email_send_to_all=True,
                         route_type="report",
                     )

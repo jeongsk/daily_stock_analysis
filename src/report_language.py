@@ -11,6 +11,43 @@ from src.schemas.decision_scale import signal_key_for_score
 
 SUPPORTED_REPORT_LANGUAGES = ("zh", "en", "ko")
 
+# Market-review data providers return Chinese index and industry labels. Keep the
+# source value in structured data, but localize it before rendering a report.
+_KOREAN_MARKET_LABELS = {
+    "上证指数": "상하이종합지수",
+    "深证成指": "선전성분지수",
+    "创业板指": "창업판 지수",
+    "科创50": "과학기술혁신50",
+    "上证50": "상하이50",
+    "沪深300": "CSI 300",
+    "机动车、电子产品和日用产品修理业": "자동차·전자제품·생활용품 수리업",
+    "计算机、通信和其他电子设备制造业": "컴퓨터·통신·기타 전자장비 제조업",
+    "仪器仪表制造业": "계측기기 제조업",
+    "软件和信息技术服务业": "소프트웨어·정보기술 서비스업",
+    "批发业": "도매업",
+    "房屋建筑业": "건축업",
+    "水利管理业": "수자원 관리업",
+    "家具制造业": "가구 제조업",
+    "文化艺术业": "문화예술업",
+    "非金属矿采选业": "비금속 광물 채굴·선별업",
+    "AI算力": "AI 컴퓨팅 인프라",
+    "半导体": "반도체",
+    "煤炭": "석탄",
+    "机器人概念": "로봇 테마",
+    "转基因": "유전자변형 테마",
+}
+
+_KOREAN_MARKET_INDEX_LABELS_BY_CODE = {
+    "000001": "상하이종합지수",
+    "399001": "선전성분지수",
+    "399006": "창업판 지수",
+    "000688": "과학기술혁신50",
+    "000016": "상하이50",
+    "000300": "CSI 300",
+}
+
+_HANZI_PATTERN = re.compile(r"[\u4e00-\u9fff]")
+
 _REPORT_LANGUAGE_ALIASES = {
     "zh-cn": "zh",
     "zh_cn": "zh",
@@ -653,6 +690,38 @@ def normalize_report_language(value: Optional[str], default: str = "zh") -> str:
     return default
 
 
+def localize_market_review_label(
+    value: Any,
+    language: Optional[str],
+    *,
+    code: Any = None,
+    fallback: str = "중국 시장 분류",
+) -> str:
+    """Return a report-safe localized market index, sector, or theme label.
+
+    Market data keeps its provider-native label for API and history contracts.
+    Korean report rendering must not expose Chinese labels when a translation is
+    unavailable, so it uses a neutral Korean fallback rather than leaking the
+    raw label.
+    """
+    raw_text = str(value or "").strip()
+    if normalize_report_language(language) != "ko" or not raw_text:
+        return raw_text
+
+    code_text = str(code or "").strip().upper()
+    code_digits = re.sub(r"\D", "", code_text)
+    localized_index = _KOREAN_MARKET_INDEX_LABELS_BY_CODE.get(code_digits)
+    if localized_index:
+        return localized_index
+
+    localized_label = _KOREAN_MARKET_LABELS.get(raw_text)
+    if localized_label:
+        return localized_label
+    if _HANZI_PATTERN.search(raw_text):
+        return fallback
+    return raw_text
+
+
 def resolve_report_language(config: Any = None, default: str = "zh") -> str:
     """Resolve the effective report language from a config object.
 
@@ -699,6 +768,15 @@ def detect_report_script_mismatch(requested_language: str, text: str, threshold:
     if requested_language == "zh":
         return hanzi / non_ws < threshold and hangul / non_ws > threshold
     return False
+
+
+def has_disallowed_report_script(requested_language: str, text: str) -> bool:
+    """Return whether report text violates the no-Chinese policy for Korean output."""
+    if detect_report_script_mismatch(requested_language, text):
+        return True
+    return normalize_report_language(requested_language) == "ko" and bool(
+        _HANZI_PATTERN.search(text or "")
+    )
 
 
 def is_supported_report_language_value(value: Optional[str]) -> bool:
