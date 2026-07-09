@@ -97,6 +97,20 @@ class ReportLanguageTestCase(unittest.TestCase):
                 "SK하이닉스",
             )
 
+    def test_get_localized_stock_name_replaces_st_prefix_for_chinese_stock_in_ko(self) -> None:
+        def fake_index_name(code, language=None):
+            if code == "603093.SH" and language == "ko":
+                return "南华期货"
+            if code == "603093.SH" and language == "zh":
+                return "南华期货"
+            return None
+
+        with unittest.mock.patch("src.report_language.get_index_stock_name", side_effect=fake_index_name):
+            self.assertEqual(
+                get_localized_stock_name("ST南华", "603093.SH", "ko"),
+                "南华期货",
+            )
+
     def test_get_sentiment_label_preserves_higher_band_thresholds(self) -> None:
         self.assertEqual(get_sentiment_label(80, "en"), "Very Bullish")
         self.assertEqual(get_sentiment_label(60, "en"), "Bullish")
