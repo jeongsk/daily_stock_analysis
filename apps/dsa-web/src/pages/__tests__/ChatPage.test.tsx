@@ -357,7 +357,7 @@ describe('ChatPage', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: '导出会话为 Markdown 文件' }));
 
-    expect(mockDownloadSession).toHaveBeenCalledWith(mockStoreState.messages);
+    expect(mockDownloadSession).toHaveBeenCalledWith(mockStoreState.messages, 'zh');
     expect(mockFormatSessionAsMarkdown).not.toHaveBeenCalled();
   });
 
@@ -721,6 +721,65 @@ describe('ChatPage', () => {
     });
   });
 
+  it('renders Korean progress fallbacks and omits the Chinese client-owned fallbacks', async () => {
+    localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'ko');
+    mockStoreState.loading = true;
+    mockStoreState.progressSteps = [
+      { type: 'tool_done', display_name: '데이터 조회', tool: 'data', success: true, duration: 2.5 },
+    ];
+    mockStoreState.messages = [
+      {
+        id: 'assistant-ko-progress',
+        role: 'assistant',
+        content: '한국어 분석 결과',
+        thinkingSteps: [
+          { type: 'thinking', step: 1 },
+          { type: 'tool_done', display_name: '데이터 조회', tool: 'data', success: true, duration: 2.5 },
+          { type: 'generating' },
+        ],
+      },
+    ];
+
+    const { container } = render(
+      <UiLanguageProvider>
+        <MemoryRouter initialEntries={['/chat']}>
+          <ChatPage />
+        </MemoryRouter>
+      </UiLanguageProvider>
+    );
+
+    expect(await screen.findByText('데이터 조회 완료')).toBeInTheDocument();
+    expect(screen.queryByText('完成')).not.toBeInTheDocument();
+    expect(screen.getByText(/1개 도구 호출 · 2\.5초/)).toBeInTheDocument();
+    expect(screen.queryByText(/个工具调用/)).not.toBeInTheDocument();
+
+    const thinkingToggle = container.querySelector('button[class*="mb-2"][class*="w-full"]') as HTMLButtonElement;
+    fireEvent.click(thinkingToggle);
+
+    expect(await screen.findByText('1단계: 사고')).toBeInTheDocument();
+    expect(screen.getByText('분석 생성 중')).toBeInTheDocument();
+    expect(screen.queryByText(/第.*步：思考/)).not.toBeInTheDocument();
+    expect(screen.queryByText('生成分析')).not.toBeInTheDocument();
+  });
+
+  it('renders the Korean compression load fallback when the config request fails without a message', async () => {
+    localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'ko');
+    mockGetSystemConfig.mockRejectedValue(
+      createParsedApiError({ title: '조회 실패', message: '', category: 'unknown' }),
+    );
+
+    render(
+      <UiLanguageProvider>
+        <MemoryRouter initialEntries={['/chat']}>
+          <ChatPage />
+        </MemoryRouter>
+      </UiLanguageProvider>
+    );
+
+    expect(await screen.findByText('컨텍스트 압축 설정을 읽을 수 없음')).toBeInTheDocument();
+    expect(screen.queryByText('无法读取上下文压缩配置')).not.toBeInTheDocument();
+  });
+
   it('keeps assistant message actions directly activatable in the DOM', async () => {
     mockStoreState.messages = [
       { id: 'assistant-1', role: 'assistant', content: '趋势偏强', skillName: '趋势分析' },
@@ -755,7 +814,7 @@ describe('ChatPage', () => {
     fireEvent.click(await screen.findByRole('button', { name: '发送到已配置的通知机器人/邮箱' }));
 
     await waitFor(() => {
-      expect(mockFormatSessionAsMarkdown).toHaveBeenCalledWith(mockStoreState.messages);
+      expect(mockFormatSessionAsMarkdown).toHaveBeenCalledWith(mockStoreState.messages, 'zh');
       expect(mockSendChat).toHaveBeenCalledWith('# exported markdown');
     });
 

@@ -26,7 +26,7 @@ import {
 } from '../utils/chatFollowUp';
 import { isNearBottom } from '../utils/chatScroll';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
-import { CHAT_TEXT } from '../locales/featureText';
+import { CHAT_TEXT, type ChatText } from '../locales/featureText';
 import { extractStockCodesFromMessage } from '../utils/chatStockCode';
 import { findMatchingStockCode, includesStockCode, normalizeStockCode } from '../utils/stockCode';
 import type { UiLanguage } from '../i18n/uiText';
@@ -122,7 +122,7 @@ const getSkillDescriptionDisplayText = (description: string, language: UiLanguag
   SKILL_DESCRIPTION_LABELS[description]?.[language] || description;
 
 const getMessageSkillLabel = (msg: Message, language: UiLanguage): string =>
-  getMessageSkillNames(msg).map((name) => getSkillNameDisplayText(name, language)).join('、');
+  getMessageSkillNames(msg).map((name) => getSkillNameDisplayText(name, language)).join(CHAT_TEXT[language].skillSeparator);
 
 const isStageDoneSuccessful = (status?: string): boolean => {
   if (!status) return true;
@@ -130,16 +130,16 @@ const isStageDoneSuccessful = (status?: string): boolean => {
   return ['completed', 'success', 'succeeded', 'done'].includes(normalized);
 };
 
-const getStageDoneLabel = (step: ProgressStep): string => {
-  const stage = step.stage || 'stage';
+const getStageDoneLabel = (step: ProgressStep, tx: ChatText): string => {
+  const stage = step.stage || tx.stageFallback;
   if (step.message) return step.message;
-  if (isStageDoneSuccessful(step.status)) return `${stage} completed`;
-  return `${stage} ${step.status || 'finished'}`;
+  if (isStageDoneSuccessful(step.status)) return tx.stageDoneSuccess.replace('{stage}', stage);
+  return tx.stageDoneFallback.replace('{stage}', stage).replace('{status}', step.status || 'finished');
 };
 
-const getPipelineBudgetSkippedLabel = (step: ProgressStep): string => {
+const getPipelineBudgetSkippedLabel = (step: ProgressStep, tx: ChatText): string => {
   if (step.message) return step.message;
-  return `${step.stage || 'pipeline'} skipped: insufficient budget`;
+  return tx.pipelineSkippedBudget.replace('{stage}', step.stage || tx.pipelineFallback);
 };
 
 const isCompareStockMessage = (
@@ -231,6 +231,8 @@ const restoreActiveStockContextFromMessages = (messages: Message[]): ActiveStock
 const ChatPage: React.FC = () => {
   const { language, t } = useUiLanguage();
   const tx = CHAT_TEXT[language];
+  const languageRef = useRef(language);
+  languageRef.current = language;
   const [searchParams, setSearchParams] = useSearchParams();
   const [input, setInput] = useState('');
   const [skills, setSkills] = useState<SkillInfo[]>([]);
@@ -325,18 +327,18 @@ const ChatPage: React.FC = () => {
           const codes = await systemConfigApi.removeFromWatchlist(existingStockCode);
           if (isMountedRef.current) {
             setWatchlistCodes(codes);
-            setWatchlistMessage(`已从自选中移除 ${stockCode}`);
+            setWatchlistMessage(tx.watchlistRemoved.replace('{stockCode}', stockCode));
           }
         } else {
           const codes = await systemConfigApi.addToWatchlist(stockCode);
           if (isMountedRef.current) {
             setWatchlistCodes(codes);
-            setWatchlistMessage(`已加入自选 ${stockCode}`);
+            setWatchlistMessage(tx.watchlistAdded.replace('{stockCode}', stockCode));
           }
         }
       } catch {
         if (isMountedRef.current) {
-          setWatchlistMessage('操作失败，请重试');
+          setWatchlistMessage(tx.operationFailed);
         }
       } finally {
         if (isMountedRef.current) {
@@ -352,7 +354,7 @@ const ChatPage: React.FC = () => {
         }
       }
     },
-    [isWatchlistActioning, watchlistCodes],
+    [isWatchlistActioning, watchlistCodes, tx],
   );
 
   const {
@@ -480,7 +482,7 @@ const ChatPage: React.FC = () => {
         }
         const parsed = getParsedApiError(error);
         setContextCompressionLoaded(false);
-        setContextCompressionError(parsed.message || '无法读取上下文压缩配置');
+        setContextCompressionError(parsed.message || CHAT_TEXT[languageRef.current].cannotReadConfig);
         console.error('Failed to load context compression setting:', error);
       });
 
@@ -516,7 +518,7 @@ const ChatPage: React.FC = () => {
       } catch (error) {
         const parsed = getParsedApiError(error);
         setContextCompressionEnabled(previousEnabled);
-        setContextCompressionError(parsed.message || '上下文压缩设置保存失败');
+        setContextCompressionError(parsed.message || tx.saveConfigFailed);
       } finally {
         setContextCompressionSaving(false);
       }
@@ -527,6 +529,7 @@ const ChatPage: React.FC = () => {
       contextCompressionLoaded,
       contextCompressionMaskToken,
       contextCompressionSaving,
+      tx,
     ],
   );
 
@@ -680,10 +683,11 @@ const ChatPage: React.FC = () => {
       requestScrollToBottom('smooth');
       await startStream(payload, {
         skillNames: usedSkillNames,
-        skillName: usedSkillNames.join('、'),
+        skillName: usedSkillNames.join(tx.skillSeparator),
+        language,
       });
     },
-    [activeStockContext, getSkillNames, input, loading, normalizeSelectedSkillIds, requestScrollToBottom, selectedSkillIds, sessionId, startStream, tx.general],
+    [activeStockContext, getSkillNames, input, language, loading, normalizeSelectedSkillIds, requestScrollToBottom, selectedSkillIds, sessionId, startStream, tx],
   );
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -741,7 +745,7 @@ const ChatPage: React.FC = () => {
 
   const downloadMessageAsMarkdown = useCallback((msg: Message) => {
     const skillLabel = getMessageSkillLabel(msg, language);
-    const heading = msg.role === 'user' ? '# 用户消息' : `# AI 回复${skillLabel ? ` · ${skillLabel}` : ''}`;
+    const heading = msg.role === 'user' ? tx.messageExportUserHeading : `${tx.messageExportAssistantHeading}${skillLabel ? ` · ${skillLabel}` : ''}`;
     const content = [heading, '', msg.content].join('\n');
     const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
     const url = URL.createObjectURL(blob);
@@ -752,7 +756,7 @@ const ChatPage: React.FC = () => {
     anchor.click();
     document.body.removeChild(anchor);
     URL.revokeObjectURL(url);
-  }, [language]);
+  }, [language, tx]);
 
   const getCurrentStage = (steps: ProgressStep[]): string => {
     if (steps.length === 0) return tx.connecting;
@@ -761,15 +765,15 @@ const ChatPage: React.FC = () => {
     if (last.type === 'tool_start')
       return `${last.display_name || last.tool}...`;
     if (last.type === 'tool_done')
-      return `${last.display_name || last.tool} 完成`;
+      return `${last.display_name || last.tool} ${tx.toolCompleted}`;
     if (last.type === 'stage_start')
-      return last.message || `Starting ${last.stage || 'stage'}...`;
+      return last.message || tx.stageStarting.replace('{stage}', last.stage || tx.stageFallback);
     if (last.type === 'stage_done')
-      return getStageDoneLabel(last);
+      return getStageDoneLabel(last, tx);
     if (last.type === 'pipeline_timeout')
-      return last.message || `${last.stage || 'pipeline'} timed out`;
+      return last.message || tx.pipelineTimedOut.replace('{stage}', last.stage || tx.pipelineFallback);
     if (last.type === 'pipeline_budget_skipped')
-      return getPipelineBudgetSkippedLabel(last);
+      return getPipelineBudgetSkippedLabel(last, tx);
     if (last.type === 'generating')
       return last.message || tx.generating;
     return tx.processing;
@@ -783,7 +787,9 @@ const ChatPage: React.FC = () => {
       (sum, s) => sum + (s.duration || 0),
       0,
     );
-    const summary = `${toolSteps.length} 个工具调用 · ${totalDuration.toFixed(1)}s`;
+    const summary = tx.toolCallsSummary
+      .replace('{count}', String(toolSteps.length))
+      .replace('{duration}', totalDuration.toFixed(1));
 
     return (
       <button
@@ -819,7 +825,7 @@ const ChatPage: React.FC = () => {
         let iconClass = 'chat-progress-dot-muted';
         let text = '';
         if (step.type === 'thinking') {
-          text = step.message || `第 ${step.step} 步：思考`;
+          text = step.message || tx.thinkingStep.replace('{step}', String(step.step));
           statusClass = 'chat-progress-item-thinking';
           iconClass = 'chat-progress-dot-thinking';
         } else if (step.type === 'tool_start') {
@@ -831,24 +837,24 @@ const ChatPage: React.FC = () => {
           statusClass = step.success ? 'chat-progress-item-success' : 'chat-progress-item-danger';
           iconClass = step.success ? 'chat-progress-dot-success' : 'chat-progress-dot-danger';
         } else if (step.type === 'stage_start') {
-          text = step.message || `Starting ${step.stage || 'stage'}...`;
+          text = step.message || tx.stageStarting.replace('{stage}', step.stage || tx.stageFallback);
           statusClass = 'chat-progress-item-thinking';
           iconClass = 'chat-progress-dot-thinking';
         } else if (step.type === 'stage_done') {
           const isSuccess = isStageDoneSuccessful(step.status);
-          text = getStageDoneLabel(step);
+          text = getStageDoneLabel(step, tx);
           statusClass = isSuccess ? 'chat-progress-item-success' : 'chat-progress-item-danger';
           iconClass = isSuccess ? 'chat-progress-dot-success' : 'chat-progress-dot-danger';
         } else if (step.type === 'pipeline_timeout') {
-          text = step.message || `${step.stage || 'pipeline'} timed out`;
+          text = step.message || tx.pipelineTimedOut.replace('{stage}', step.stage || tx.pipelineFallback);
           statusClass = 'chat-progress-item-danger';
           iconClass = 'chat-progress-dot-danger';
         } else if (step.type === 'pipeline_budget_skipped') {
-          text = getPipelineBudgetSkippedLabel(step);
+          text = getPipelineBudgetSkippedLabel(step, tx);
           statusClass = 'chat-progress-item-muted';
           iconClass = 'chat-progress-dot-muted';
         } else if (step.type === 'generating') {
-          text = step.message || '生成分析';
+          text = step.message || tx.generatingAnalysis;
           statusClass = 'chat-progress-item-generating';
           iconClass = 'chat-progress-dot-generating';
         } else {
@@ -919,7 +925,7 @@ const ChatPage: React.FC = () => {
                   type="button"
                   onClick={() => handleSwitchSession(s.session_id)}
                   className={`session-item ${s.session_id === sessionId ? 'active' : ''}`}
-                  aria-label={`${tx.history}: ${s.title}`}
+                  aria-label={`${tx.switchToSession} ${s.title}`}
                   aria-current={s.session_id === sessionId ? 'page' : undefined}
                 >
                   <div className="indicator" />
@@ -1228,7 +1234,7 @@ const ChatPage: React.FC = () => {
                   >
                     {msg.role === 'assistant' && skillLabel && (
                       <div className="mb-2">
-                        <Badge variant="info" className="chat-skill-badge shadow-none" aria-label={`${tx.strategy} ${skillLabel}`}>
+                        <Badge variant="info" className="chat-skill-badge shadow-none" aria-label={`${tx.skillAriaPrefix} ${skillLabel}`}>
                           <svg
                             className="w-3 h-3"
                             fill="none"

@@ -8,6 +8,7 @@ const CHAT_EXPORT_TEXT: Record<UiLanguage, {
   user: string;
   assistant: string;
   filenamePrefix: string;
+  skillSeparator: string;
 }> = {
   zh: {
     locale: 'zh-CN',
@@ -16,6 +17,7 @@ const CHAT_EXPORT_TEXT: Record<UiLanguage, {
     user: '用户',
     assistant: 'AI',
     filenamePrefix: '问股会话',
+    skillSeparator: '、',
   },
   en: {
     locale: 'en-US',
@@ -24,6 +26,7 @@ const CHAT_EXPORT_TEXT: Record<UiLanguage, {
     user: 'User',
     assistant: 'AI',
     filenamePrefix: 'stock_chat_session',
+    skillSeparator: ', ',
   },
   ko: {
     locale: 'ko-KR',
@@ -32,6 +35,7 @@ const CHAT_EXPORT_TEXT: Record<UiLanguage, {
     user: '사용자',
     assistant: 'AI',
     filenamePrefix: '종목문의세션',
+    skillSeparator: ', ',
   },
 };
 
@@ -58,8 +62,15 @@ export function formatSessionAsMarkdown(messages: Message[], language: UiLanguag
 
   for (const msg of messages) {
     const heading = msg.role === 'user' ? `## ${text.user}` : `## ${text.assistant}`;
-    if (msg.role === 'assistant' && msg.skillName) {
-      lines.push(`${heading} (${msg.skillName})`);
+    if (msg.role === 'assistant') {
+      const skillLabel = msg.skillNames?.length
+        ? msg.skillNames.join(text.skillSeparator)
+        : msg.skillName;
+      if (skillLabel) {
+        lines.push(`${heading} (${skillLabel})`);
+      } else {
+        lines.push(heading);
+      }
     } else {
       lines.push(heading);
     }

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修复] 종목 문의(Chat) 페이지·스트리밍 스토어·세션 내보내기의 잔여 하드코딩 중국어 i18n 처리: 진행 단계/도구 호출 요약/관심 종목 토스트/스트리밍 오류·빈 응답 문구를 CHAT_TEXT(zh/en/ko)로 이전, 스킬 구분자 로케일화, 다중 스킬 세션 내보내기 라벨 지원.
 - [修复] 修复 `REPORT_LANGUAGE=ko` 大盘复盘将行情源中文指数、行业和概念标签、缓存复用内容及 Telegram 命令/合并通知包装直接渲染为中文的问题；已本地化常用标签、为未知中文标签提供韩文回退，并拒绝含中文字符的韩文 LLM 输出。
 - [修复] StockScreeningPage 및 SuggestionsList 잔여 하드코딩 중국어 i18n 처리: 헬퍼 함수 text/locale 매개변수화, formatAmount를 Intl.NumberFormat compact로 전환, JSX 라벨/에러/힌트/배지 3언어(zh/en/ko) 지원.
 - [修复] 修复离线测试中大盘复盘 JP/KR 标题、历史记录名称、个股栏 raw summary fallback、市场灯快照构建与实时行情降级路径的回归问题。

@@ -218,6 +218,107 @@ describe('agentChatStore.startStream', () => {
       rawMessage: '分析出错',
     });
   });
+
+  it('localizes the interrupted stream error when meta.language is ko', async () => {
+    vi.mocked(agentApi.chatStream).mockResolvedValue(
+      createStreamResponse([
+        'data: {"type":"thinking","step":1,"message":"분석 중"}',
+      ]),
+    );
+
+    await useAgentChatStore
+      .getState()
+      .startStream(
+        { message: '삼성전자 분석', session_id: 'session-test' },
+        { skillName: '추세 전략', language: 'ko' },
+      );
+
+    const state = useAgentChatStore.getState();
+    expect(state.loading).toBe(false);
+    expect(state.messages).toHaveLength(1);
+    expect(state.chatError).toMatchObject({
+      title: '응답이 완전히 반환되지 않음',
+      message: 'Agent 스트리밍 응답이 완료 전에 중단되었습니다. 다시 시도해 주세요.',
+      category: 'upstream_network',
+      rawMessage: 'Agent stream ended before a done event was received.',
+    });
+  });
+
+  it('falls back to the Korean analysis error when SSE error fields are empty and language is ko', async () => {
+    vi.mocked(agentApi.chatStream).mockResolvedValue(
+      createStreamResponse([
+        'data: {"type":"error","error":"","message":"   ","content":""}',
+      ]),
+    );
+
+    await useAgentChatStore
+      .getState()
+      .startStream(
+        { message: '삼성전자 분석', session_id: 'session-test' },
+        { skillName: '추세 전략', language: 'ko' },
+      );
+
+    const state = useAgentChatStore.getState();
+    expect(state.chatError).toMatchObject({
+      message: '분석 오류',
+      category: 'unknown',
+      rawMessage: '분석 오류',
+    });
+  });
+
+  it('uses Korean defaults for the skill name and empty final content when language is ko', async () => {
+    vi.mocked(agentApi.chatStream).mockResolvedValue(
+      createStreamResponse([
+        'data: {"type":"done","success":true,"content":""}',
+      ]),
+    );
+
+    await useAgentChatStore
+      .getState()
+      .startStream(
+        { message: '삼성전자 분석', session_id: 'session-test' },
+        { language: 'ko' },
+      );
+
+    const state = useAgentChatStore.getState();
+    expect(state.chatError).toBeNull();
+    expect(state.messages).toHaveLength(2);
+    expect(state.messages[0]).toMatchObject({ role: 'user', skillName: '일반' });
+    expect(state.messages[1]).toMatchObject({
+      role: 'assistant',
+      content: '(내용 없음)',
+      skillName: '일반',
+    });
+  });
+
+  it('joins multiple skill names with the Korean separator when language is ko', async () => {
+    vi.mocked(agentApi.chatStream).mockResolvedValue(
+      createStreamResponse([
+        'data: {"type":"done","success":true,"content":"복수 전략 분석 결과"}',
+      ]),
+    );
+
+    await useAgentChatStore
+      .getState()
+      .startStream(
+        {
+          message: '삼성전자 분석',
+          session_id: 'session-test',
+          skills: ['bull_trend', 'ma_golden_cross'],
+        },
+        {
+          skillNames: ['추세 분석', '골든크로스'],
+          language: 'ko',
+        },
+      );
+
+    const state = useAgentChatStore.getState();
+    expect(state.messages[0]).toMatchObject({ skillName: '추세 분석, 골든크로스' });
+    expect(state.messages[1]).toMatchObject({
+      content: '복수 전략 분석 결과',
+      skillName: '추세 분석, 골든크로스',
+    });
+  });
 });
 
 describe('agentChatStore.switchSession', () => {

@@ -8,6 +8,8 @@ import {
   isParsedApiError,
   type ParsedApiError,
 } from '../api/error';
+import { CHAT_TEXT } from '../locales/featureText';
+import type { UiLanguage } from '../i18n/uiText';
 import { generateUUID } from '../utils/uuid';
 
 const STORAGE_KEY_SESSION = 'dsa_chat_session_id';
@@ -45,6 +47,7 @@ export interface Message {
 export interface StreamMeta {
   skillNames?: string[];
   skillName?: string;
+  language?: UiLanguage;
 }
 
 type StreamFailureEvent = {
@@ -237,11 +240,12 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
     const ac = new AbortController();
     set({ abortController: ac });
 
+    const tx = CHAT_TEXT[meta?.language ?? 'zh'];
     const streamSessionId = payload.session_id || storeSessionId;
     const skillNames = meta?.skillNames?.length
       ? meta.skillNames
-      : [meta?.skillName ?? '通用'];
-    const skillName = skillNames.join('、');
+      : [meta?.skillName ?? tx.general];
+    const skillName = skillNames.join(tx.skillSeparator);
 
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -288,14 +292,14 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
           receivedDoneEvent = true;
           const doneEvent = event as unknown as StreamFailureEvent;
           if (doneEvent.success === false) {
-            throw getStreamFailureError(doneEvent, '大模型调用出错，请检查 API Key 配置');
+            throw getStreamFailureError(doneEvent, tx.errorLlmCallFailed);
           }
           finalContent = doneEvent.content ?? '';
           return;
         }
 
         if (event.type === 'error') {
-          throw getStreamFailureError(event as unknown as StreamFailureEvent, '分析出错');
+          throw getStreamFailureError(event as unknown as StreamFailureEvent, tx.errorAnalysis);
         }
 
         currentProgressSteps.push(event);
@@ -332,8 +336,8 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
 
       if (!receivedDoneEvent && !ac.signal.aborted) {
         throw createParsedApiError({
-          title: '回复未完整返回',
-          message: 'Agent 流式响应在完成前中断，请重试。',
+          title: tx.errorIncompleteTitle,
+          message: tx.errorIncompleteMessage,
           rawMessage: 'Agent stream ended before a done event was received.',
           category: 'upstream_network',
         });
@@ -350,7 +354,7 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
             {
               id: (Date.now() + 1).toString(),
               role: 'assistant',
-              content: finalContent || '（无内容）',
+              content: finalContent || tx.noContent,
               skills: payload.skills,
               skill: payload.skills?.[0],
               skillNames,
