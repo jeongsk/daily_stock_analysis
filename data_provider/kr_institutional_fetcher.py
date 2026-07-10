@@ -27,7 +27,9 @@ from __future__ import annotations
 import logging
 import re
 from datetime import timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Dict, List, Optional
+
+from src.services.market_symbol_utils import is_kr_suffix_symbol
 
 logger = logging.getLogger(__name__)
 
@@ -112,3 +114,86 @@ def _date_from_dot_yy(value: Any) -> Optional[str]:
         return None
     yy, mm, dd = match.groups()
     return f"20{yy}-{mm}-{dd}"
+
+
+class KrInstitutionalFetcher:
+    """KR 수급 데이터 계층 — 무설정·fail-open (모듈 docstring 참조)."""
+
+    name = "KrInstitutionalFetcher"
+
+    @staticmethod
+    def _market_of(stock_code: Any) -> Optional[str]:
+        """'005930.KS' -> 'kospi', '068270.KQ' -> 'kosdaq', 그 외 None.
+
+        KR 여부는 중앙화된 suffix 규칙(market_symbol_utils: KS/KQ + 6자리)을
+        재사용하고, 시장 구분만 suffix로 나눈다.
+        """
+        code = str(stock_code or "").strip()
+        if not is_kr_suffix_symbol(code):
+            return None
+        return "kosdaq" if code.upper().endswith(".KQ") else "kospi"
+
+    @staticmethod
+    def _base_code(stock_code: Any) -> str:
+        return str(stock_code or "").strip().split(".", 1)[0]
+
+    @staticmethod
+    def _parse_naver_stock_row(raw: Any) -> Optional[Dict[str, Any]]:
+        if not isinstance(raw, dict):
+            return None
+        date = _date_from_yyyymmdd(raw.get(_NAVER_KEY_DATE))
+        if date is None:
+            return None
+        foreign = _to_int(raw.get(_NAVER_KEY_FOREIGN))
+        institution = _to_int(raw.get(_NAVER_KEY_INSTITUTION))
+        if foreign is None or institution is None:
+            return None  # 필수 결측 -> 행 폐기, 0 조작 금지
+        return {
+            "date": date,
+            "foreign_net": foreign,
+            "institution_net": institution,
+            "individual_net": _to_int(raw.get(_NAVER_KEY_INDIVIDUAL)),
+        }
+
+    @staticmethod
+    def _parse_daum_row(raw: Any) -> Optional[Dict[str, Any]]:
+        if not isinstance(raw, dict):
+            return None
+        date = _date_from_daum(raw.get(_DAUM_KEY_DATE))
+        if date is None:
+            return None
+        foreign = _to_int(raw.get(_DAUM_KEY_FOREIGN))
+        institution = _to_int(raw.get(_DAUM_KEY_INSTITUTION))
+        if foreign is None or institution is None:
+            return None
+        return {
+            "date": date,
+            "foreign_net": foreign,
+            "institution_net": institution,
+            "individual_net": None,  # 다음 소스는 개인 순매수를 제공하지 않는다
+        }
+
+    @staticmethod
+    def _build_flows(
+        market: str,
+        day_rows: List[Dict[str, Any]],
+        source: str,
+        *,
+        unit: str,
+        code: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """정규화 레코드(스펙 §2). summary는 전달된 행 중 최근 최대 5행 누적."""
+        summary_rows = day_rows[:5]
+        record: Dict[str, Any] = {
+            "market": market,
+            "unit": unit,
+            "days": day_rows,
+            "summary": {
+                "foreign_net_5d": sum(r["foreign_net"] for r in summary_rows),
+                "institution_net_5d": sum(r["institution_net"] for r in summary_rows),
+            },
+            "source": source,
+        }
+        if code is not None:
+            record["code"] = code
+        return record
