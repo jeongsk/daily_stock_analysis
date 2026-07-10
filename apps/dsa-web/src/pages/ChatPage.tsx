@@ -31,14 +31,38 @@ import { extractStockCodesFromMessage } from '../utils/chatStockCode';
 import { findMatchingStockCode, includesStockCode, normalizeStockCode } from '../utils/stockCode';
 import type { UiLanguage } from '../i18n/uiText';
 
-// Quick question examples shown on empty state
+// Quick question examples shown on empty state; en/ko messages carry stock codes so the backend can resolve targets
 const QUICK_QUESTIONS = [
-  { label: { zh: '用缠论分析茅台', en: 'Analyze Moutai with Chan theory', ko: 'Chan 이론으로 마오타이 분석' }, message: '用缠论分析茅台', skill: 'chan_theory' },
-  { label: { zh: '波浪理论看宁德时代', en: 'View CATL through wave theory', ko: '파동 이론으로 CATL 보기' }, message: '波浪理论看宁德时代', skill: 'wave_theory' },
-  { label: { zh: '分析比亚迪趋势', en: 'Analyze BYD trend', ko: 'BYD 추세 분석' }, message: '分析比亚迪趋势', skill: 'bull_trend' },
-  { label: { zh: '箱体震荡技能看中芯国际', en: 'Review SMIC with range strategy', ko: '박스권 전략으로 SMIC 보기' }, message: '箱体震荡技能看中芯国际', skill: 'box_oscillation' },
-  { label: { zh: '分析腾讯 hk00700', en: 'Analyze Tencent hk00700', ko: '텐센트 hk00700 분석' }, message: '分析腾讯 hk00700', skill: 'bull_trend' },
-  { label: { zh: '用情绪周期分析东方财富', en: 'Analyze East Money with sentiment cycle', ko: '심리 사이클로 East Money 분석' }, message: '用情绪周期分析东方财富', skill: 'emotion_cycle' },
+  {
+    label: { zh: '用缠论分析茅台', en: 'Analyze Moutai with Chan theory', ko: 'Chan 이론으로 마오타이 분석' },
+    message: { zh: '用缠论分析茅台', en: 'Analyze Moutai (600519) with Chan theory', ko: 'Chan 이론으로 마오타이(600519) 분석해 주세요' },
+    skill: 'chan_theory',
+  },
+  {
+    label: { zh: '波浪理论看宁德时代', en: 'View CATL through wave theory', ko: '파동 이론으로 CATL 보기' },
+    message: { zh: '波浪理论看宁德时代', en: 'Analyze CATL (300750) with wave theory', ko: '파동 이론으로 CATL(300750) 분석해 주세요' },
+    skill: 'wave_theory',
+  },
+  {
+    label: { zh: '分析比亚迪趋势', en: 'Analyze BYD trend', ko: 'BYD 추세 분석' },
+    message: { zh: '分析比亚迪趋势', en: 'Analyze the trend of BYD (002594)', ko: 'BYD(002594) 추세를 분석해 주세요' },
+    skill: 'bull_trend',
+  },
+  {
+    label: { zh: '箱体震荡技能看中芯国际', en: 'Review SMIC with range strategy', ko: '박스권 전략으로 SMIC 보기' },
+    message: { zh: '箱体震荡技能看中芯国际', en: 'Review SMIC (688981) with the range oscillation skill', ko: '박스권 전략으로 SMIC(688981) 분석해 주세요' },
+    skill: 'box_oscillation',
+  },
+  {
+    label: { zh: '分析腾讯 hk00700', en: 'Analyze Tencent hk00700', ko: '텐센트 hk00700 분석' },
+    message: { zh: '分析腾讯 hk00700', en: 'Analyze Tencent (hk00700)', ko: '텐센트(hk00700)를 분석해 주세요' },
+    skill: 'bull_trend',
+  },
+  {
+    label: { zh: '用情绪周期分析东方财富', en: 'Analyze East Money with sentiment cycle', ko: '심리 사이클로 East Money 분석' },
+    message: { zh: '用情绪周期分析东方财富', en: 'Analyze East Money (300059) with the sentiment cycle', ko: '심리 사이클로 East Money(300059) 분석해 주세요' },
+    skill: 'emotion_cycle',
+  },
 ];
 
 const SKILL_LABELS: Record<string, Partial<Record<UiLanguage, string>>> = {
@@ -618,7 +642,7 @@ const ChatPage: React.FC = () => {
     }
 
     const hydrationToken = ++followUpHydrationTokenRef.current;
-    setInput(buildFollowUpPrompt(stock, name));
+    setInput(buildFollowUpPrompt(stock, name, languageRef.current));
     setActiveStockCode(stock);
     setActiveStockContext({
       stock_code: stock,
@@ -699,7 +723,7 @@ const ChatPage: React.FC = () => {
 
   const handleQuickQuestion = (q: (typeof QUICK_QUESTIONS)[0]) => {
     setSelectedSkillIds([q.skill]);
-    handleSend(q.message, [q.skill]);
+    handleSend(q.message[language] || q.message.zh, [q.skill]);
   };
 
   const showSendFeedback = useCallback((nextToast: { type: 'success' | 'error'; message: string }, durationMs: number) => {

@@ -17,11 +17,12 @@ interface SettingsPanelErrorBoundaryLabels {
   runtimeErrorMessage: string;
   defaultDiagnosticHint: string;
   errorSummaryPrefix: string;
+  unknownRuntimeError: string;
 }
 
 interface SettingsPanelErrorBoundaryState {
   hasError: boolean;
-  errorSummary: string;
+  caughtError: unknown;
 }
 
 const MAX_ERROR_SUMMARY_LENGTH = 180;
@@ -42,13 +43,13 @@ function sanitizeUrlLikeText(value: string) {
   });
 }
 
-function getSafeErrorSummary(error: unknown) {
+function getSafeErrorSummary(error: unknown, unknownRuntimeError: string) {
   const rawMessage = error instanceof Error
     ? error.message
     : typeof error === 'string'
       ? error
-      : '未知前端运行时异常';
-  const normalized = rawMessage.replace(/\s+/g, ' ').trim() || '未知前端运行时异常';
+      : unknownRuntimeError;
+  const normalized = rawMessage.replace(/\s+/g, ' ').trim() || unknownRuntimeError;
   const sanitized = sanitizeUrlLikeText(normalized)
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, 'Bearer [redacted]')
     .replace(/\b(sk-[A-Za-z0-9_-]{8,})\b/g, '[redacted-key]')
@@ -70,13 +71,13 @@ class SettingsPanelErrorBoundaryImpl extends Component<
 > {
   override state: SettingsPanelErrorBoundaryState = {
     hasError: false,
-    errorSummary: '',
+    caughtError: null,
   };
 
   static getDerivedStateFromError(error: unknown): SettingsPanelErrorBoundaryState {
     return {
       hasError: true,
-      errorSummary: getSafeErrorSummary(error),
+      caughtError: error,
     };
   }
 
@@ -86,7 +87,7 @@ class SettingsPanelErrorBoundaryImpl extends Component<
 
   override componentDidUpdate(prevProps: SettingsPanelErrorBoundaryProps) {
     if (this.state.hasError && prevProps.resetKey !== this.props.resetKey) {
-      this.setState({ hasError: false, errorSummary: '' });
+      this.setState({ hasError: false, caughtError: null });
     }
   }
 
@@ -94,6 +95,8 @@ class SettingsPanelErrorBoundaryImpl extends Component<
     if (!this.state.hasError) {
       return this.props.children;
     }
+
+    const errorSummary = getSafeErrorSummary(this.state.caughtError, this.props.labels.unknownRuntimeError);
 
     return (
       <div className={cn('rounded-[1.5rem] border settings-border bg-card/94 p-5 shadow-soft-card-strong backdrop-blur-sm', this.props.className)}>
@@ -110,9 +113,9 @@ class SettingsPanelErrorBoundaryImpl extends Component<
               ) : (
                 <p>{this.props.labels.defaultDiagnosticHint}</p>
               )}
-              {this.state.errorSummary ? (
+              {errorSummary ? (
                 <p className="break-words font-mono text-xs opacity-80">
-                  {this.props.labels.errorSummaryPrefix}{this.state.errorSummary}
+                  {this.props.labels.errorSummaryPrefix}{errorSummary}
                 </p>
               ) : null}
             </div>
@@ -131,6 +134,7 @@ export const SettingsPanelErrorBoundary = (props: SettingsPanelErrorBoundaryProp
         runtimeErrorMessage: 'This settings area hit a frontend runtime error. Other settings remain usable.',
         defaultDiagnosticHint: 'Provide the release version, runtime environment, and trigger path to help diagnose the issue.',
         errorSummaryPrefix: 'Error summary: ',
+        unknownRuntimeError: 'Unknown frontend runtime error',
       }
     : language === 'ko'
       ? {
@@ -138,12 +142,14 @@ export const SettingsPanelErrorBoundary = (props: SettingsPanelErrorBoundaryProp
           runtimeErrorMessage: '이 설정 영역에서 프론트엔드 런타임 오류가 발생했습니다. 다른 설정은 계속 사용할 수 있습니다.',
           defaultDiagnosticHint: '릴리스 버전, 실행 환경, 트리거 경로를 제공하여 문제 진단에 도움을 주세요.',
           errorSummaryPrefix: '오류 요약: ',
+          unknownRuntimeError: '알 수 없는 프론트엔드 런타임 오류',
         }
       : {
           loadFailedSuffix: '加载失败',
           runtimeErrorMessage: '该设置区域发生前端运行时异常，页面其他设置仍可继续使用。',
           defaultDiagnosticHint: '请补充 release 版本、运行环境和触发入口，便于定位问题。',
           errorSummaryPrefix: '错误摘要：',
+          unknownRuntimeError: '未知前端运行时异常',
         };
 
   return <SettingsPanelErrorBoundaryImpl {...props} labels={labels} />;

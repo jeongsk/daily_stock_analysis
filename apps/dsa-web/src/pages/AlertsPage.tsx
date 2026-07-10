@@ -27,6 +27,8 @@ import { ALERT_PAGE_TEXT } from '../locales/featureText';
 
 const PAGE_SIZE = 20;
 
+type AlertPageText = Record<keyof (typeof ALERT_PAGE_TEXT)['zh'], string>;
+
 function enabledFilterToQuery(value: AlertRuleEnabledFilter): boolean | undefined {
   if (value === 'enabled') return true;
   if (value === 'disabled') return false;
@@ -42,22 +44,22 @@ function testVariant(result: AlertRuleTestResponse): 'success' | 'warning' | 'da
   return result.triggered ? 'success' : 'warning';
 }
 
-function renderTestResultMessage(result: AlertRuleTestResponse): React.ReactNode {
+function renderTestResultMessage(result: AlertRuleTestResponse, tx: AlertPageText): React.ReactNode {
   const targetResults = result.targetResults ?? [];
   return (
     <div className="space-y-2">
       <div>
         {result.message}
-        {' · 状态：'}
+        {` · ${tx.testStatus}`}
         {result.status}
-        {' · 触发：'}
-        {result.triggered ? '是' : '否'}
-        {' · 观察值：'}
+        {` · ${tx.testTriggered}`}
+        {result.triggered ? tx.testYes : tx.testNo}
+        {` · ${tx.testObserved}`}
         {result.observedValue == null ? '--' : String(result.observedValue)}
       </div>
       {result.evaluatedCount != null && result.evaluatedCount > 1 ? (
         <div className="text-xs">
-          评估 {result.evaluatedCount} · 触发 {result.triggeredCount ?? 0} · 降级 {result.degradedCount ?? 0} · 跳过 {result.skippedCount ?? 0}
+          {tx.countEvaluated} {result.evaluatedCount} · {tx.countTriggered} {result.triggeredCount ?? 0} · {tx.countDegraded} {result.degradedCount ?? 0} · {tx.countSkipped} {result.skippedCount ?? 0}
         </div>
       ) : null}
       {targetResults.length > 1 ? (
@@ -77,26 +79,25 @@ function renderTestResultMessage(result: AlertRuleTestResponse): React.ReactNode
   );
 }
 
-const notificationChannelLabel: Record<string, string> = {
-  __cooldown__: '业务冷却',
-  __cooldown_read_failed__: '冷却读取失败',
-  __noise_suppressed__: '通知降噪',
-  __no_channel__: '无可用渠道',
-  __dispatch__: '通知调度',
-  __context__: '会话渠道',
-};
-
-function formatNotificationChannel(channel: string): string {
+function formatNotificationChannel(channel: string, tx: AlertPageText): string {
+  const notificationChannelLabel: Record<string, string> = {
+    __cooldown__: tx.channelCooldown,
+    __cooldown_read_failed__: tx.channelCooldownReadFailed,
+    __noise_suppressed__: tx.channelNoiseSuppressed,
+    __no_channel__: tx.channelNoChannel,
+    __dispatch__: tx.channelDispatch,
+    __context__: tx.channelContext,
+  };
   return notificationChannelLabel[channel] ?? channel;
 }
 
-function formatNotificationStatus(notification: AlertNotificationItem): string {
-  if (notification.success) return '成功';
-  if (notification.errorCode === 'cooldown_active') return '冷却抑制';
-  if (notification.errorCode === 'cooldown_read_failed') return '冷却读取失败';
-  if (notification.errorCode === 'noise_suppressed') return '降噪抑制';
-  if (notification.errorCode === 'no_channel') return '无渠道';
-  return '失败';
+function formatNotificationStatus(notification: AlertNotificationItem, tx: AlertPageText): string {
+  if (notification.success) return tx.statusSuccess;
+  if (notification.errorCode === 'cooldown_active') return tx.statusCooldownSuppressed;
+  if (notification.errorCode === 'cooldown_read_failed') return tx.statusCooldownReadFailed;
+  if (notification.errorCode === 'noise_suppressed') return tx.statusNoiseSuppressed;
+  if (notification.errorCode === 'no_channel') return tx.statusNoChannel;
+  return tx.statusFailed;
 }
 
 const AlertsPage: React.FC = () => {
@@ -214,7 +215,7 @@ const AlertsPage: React.FC = () => {
     setCreateSuccess(null);
     try {
       const created = await alertsApi.createRule(payload);
-      setCreateSuccess(`已创建告警规则「${created.name}」`);
+      setCreateSuccess(tx.createdRule.replace('{name}', created.name));
       await loadRules(1);
       return true;
     } catch (error) {
@@ -319,7 +320,7 @@ const AlertsPage: React.FC = () => {
             <InlineAlert
               title={tx.testResult}
               variant={testVariant(testResult)}
-              message={renderTestResultMessage(testResult)}
+              message={renderTestResultMessage(testResult, tx)}
             />
           ) : null}
         </div>
@@ -354,8 +355,8 @@ const AlertsPage: React.FC = () => {
               <tbody className="divide-y divide-border/40">
                 {notifications.map((notification) => (
                   <tr key={notification.id}>
-                    <td className="px-3 py-3">{formatNotificationChannel(notification.channel)}</td>
-                    <td className="px-3 py-3">{formatNotificationStatus(notification)}</td>
+                    <td className="px-3 py-3">{formatNotificationChannel(notification.channel, tx)}</td>
+                    <td className="px-3 py-3">{formatNotificationStatus(notification, tx)}</td>
                     <td className="px-3 py-3">{notification.errorCode ?? '--'}</td>
                     <td className="px-3 py-3">{notification.latencyMs == null ? '--' : `${notification.latencyMs}ms`}</td>
                     <td className="px-3 py-3">{formatDateTime(notification.createdAt)}</td>

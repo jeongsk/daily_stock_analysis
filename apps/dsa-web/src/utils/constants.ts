@@ -4,7 +4,7 @@ declare const __APP_PACKAGE_VERSION__: string | undefined;
 declare const __APP_BUILD_TIME__: string | undefined;
 
 const PLACEHOLDER_WEB_VERSION = '0.0.0';
-const UNKNOWN_BUILD_TIME = '未提供';
+export const UNKNOWN_BUILD_TIME = '未提供';
 
 // 默认保持同源 API，避免生产/静态部署时把请求错误打到用户本机 localhost。
 // 仅在显式提供 VITE_API_URL 时才覆盖默认行为。

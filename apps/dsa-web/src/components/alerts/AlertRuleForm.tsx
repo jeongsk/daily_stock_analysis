@@ -372,9 +372,9 @@ export const AlertRuleForm: React.FC<AlertRuleFormProps> = ({ onSubmit, isSubmit
     event.preventDefault();
     let resolvedTarget = target.trim();
     if (targetScope === 'single_symbol') {
-      const targetValidation = validateStockCode(target);
+      const targetValidation = validateStockCode(target, language);
       if (!targetValidation.valid) {
-        setFormError(language === 'en' ? text.invalidStockCode : (targetValidation.message ?? text.invalidStockCode));
+        setFormError(targetValidation.message ?? text.invalidStockCode);
         return;
       }
       resolvedTarget = targetValidation.normalized;

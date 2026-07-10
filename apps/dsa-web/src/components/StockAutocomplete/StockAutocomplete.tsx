@@ -38,7 +38,7 @@ function FallbackInput({
   onChange,
   onSubmit,
   disabled = false,
-  placeholder = '输入股票代码或名称',
+  placeholder,
   className,
 }: StockAutocompleteProps) {
   return (
@@ -97,7 +97,7 @@ function StockAutocompleteInner({
   onChange,
   onSubmit,
   disabled = false,
-  placeholder = '输入股票代码或名称',
+  placeholder,
   className,
 }: StockAutocompleteProps) {
   const { index, loading, fallback } = useStockIndex();
@@ -297,9 +297,15 @@ function StockAutocompleteInner({
 }
 
 export function StockAutocomplete(props: StockAutocompleteProps) {
+  const { t } = useUiLanguage();
+  const resolvedProps: StockAutocompleteProps = {
+    ...props,
+    placeholder: props.placeholder ?? t('autocomplete.placeholder'),
+  };
+
   return (
-    <StockAutocompleteBoundary {...props}>
-      <StockAutocompleteInner {...props} />
+    <StockAutocompleteBoundary {...resolvedProps}>
+      <StockAutocompleteInner {...resolvedProps} />
     </StockAutocompleteBoundary>
   );
 }

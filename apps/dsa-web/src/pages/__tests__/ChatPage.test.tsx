@@ -710,7 +710,7 @@ describe('ChatPage', () => {
     await waitFor(() => {
       expect(mockStartStream).toHaveBeenCalledWith(
         expect.objectContaining({
-          message: '用缠论分析茅台',
+          message: 'Chan 이론으로 마오타이(600519) 분석해 주세요',
           skills: ['chan_theory'],
         }),
         expect.objectContaining({

@@ -1,4 +1,5 @@
 import type { AnalysisReport } from '../types/analysis';
+import type { UiLanguage } from '../i18n/uiText';
 import { historyApi } from '../api/history';
 import { validateStockCode } from './validation';
 
@@ -64,9 +65,16 @@ export function parseFollowUpRecordId(recordId: string | null): number | undefin
   return parsed;
 }
 
-export function buildFollowUpPrompt(stockCode: string, stockName: string | null): string {
+const FOLLOW_UP_PROMPT_TEMPLATE: Record<UiLanguage, string> = {
+  zh: '请深入分析 {stock}',
+  en: 'Provide an in-depth analysis of {stock}',
+  ko: '{stock} 심층 분석해 주세요',
+};
+
+export function buildFollowUpPrompt(stockCode: string, stockName: string | null, language: UiLanguage = 'zh'): string {
   const displayName = stockName ? `${stockName}(${stockCode})` : stockCode;
-  return `请深入分析 ${displayName}`;
+  const template = FOLLOW_UP_PROMPT_TEMPLATE[language] ?? FOLLOW_UP_PROMPT_TEMPLATE.zh;
+  return template.replace('{stock}', displayName);
 }
 
 export function buildChatFollowUpContext(

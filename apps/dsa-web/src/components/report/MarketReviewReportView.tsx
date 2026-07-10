@@ -101,12 +101,15 @@ const getSectionIcon = (title: string): typeof FileText => {
   return FileText;
 };
 
-const splitMarketReviewSections = (markdown: string): MarketReviewSection[] => {
+const splitMarketReviewSections = (
+  markdown: string,
+  fallbackTitles: { fullReview: string; overview: string },
+): MarketReviewSection[] => {
   const matches = Array.from(markdown.matchAll(SECTION_HEADING_PATTERN));
   if (matches.length === 0) {
     return [{
       id: 'full-review',
-      title: '复盘正文',
+      title: fallbackTitles.fullReview,
       content: markdown,
       icon: FileText,
     }];
@@ -116,7 +119,7 @@ const splitMarketReviewSections = (markdown: string): MarketReviewSection[] => {
   const sections: MarketReviewSection[] = intro
     ? [{
         id: 'overview',
-        title: '复盘概览',
+        title: fallbackTitles.overview,
         content: intro,
         icon: FileText,
       }]
@@ -257,6 +260,8 @@ const formatMarketHighLow = (high: unknown, low: unknown): string => {
 };
 
 const MARKET_REVIEW_TEXT: Record<ReportLanguage, {
+  fullReviewTitle: string;
+  overviewTitle: string;
   reviewSummary: string;
   noReviewSummary: string;
   noSentimentScore: string;
@@ -280,6 +285,8 @@ const MARKET_REVIEW_TEXT: Record<ReportLanguage, {
   lagging: string;
 }> = {
   zh: {
+    fullReviewTitle: '复盘正文',
+    overviewTitle: '复盘概览',
     reviewSummary: '复盘摘要',
     noReviewSummary: '暂无摘要',
     noSentimentScore: '暂无评分',
@@ -303,6 +310,8 @@ const MARKET_REVIEW_TEXT: Record<ReportLanguage, {
     lagging: '领跌',
   },
   en: {
+    fullReviewTitle: 'Full Review',
+    overviewTitle: 'Review Overview',
     reviewSummary: 'Review Summary',
     noReviewSummary: 'No review summary yet',
     noSentimentScore: 'No score yet',
@@ -326,6 +335,8 @@ const MARKET_REVIEW_TEXT: Record<ReportLanguage, {
     lagging: 'Lagging',
   },
   ko: {
+    fullReviewTitle: '리뷰 본문',
+    overviewTitle: '리뷰 개요',
     reviewSummary: '시장 요약',
     noReviewSummary: '아직 요약이 없습니다',
     noSentimentScore: '아직 점수가 없습니다',
@@ -392,9 +403,14 @@ export const MarketReviewReportView: React.FC<MarketReviewReportViewProps> = ({
   const sections = useMemo(
     () => {
       const payloadSections = getPayloadSections(marketReviewPayload);
-      return payloadSections.length > 0 ? payloadSections : splitMarketReviewSections(structuredContent);
+      return payloadSections.length > 0
+        ? payloadSections
+        : splitMarketReviewSections(structuredContent, {
+            fullReview: marketReviewText.fullReviewTitle,
+            overview: marketReviewText.overviewTitle,
+          });
     },
-    [marketReviewPayload, structuredContent],
+    [marketReviewPayload, structuredContent, marketReviewText],
   );
   const structuredMarketData = useMemo(
     () => getStructuredMarketData(marketReviewPayload),

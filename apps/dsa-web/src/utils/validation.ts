@@ -1,8 +1,16 @@
+import type { UiLanguage } from '../i18n/uiText';
+
 interface ValidationResult {
   valid: boolean;
   message?: string;
   normalized: string;
 }
+
+const VALIDATION_TEXT: Record<UiLanguage, { emptyStockCode: string; invalidStockCode: string }> = {
+  zh: { emptyStockCode: '请输入股票代码', invalidStockCode: '股票代码格式不正确' },
+  en: { emptyStockCode: 'Please enter a stock code', invalidStockCode: 'Invalid stock code format' },
+  ko: { emptyStockCode: '종목 코드를 입력해 주세요', invalidStockCode: '종목 코드 형식이 올바르지 않습니다' },
+};
 
 const SUPPORTED_QUERY_CHARACTERS = /^[A-Z0-9.\u3400-\u9FFF\s]+$/;
 
@@ -29,18 +37,19 @@ export const looksLikeStockCode = (value: string): boolean => {
 /**
  * Validate common A-share, HK, US, JP, and KR stock code formats.
  */
-export const validateStockCode = (value: string): ValidationResult => {
+export const validateStockCode = (value: string, language: UiLanguage = 'zh'): ValidationResult => {
   const normalized = value.trim().toUpperCase();
+  const text = VALIDATION_TEXT[language] ?? VALIDATION_TEXT.zh;
 
   if (!normalized) {
-    return { valid: false, message: '请输入股票代码', normalized };
+    return { valid: false, message: text.emptyStockCode, normalized };
   }
 
   const valid = looksLikeStockCode(normalized);
 
   return {
     valid,
-    message: valid ? undefined : '股票代码格式不正确',
+    message: valid ? undefined : text.invalidStockCode,
     normalized,
   };
 };

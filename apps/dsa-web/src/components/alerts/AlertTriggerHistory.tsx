@@ -20,7 +20,8 @@ function formatNullable(value?: string | number | null): string {
 }
 
 function renderPhaseQuality(trigger: AlertTriggerItem, language: string): React.ReactNode {
-  const phase = getMarketPhaseSummaryLabel(trigger.marketPhaseSummary, language as 'zh' | 'en');
+  const tx = ALERT_TRIGGER_TEXT[language as keyof typeof ALERT_TRIGGER_TEXT] ?? ALERT_TRIGGER_TEXT.zh;
+  const phase = getMarketPhaseSummaryLabel(trigger.marketPhaseSummary, language as 'zh' | 'en' | 'ko');
   const quality = trigger.analysisContextPackOverview?.dataQuality?.level;
   const limitations = trigger.analysisContextPackOverview?.dataQuality?.limitations?.slice(0, 2) ?? [];
   if (!phase && !quality && limitations.length === 0) {
@@ -28,8 +29,8 @@ function renderPhaseQuality(trigger: AlertTriggerItem, language: string): React.
   }
   return (
     <div className="space-y-1">
-      {phase ? <Badge variant="default">{phase.replace('市场阶段: ', '').replace('市场阶段：', '')}</Badge> : null}
-      {quality ? <div className="text-xs text-secondary-text">{ALERT_TRIGGER_TEXT[language as keyof typeof ALERT_TRIGGER_TEXT]?.quality ?? '质量'}{quality}</div> : null}
+      {phase ? <Badge variant="default">{phase.replace(/^[^:：]*[:：]\s*/, '')}</Badge> : null}
+      {quality ? <div className="text-xs text-secondary-text">{tx.quality}{quality}</div> : null}
       {limitations.length ? (
         <div className="max-w-[180px] text-xs text-muted-text">{limitations.join('；')}</div>
       ) : null}

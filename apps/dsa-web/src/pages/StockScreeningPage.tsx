@@ -231,6 +231,7 @@ const SCREENING_LOCAL_TEXT = {
     unavailableHint: '适配层当前不可用，请先确认后端已安装依赖并重启服务，必要时执行 pip install -r requirements.txt 或使用设置页/服务端 /install 接口进行修复安装。',
     experimentalNotice: 'AlphaSift 选股仍处于实验性质，结果仅用于研究和辅助判断，不构成投资建议；市场有风险，交易决策和损益由使用者自行承担。',
     marketCN: 'A 股',
+    strategyLabel: '当前策略：',
     changePctLabel: '涨跌幅',
     trendLabel: '趋势',
     persistenceLabel: '持续',
@@ -340,6 +341,7 @@ const SCREENING_LOCAL_TEXT = {
     unavailableHint: 'The adapter layer is currently unavailable. Confirm the backend has dependencies installed and restart the service. If needed, run pip install -r requirements.txt or use the settings page / server /install endpoint to repair the installation.',
     experimentalNotice: 'AlphaSift screening is still experimental. Results are for research and auxiliary judgment only and do not constitute investment advice. Markets carry risk; trading decisions and losses are borne by the user.',
     marketCN: 'A-shares',
+    strategyLabel: 'Current strategy: ',
     changePctLabel: 'Change',
     trendLabel: 'Trend',
     persistenceLabel: 'Persistence',
@@ -449,6 +451,7 @@ const SCREENING_LOCAL_TEXT = {
     unavailableHint: '어댑터 레이어를 현재 사용할 수 없습니다. 백엔드에 의존성이 설치되었는지 확인하고 서비스를 재시작하세요. 필요한 경우 pip install -r requirements.txt를 실행하거나 설정 페이지 / 서버 /install 엔드포인트를 사용하여 설치를 복구하세요.',
     experimentalNotice: 'AlphaSift 스크리닝은 여전히 실험 단계입니다. 결과는 연구 및 보조 판단용이며 투자 조언을 구성하지 않습니다. 시장에는 리스크가 수반되며, 거래 결정과 손실은 사용자에게 있습니다.',
     marketCN: 'A주',
+    strategyLabel: '현재 전략: ',
     changePctLabel: '등락률',
     trendLabel: '추세',
     persistenceLabel: '지속',
@@ -1597,7 +1600,7 @@ const StockScreeningPage: React.FC = () => {
               <p className="mt-1 text-xs text-secondary-text">
                 {loading
                   ? `${taskMessage || localText.runningTask} · ${taskProgress}%`
-                  : `当前策略：${displayedStrategy} · ${localText.marketCN}`}
+                  : `${localText.strategyLabel}${displayedStrategy} · ${localText.marketCN}`}
               </p>
             </div>
           </div>

@@ -7,7 +7,53 @@ import type {
   PortfolioPositionItem,
   PortfolioSide,
 } from '../types/portfolio';
+import type { UiLanguage } from '../i18n/uiText';
 import { toDateInputValue } from './format';
+
+const POSITION_PRICE_TEXT: Record<UiLanguage, {
+  missing: string;
+  realtime: string;
+  close: string;
+  unknownSource: string;
+}> = {
+  zh: { missing: '缺价', realtime: '实时价', close: '收盘价', unknownSource: '未知来源' },
+  en: { missing: 'No price', realtime: 'Realtime', close: 'Close', unknownSource: 'Unknown source' },
+  ko: { missing: '가격 없음', realtime: '실시간가', close: '종가', unknownSource: '알 수 없는 출처' },
+};
+
+const FX_FEEDBACK_TEXT: Record<UiLanguage, {
+  refreshDisabled: string;
+  noPairs: string;
+  refreshed: string;
+  summary: string;
+  partialStale: string;
+  partialFailed: string;
+}> = {
+  zh: {
+    refreshDisabled: '汇率在线刷新已被禁用。',
+    noPairs: '当前范围无可刷新的汇率对。',
+    refreshed: '汇率已刷新，共更新 {updated} 对。',
+    summary: '更新 {updated} 对，仍过期 {stale} 对，失败 {error} 对。',
+    partialStale: '已尝试刷新，但仍有部分货币对使用 stale/fallback 汇率。{summary}',
+    partialFailed: '在线刷新未完全成功。{summary}',
+  },
+  en: {
+    refreshDisabled: 'Online FX refresh is disabled.',
+    noPairs: 'No FX pairs to refresh in the current scope.',
+    refreshed: 'FX rates refreshed; {updated} pairs updated.',
+    summary: '{updated} updated, {stale} still stale, {error} failed.',
+    partialStale: 'Refresh attempted, but some currency pairs still use stale/fallback rates. {summary}',
+    partialFailed: 'Online refresh did not fully succeed. {summary}',
+  },
+  ko: {
+    refreshDisabled: '환율 온라인 새로고침이 비활성화되어 있습니다.',
+    noPairs: '현재 범위에 새로고침할 환율 쌍이 없습니다.',
+    refreshed: '환율이 새로고침되었습니다. 총 {updated}쌍 갱신.',
+    summary: '갱신 {updated}쌍, 만료 유지 {stale}쌍, 실패 {error}쌍.',
+    partialStale: '새로고침을 시도했지만 일부 통화쌍은 여전히 stale/fallback 환율을 사용합니다. {summary}',
+    partialFailed: '온라인 새로고침이 완전히 성공하지 못했습니다. {summary}',
+  },
+};
 
 export type FxRefreshFeedback = {
   tone: 'neutral' | 'success' | 'warning';
@@ -53,15 +99,16 @@ export function formatPositionMoney(value: number, row: PortfolioPositionItem): 
   return formatMoney(value, row.valuationCurrency);
 }
 
-export function getPositionPriceLabel(row: PortfolioPositionItem): string {
-  if (!hasPositionPrice(row)) return '缺价';
+export function getPositionPriceLabel(row: PortfolioPositionItem, language: UiLanguage = 'zh'): string {
+  const text = POSITION_PRICE_TEXT[language] ?? POSITION_PRICE_TEXT.zh;
+  if (!hasPositionPrice(row)) return text.missing;
   if (row.priceSource === 'realtime_quote') {
-    return row.priceProvider ? `实时价 · ${row.priceProvider}` : '实时价';
+    return row.priceProvider ? `${text.realtime} · ${row.priceProvider}` : text.realtime;
   }
   if (row.priceSource === 'history_close') {
-    return row.priceStale && row.priceDate ? `收盘价 · ${row.priceDate}` : '收盘价';
+    return row.priceStale && row.priceDate ? `${text.close} · ${row.priceDate}` : text.close;
   }
-  return row.priceSource || '未知来源';
+  return row.priceSource || text.unknownSource;
 }
 
 export function formatSideLabel(value: PortfolioSide): string {
@@ -84,39 +131,43 @@ export function formatBrokerLabel(value: string, displayName?: string): string {
   return value;
 }
 
-export function buildFxRefreshFeedback(data: PortfolioFxRefreshResponse): FxRefreshFeedback {
+export function buildFxRefreshFeedback(data: PortfolioFxRefreshResponse, language: UiLanguage = 'zh'): FxRefreshFeedback {
+  const text = FX_FEEDBACK_TEXT[language] ?? FX_FEEDBACK_TEXT.zh;
   if (data.refreshEnabled === false) {
     return {
       tone: 'neutral',
-      text: '汇率在线刷新已被禁用。',
+      text: text.refreshDisabled,
     };
   }
 
   if (data.pairCount === 0) {
     return {
       tone: 'neutral',
-      text: '当前范围无可刷新的汇率对。',
+      text: text.noPairs,
     };
   }
 
   if (data.updatedCount > 0 && data.staleCount === 0 && data.errorCount === 0) {
     return {
       tone: 'success',
-      text: `汇率已刷新，共更新 ${data.updatedCount} 对。`,
+      text: text.refreshed.replace('{updated}', String(data.updatedCount)),
     };
   }
 
-  const summary = `更新 ${data.updatedCount} 对，仍过期 ${data.staleCount} 对，失败 ${data.errorCount} 对。`;
+  const summary = text.summary
+    .replace('{updated}', String(data.updatedCount))
+    .replace('{stale}', String(data.staleCount))
+    .replace('{error}', String(data.errorCount));
   if (data.staleCount > 0) {
     return {
       tone: 'warning',
-      text: `已尝试刷新，但仍有部分货币对使用 stale/fallback 汇率。${summary}`,
+      text: text.partialStale.replace('{summary}', summary),
     };
   }
 
   return {
     tone: 'warning',
-    text: `在线刷新未完全成功。${summary}`,
+    text: text.partialFailed.replace('{summary}', summary),
   };
 }
 

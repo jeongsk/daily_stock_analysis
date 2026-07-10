@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修复] 웹 공용 컴포넌트·페이지·스토어의 잔여 하드코딩 중국어 i18n 처리: 알림 센터 테스트 결과/알림 채널·상태 라벨, 종목 자동완성·알림 폼·시장 리뷰 뷰, 스크리닝 전략 라벨, 설정 진단 힌트·빌드 시간, Chat 빠른 질문·후속 분석 프롬프트, 포트폴리오 가격 출처·환율 새로고침 피드백, 종목 코드 검증·분석 제출 오류 메시지를 3언어(zh/en/ko) 테이블로 이전.
 - [修复] 리포트 개요의 '관련 테마(关联板块)' 섹션 중복 렌더링 수정: upstream 동기화 머지에서 되살아난 구(舊) 관련 보드 블록을 제거하고 upstream 단일 섹션 구조로 복원 (ko 표시 언어 지원 유지).
 - [修复] 알림 규칙 폼의 시장 구역 옵션을 upstream JP/KR 서비스 경계(#1823)에 맞게 재정렬: 마켓 라이트 알림은 cn/hk/us만 지원하므로 jp/kr 옵션·라벨 제거 및 `MarketRegion` 타입 원복.
 - [测试] SettingsPage 한국어 첫 실행 설정 테스트에 누락된 `activeCategory: 'base'` mock을 보완해 첫 실행 설정 카드가 실제로 렌더링된 상태에서 검증하도록 수정.

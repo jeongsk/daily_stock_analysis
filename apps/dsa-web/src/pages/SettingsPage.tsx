@@ -22,7 +22,7 @@ import {
   SettingsPanelErrorBoundary,
   SettingsSectionCard,
 } from '../components/settings';
-import { WEB_BUILD_INFO } from '../utils/constants';
+import { UNKNOWN_BUILD_TIME, WEB_BUILD_INFO } from '../utils/constants';
 import { getCategoryDescription } from '../utils/systemConfigI18n';
 import type {
   ConfigValidationIssue,
@@ -1544,7 +1544,9 @@ const SettingsPage: React.FC = () => {
   const settingsPanelDiagnosticHint = isDesktopRuntime
     ? uiLanguage === 'en'
       ? <>Check and provide the desktop log <code>desktop.log</code>, plus the release version, Windows version, and trigger path.</>
-      : <>请查看并提供桌面端日志 <code>desktop.log</code>，同时补充 release 版本、Windows 版本和触发入口。</>
+      : uiLanguage === 'ko'
+        ? <>데스크톱 로그 <code>desktop.log</code>를 확인해 제공하고, release 버전, Windows 버전, 트리거 경로도 함께 알려주세요.</>
+        : <>请查看并提供桌面端日志 <code>desktop.log</code>，同时补充 release 版本、Windows 版本和触发入口。</>
     : t('settings.diagnosticHintWeb');
   const activeConfigPanel = hasActiveConfigItems ? (
     <SettingsSectionCard
@@ -1776,7 +1778,9 @@ const SettingsPage: React.FC = () => {
                       {t('settings.versionBuildTime')}
                     </p>
                     <p className="mt-2 break-all font-mono text-sm text-foreground">
-                      {WEB_BUILD_INFO.buildTime}
+                      {WEB_BUILD_INFO.buildTime === UNKNOWN_BUILD_TIME
+                        ? t('settings.versionBuildTimeUnknown')
+                        : WEB_BUILD_INFO.buildTime}
                     </p>
                   </div>
                   {shouldShowDesktopVersionCard ? (

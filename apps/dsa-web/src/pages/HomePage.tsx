@@ -47,6 +47,8 @@ const HomePage: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { language: uiLanguage, t } = useUiLanguage();
+  const uiLanguageRef = useRef(uiLanguage);
+  uiLanguageRef.current = uiLanguage;
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isSubmittingMarketReview, setIsSubmittingMarketReview] = useState(false);
   const [marketReviewNotice, setMarketReviewNotice] = useState<MarketReviewNotice>(null);
@@ -357,6 +359,11 @@ const HomePage: React.FC = () => {
     return requiredNeedsAction.slice(0, 3).join(uiLanguage === 'en' ? ', ' : '、');
   }, [setupStatus, uiLanguage]);
 
+  const handleTaskFailed = useCallback(
+    (task: TaskInfo) => syncTaskFailed(task, uiLanguageRef.current),
+    [syncTaskFailed],
+  );
+
   useDashboardLifecycle({
     loadInitialHistory,
     refreshHistory,
@@ -367,7 +374,7 @@ const HomePage: React.FC = () => {
     refreshStockBar,
     syncTaskCreated,
     syncTaskUpdated,
-    syncTaskFailed,
+    syncTaskFailed: handleTaskFailed,
     refreshActiveTasks,
     removeTask,
   });
@@ -419,6 +426,7 @@ const HomePage: React.FC = () => {
         selectionSource: selectionSource ?? 'manual',
         skills: selectedAnalysisSkills,
         reportLanguage: uiLanguage,
+        language: uiLanguage,
       });
     },
     [query, selectedAnalysisSkills, submitAnalysis, uiLanguage],
@@ -462,6 +470,7 @@ const HomePage: React.FC = () => {
       forceRefresh: true,
       skills: selectedAnalysisSkills,
       reportLanguage: uiLanguage,
+      language: uiLanguage,
     });
   }, [selectedAnalysisSkills, selectedReport, submitAnalysis, uiLanguage]);
 

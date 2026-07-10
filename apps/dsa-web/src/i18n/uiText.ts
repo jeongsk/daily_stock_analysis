@@ -27,6 +27,8 @@ const zh = {
   'common.copy': '复制',
   'common.copied': '已复制!',
 
+  'autocomplete.placeholder': '输入股票代码或名称',
+
   'language.current': '中文',
   'language.english': 'English',
   'language.short.en': 'EN',
@@ -777,6 +779,7 @@ const zh = {
   'settings.updateBuildDescription': '重新执行前端构建或 Docker 镜像构建后，此处的构建标识和构建时间会更新，可用来确认当前页面资源是否已切换。',
   'settings.versionBuildId': '构建标识',
   'settings.versionBuildTime': '构建时间',
+  'settings.versionBuildTimeUnknown': '未提供',
   'settings.versionDesktop': '桌面端版本',
   'settings.versionInfo': '版本信息',
   'settings.versionInfoDescription': '用于确认当前 WebUI 静态资源是否已经切换到最新构建。',
@@ -814,6 +817,8 @@ const en: Record<UiTextKey, string> = {
   'common.success': 'Success',
   'common.copy': 'Copy',
   'common.copied': 'Copied!',
+
+  'autocomplete.placeholder': 'Enter stock code or name',
 
   'language.current': 'English',
   'language.english': 'English',
@@ -1565,6 +1570,7 @@ const en: Record<UiTextKey, string> = {
   'settings.updateBuildDescription': 'After rebuilding the frontend or Docker image, the build ID and build time here update. Use them to confirm the current page assets are active.',
   'settings.versionBuildId': 'Build ID',
   'settings.versionBuildTime': 'Build time',
+  'settings.versionBuildTimeUnknown': 'Not provided',
   'settings.versionDesktop': 'Desktop version',
   'settings.versionInfo': 'Version info',
   'settings.versionInfoDescription': 'Use this to confirm the current WebUI static assets are on the latest build.',
@@ -1600,6 +1606,9 @@ const ko: Record<UiTextKey, string> = {
   'common.success': '성공',
   'common.copy': '복사',
   'common.copied': '복사됨!',
+
+  'autocomplete.placeholder': '종목 코드 또는 이름 입력',
+
   'language.current': '한국어',
   'language.english': 'English',
   'language.short.en': 'EN',
@@ -2277,6 +2286,7 @@ const ko: Record<UiTextKey, string> = {
   'settings.updateBuildDescription': '프런트엔드 빌드 또는 Docker 이미지 빌드를 다시 실행하면 여기의 빌드 식별자와 빌드 시간이 업데이트됩니다. 현재 페이지 자산이 전환되었는지 확인하는 데 사용할 수 있습니다.',
   'settings.versionBuildId': '빌드 식별자',
   'settings.versionBuildTime': '빌드 시간',
+  'settings.versionBuildTimeUnknown': '제공되지 않음',
   'settings.versionDesktop': '데스크톱 버전',
   'settings.versionInfo': '버전 정보',
   'settings.versionInfoDescription': '현재 WebUI 정적 자산이 최신 빌드로 전환되었는지 확인하는 데 사용합니다.',

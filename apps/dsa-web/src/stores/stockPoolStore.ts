@@ -4,6 +4,7 @@ import type { ParsedApiError } from '../api/error';
 import { getParsedApiError } from '../api/error';
 import { historyApi } from '../api/history';
 import type { AnalysisReport, HistoryItem, HistoryListResponse, ReportLanguage, StockBarItem, StockHistoryFilters, StockHistoryRange, TaskInfo } from '../types/analysis';
+import type { UiLanguage } from '../i18n/uiText';
 import { getRecentStartDate, getTodayInShanghai } from '../utils/format';
 import { normalizeStockCode } from '../utils/stockCode';
 import { isObviouslyInvalidStockQuery, looksLikeStockCode, validateStockCode } from '../utils/validation';
@@ -12,6 +13,32 @@ const PAGE_SIZE = 20;
 const STOCK_HISTORY_PAGE_SIZE = 20;
 const MARKET_REVIEW_HISTORY_PAGE_SIZE = 10;
 const MARKET_REVIEW_HISTORY_CODE = 'MARKET';
+
+const STOCK_POOL_TEXT: Record<UiLanguage, {
+  emptyStockCode: string;
+  invalidStockQuery: string;
+  duplicateTask: string;
+  analysisFailed: string;
+}> = {
+  zh: {
+    emptyStockCode: '请输入股票代码',
+    invalidStockQuery: '请输入有效的股票代码或股票名称',
+    duplicateTask: '股票 {stockCode} 正在分析中，请等待完成',
+    analysisFailed: '分析失败',
+  },
+  en: {
+    emptyStockCode: 'Please enter a stock code',
+    invalidStockQuery: 'Please enter a valid stock code or stock name',
+    duplicateTask: 'Stock {stockCode} is already being analyzed; please wait for it to finish',
+    analysisFailed: 'Analysis failed',
+  },
+  ko: {
+    emptyStockCode: '종목 코드를 입력해 주세요',
+    invalidStockQuery: '유효한 종목 코드 또는 종목명을 입력해 주세요',
+    duplicateTask: '종목 {stockCode}은(는) 분석 중입니다. 완료될 때까지 기다려 주세요',
+    analysisFailed: '분석 실패',
+  },
+};
 
 type SelectionSource = 'manual' | 'autocomplete' | 'import' | 'image';
 
@@ -31,6 +58,7 @@ type SubmitAnalysisOptions = {
   forceRefresh?: boolean;
   skills?: string[];
   reportLanguage?: ReportLanguage;
+  language?: UiLanguage;
 };
 
 type CompletedTaskSelectionIntent = {
@@ -114,7 +142,7 @@ export interface StockPoolState {
   setNotify: (notify: boolean) => void;
   syncTaskCreated: (task: TaskInfo) => void;
   syncTaskUpdated: (task: TaskInfo) => void;
-  syncTaskFailed: (task: TaskInfo) => void;
+  syncTaskFailed: (task: TaskInfo, language?: UiLanguage) => void;
   refreshActiveTasks: () => Promise<void>;
   removeTask: (taskId: string) => void;
   resetDashboardState: () => void;
@@ -874,20 +902,22 @@ export const useStockPoolStore = create<StockPoolState>((set, get) => ({
     const notify = options?.notify ?? state.notify;
     const forceRefresh = options?.forceRefresh ?? false;
     const skills = options?.skills;
+    const language = options?.language ?? 'zh';
+    const text = STOCK_POOL_TEXT[language] ?? STOCK_POOL_TEXT.zh;
 
     if (!stockCodeInput) {
-      set({ inputError: '请输入股票代码', duplicateError: null });
+      set({ inputError: text.emptyStockCode, duplicateError: null });
       return;
     }
 
     if (selectionSource !== 'autocomplete' && isObviouslyInvalidStockQuery(stockCodeInput)) {
-      set({ inputError: '请输入有效的股票代码或股票名称', duplicateError: null });
+      set({ inputError: text.invalidStockQuery, duplicateError: null });
       return;
     }
 
     let normalizedStockCode = stockCodeInput;
     if (selectionSource === 'autocomplete' || looksLikeStockCode(stockCodeInput)) {
-      const { valid, message, normalized } = validateStockCode(stockCodeInput);
+      const { valid, message, normalized } = validateStockCode(stockCodeInput, language);
       if (!valid) {
         set({ inputError: message, duplicateError: null });
         return;
@@ -931,7 +961,7 @@ export const useStockPoolStore = create<StockPoolState>((set, get) => ({
 
       if (error instanceof DuplicateTaskError) {
         set({
-          duplicateError: `股票 ${error.stockCode} 正在分析中，请等待完成`,
+          duplicateError: text.duplicateTask.replace('{stockCode}', error.stockCode),
         });
         return;
       }
@@ -968,9 +998,10 @@ export const useStockPoolStore = create<StockPoolState>((set, get) => ({
     }
   },
 
-  syncTaskFailed: (task) => {
+  syncTaskFailed: (task, language = 'zh') => {
     get().syncTaskUpdated(task);
-    set({ error: getParsedApiError(task.error || '分析失败') });
+    const text = STOCK_POOL_TEXT[language] ?? STOCK_POOL_TEXT.zh;
+    set({ error: getParsedApiError(task.error || text.analysisFailed) });
   },
 
   refreshActiveTasks: async () => {

@@ -89,6 +89,7 @@ const PORTFOLIO_EXTRA_TEXT: Record<UiLanguage, {
   positionAnalysisSubmitted: string;
   prevPage: string;
   refreshEvents: string;
+  riskFetchFailed: string;
   selectCsv: string;
   submitCsv: string;
 }> = {
@@ -123,6 +124,7 @@ const PORTFOLIO_EXTRA_TEXT: Record<UiLanguage, {
     positionAnalysisSubmitted: '已提交 {symbol} 分析任务：{taskId}',
     prevPage: '上一页',
     refreshEvents: '刷新流水',
+    riskFetchFailed: '风险数据获取失败，已降级为仅展示快照数据。',
     selectCsv: '选择 CSV',
     submitCsv: '提交导入',
   },
@@ -157,6 +159,7 @@ const PORTFOLIO_EXTRA_TEXT: Record<UiLanguage, {
     positionAnalysisSubmitted: 'Submitted {symbol} analysis task: {taskId}',
     prevPage: 'Previous',
     refreshEvents: 'Refresh entries',
+    riskFetchFailed: 'Failed to load risk data; showing snapshot data only.',
     selectCsv: 'Choose CSV',
     submitCsv: 'Submit import',
   },
@@ -191,6 +194,7 @@ const PORTFOLIO_EXTRA_TEXT: Record<UiLanguage, {
     positionAnalysisSubmitted: '{symbol} 분석 작업을 제출했습니다: {taskId}',
     prevPage: '이전',
     refreshEvents: '원장 새로고침',
+    riskFetchFailed: '리스크 데이터 조회에 실패하여 스냅샷 데이터만 표시합니다.',
     selectCsv: 'CSV 선택',
     submitCsv: '가져오기 제출',
   },
@@ -337,6 +341,8 @@ const PortfolioPage: React.FC = () => {
   const { language, t } = useUiLanguage();
   const text = PORTFOLIO_TEXT[language];
   const extraText = PORTFOLIO_EXTRA_TEXT[language];
+  const extraTextRef = useRef(extraText);
+  extraTextRef.current = extraText;
   const sideLabels = PORTFOLIO_SIDE_LABELS[language];
   const cashDirectionLabels = PORTFOLIO_CASH_DIRECTION_LABELS[language];
   const corpActionLabels = PORTFOLIO_CORPORATE_ACTION_LABELS[language];
@@ -515,7 +521,7 @@ const PortfolioPage: React.FC = () => {
       } catch (riskErr) {
         setRisk(null);
         const parsed = getParsedApiError(riskErr);
-        setRiskWarning(parsed.message || '风险数据获取失败，已降级为仅展示快照数据。');
+        setRiskWarning(parsed.message || extraTextRef.current.riskFetchFailed);
       }
     } catch (err) {
       setSnapshot(null);
@@ -1039,7 +1045,7 @@ const PortfolioPage: React.FC = () => {
         }
         setRisk(null);
         const parsed = getParsedApiError(riskErr);
-        setRiskWarning(parsed.message || '风险数据获取失败，已降级为仅展示快照数据。');
+        setRiskWarning(parsed.message || extraTextRef.current.riskFetchFailed);
       }
       return true;
     } catch (err) {
@@ -1085,7 +1091,7 @@ const PortfolioPage: React.FC = () => {
       if (!reloaded || !isActiveRefreshContext(requestedViewKey, requestedRequestId)) {
         return;
       }
-      setFxRefreshFeedback(buildFxRefreshFeedback(result));
+      setFxRefreshFeedback(buildFxRefreshFeedback(result, language));
     } catch (err) {
       if (!isActiveRefreshContext(requestedViewKey, requestedRequestId)) {
         return;
@@ -1386,7 +1392,7 @@ const PortfolioPage: React.FC = () => {
                       <td className="py-2 pr-2 text-right">
                         <div>{formatPositionPrice(row)}</div>
                         <div className={`text-[11px] ${hasPositionPrice(row) ? 'text-secondary' : 'text-warning'}`}>
-                          {getPositionPriceLabel(row)}
+                          {getPositionPriceLabel(row, language)}
                         </div>
                       </td>
                       <td className="py-2 pr-2 text-right">{formatPositionMoney(row.marketValueBase, row)}</td>
