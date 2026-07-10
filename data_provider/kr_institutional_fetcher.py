@@ -26,9 +26,14 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
+import time
 from datetime import timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
+import requests
+
+from data_provider.realtime_types import CircuitBreaker
 from src.services.market_symbol_utils import is_kr_suffix_symbol
 
 logger = logging.getLogger(__name__)
@@ -120,6 +125,156 @@ class KrInstitutionalFetcher:
     """KR 수급 데이터 계층 — 무설정·fail-open (모듈 docstring 참조)."""
 
     name = "KrInstitutionalFetcher"
+
+    def __init__(
+        self,
+        *,
+        cache_ttl_seconds: int = 900,
+        min_request_interval: float = 1.0,
+        timeout: int = 15,
+    ):
+        self._cache_ttl = max(0, int(cache_ttl_seconds))
+        self._min_interval = max(0.0, float(min_request_interval))
+        self._timeout = timeout
+        self._cache: Dict[Any, Any] = {}
+        self._cache_at: Dict[Any, float] = {}
+        self._lock = threading.Lock()
+        self._inflight: Dict[Any, threading.Lock] = {}
+        self._throttle_lock = threading.Lock()
+        self._last_request_at = 0.0
+        # 소스별 브레이커: naver_stock / daum_stock / naver_market
+        self._breaker = CircuitBreaker(failure_threshold=3, cooldown_seconds=300.0)
+
+    # ------------------------------------------------------------------
+    # 캐시 / 스로틀 / HTTP (TW fetcher 패턴 미러)
+    # ------------------------------------------------------------------
+
+    def _read_cache(self, key: Any) -> Any:
+        with self._lock:
+            at = self._cache_at.get(key)
+            if at is None or (time.time() - at) > self._cache_ttl:
+                return None
+            return self._cache.get(key)
+
+    def _store_cache(self, key: Any, value: Any) -> None:
+        with self._lock:
+            self._cache[key] = value
+            self._cache_at[key] = time.time()
+
+    def _key_lock(self, key: Any) -> threading.Lock:
+        with self._lock:
+            lock = self._inflight.get(key)
+            if lock is None:
+                lock = threading.Lock()
+                self._inflight[key] = lock
+            return lock
+
+    def _throttle(self) -> None:
+        if self._min_interval <= 0:
+            return
+        with self._throttle_lock:
+            wait = self._min_interval - (time.time() - self._last_request_at)
+            if wait > 0:
+                time.sleep(wait)
+            self._last_request_at = time.time()
+
+    def _get_json(
+        self,
+        url: str,
+        *,
+        params: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+    ) -> Any:
+        self._throttle()
+        merged = {"User-Agent": _UA, "Accept": "application/json"}
+        if headers:
+            merged.update(headers)
+        resp = requests.get(url, params=params, headers=merged, timeout=self._timeout)
+        resp.raise_for_status()
+        return resp.json()
+
+    # ------------------------------------------------------------------
+    # 소스 시도 / 종목 수급
+    # ------------------------------------------------------------------
+
+    def _try_source(
+        self, breaker_key: str, label: str, fetch: Callable[[], List[Dict[str, Any]]]
+    ) -> List[Dict[str, Any]]:
+        """단일 소스 시도. 실패는 삼켜 빈 리스트를 반환한다 — TW와 달리
+        재-raise하지 않는 이유는 종목 경로가 다음 소스로 체인해야 하기 때문.
+        브레이커는 도달성(reachability)을 추적한다: 빈 응답도 성공으로 기록.
+        """
+        if not self._breaker.is_available(breaker_key):
+            logger.info("[kr-flows] %s 서킷 오픈 — 건너뜀", label)
+            return []
+        try:
+            rows = fetch()
+        except Exception as exc:
+            self._breaker.record_failure(breaker_key, str(exc))
+            logger.info("[kr-flows] %s 수집 실패: %s", label, exc)
+            return []
+        self._breaker.record_success(breaker_key)
+        return rows
+
+    def _fetch_naver_stock(self, base: str) -> List[Dict[str, Any]]:
+        payload = self._get_json(_NAVER_STOCK_URL.format(code=base))
+        infos = payload.get("dealTrendInfos") if isinstance(payload, dict) else None
+        if not isinstance(infos, list):
+            return []
+        rows = [
+            parsed
+            for parsed in (self._parse_naver_stock_row(item) for item in infos)
+            if parsed is not None
+        ]
+        rows.sort(key=lambda r: r["date"], reverse=True)
+        return rows
+
+    def _stock_rows(self, base: str) -> Optional[Tuple[List[Dict[str, Any]], str]]:
+        """종목 날짜 행 조회 — (행 리스트 내림차순, 소스명) 또는 None.
+
+        캐시 키는 종목 단위: days 변화는 호출측 슬라이스로 처리된다.
+        """
+        key = ("stock", base)
+        cached = self._read_cache(key)
+        if cached is not None:
+            return cached
+        with self._key_lock(key):
+            cached = self._read_cache(key)
+            if cached is not None:
+                return cached
+            rows = self._try_source(
+                "naver_stock", f"naver stock {base}", lambda: self._fetch_naver_stock(base)
+            )
+            if not rows:
+                return None  # 빈 결과는 캐시하지 않는다
+            value = (rows, "NAVER")
+            self._store_cache(key, value)
+            return value
+
+    # ------------------------------------------------------------------
+    # 공개 API
+    # ------------------------------------------------------------------
+
+    def get_investor_flows(self, stock_code: str, days: int = 5) -> Optional[Dict[str, Any]]:
+        """KR 종목(.KS/.KQ)의 일별 투자자 수급 — 주수 단위(unit="shares").
+
+        비대상 종목/전 소스 실패 시 None (fail-open — 절대 raise하지 않음).
+        """
+        try:
+            market = self._market_of(stock_code)
+            if market is None:
+                return None
+            base = self._base_code(stock_code)
+            fetched = self._stock_rows(base)
+            if fetched is None:
+                return None
+            rows, source = fetched
+            return self._build_flows(
+                market, rows[: _clamp_days(days)], source, unit="shares", code=base
+            )
+        except Exception as exc:
+            logger.warning("[kr-flows] get_investor_flows(%s) fail-open: %s", stock_code, exc)
+            return None
 
     @staticmethod
     def _market_of(stock_code: Any) -> Optional[str]:

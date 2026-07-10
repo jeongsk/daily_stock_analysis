@@ -5,6 +5,11 @@
 네트워크 접근 없음 — `pytest -m "not network"` 게이트에 포함된다.
 """
 
+import threading
+from unittest.mock import MagicMock, patch
+
+import requests
+
 from data_provider.kr_institutional_fetcher import (
     KrInstitutionalFetcher,
     _clamp_days,
@@ -13,6 +18,8 @@ from data_provider.kr_institutional_fetcher import (
     _date_from_yyyymmdd,
     _to_int,
 )
+
+_GET = "data_provider.kr_institutional_fetcher.requests.get"
 
 
 class TestPureHelpers:
@@ -159,6 +166,21 @@ DAUM_FOREIGN_5D = -9755396
 DAUM_INSTITUTION_5D = 2554553
 
 
+def _resp(json_data=None, *, content=None):
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.raise_for_status.return_value = None
+    if json_data is not None:
+        resp.json.return_value = json_data
+    if content is not None:
+        resp.content = content
+    return resp
+
+
+def _fetcher():
+    return KrInstitutionalFetcher(min_request_interval=0)
+
+
 class TestRowParsingAndRecord:
     def test_naver_row_three_categories(self):
         row = KrInstitutionalFetcher._parse_naver_stock_row(
@@ -255,3 +277,102 @@ class TestRowParsingAndRecord:
         assert "code" not in record
         assert record["unit"] == "KRW"
         assert record["summary"]["foreign_net_5d"] == -322800000000
+
+
+class TestGetInvestorFlowsNaver:
+    def test_full_record_from_naver_fixture(self):
+        f = _fetcher()
+        with patch(_GET, return_value=_resp(NAVER_INTEGRATION_FIXTURE)):
+            record = f.get_investor_flows("005930.KS")
+        assert record is not None
+        assert record["code"] == "005930"
+        assert record["market"] == "kospi"
+        assert record["unit"] == "shares"
+        assert record["source"] == "NAVER"
+        assert [r["date"] for r in record["days"]] == [
+            "2026-07-10", "2026-07-09", "2026-07-08", "2026-07-07", "2026-07-06",
+        ]
+        assert record["days"][0] == {
+            "date": "2026-07-10",
+            "foreign_net": 625985,
+            "institution_net": 2313745,
+            "individual_net": -2851466,
+        }
+        assert record["summary"] == {
+            "foreign_net_5d": NAVER_FOREIGN_5D,
+            "institution_net_5d": NAVER_INSTITUTION_5D,
+        }
+
+    def test_days_slice_and_summary_window(self):
+        f = _fetcher()
+        with patch(_GET, return_value=_resp(NAVER_INTEGRATION_FIXTURE)):
+            record = f.get_investor_flows("005930.KS", days=2)
+        assert len(record["days"]) == 2
+        assert record["summary"]["foreign_net_5d"] == 625985 + 845552
+        assert record["summary"]["institution_net_5d"] == 2313745 + 1107761
+
+    def test_non_kr_codes_fail_open_without_fetch(self):
+        f = _fetcher()
+        with patch(_GET) as mock_get:
+            for code in ("AAPL", "600519", "0700.HK", "7203.T", "", None):
+                assert f.get_investor_flows(code) is None
+        mock_get.assert_not_called()
+
+    def test_kosdaq_market_label(self):
+        f = _fetcher()
+        with patch(_GET, return_value=_resp(NAVER_INTEGRATION_FIXTURE)):
+            record = f.get_investor_flows("068270.KQ")
+        assert record["market"] == "kosdaq"
+
+    def test_all_sources_transport_error_fails_open(self):
+        f = _fetcher()
+        with patch(_GET, side_effect=requests.exceptions.ConnectionError("down")):
+            assert f.get_investor_flows("005930.KS") is None
+
+    def test_same_stock_cached_single_fetch(self):
+        f = _fetcher()
+        with patch(_GET, return_value=_resp(NAVER_INTEGRATION_FIXTURE)) as mock_get:
+            first = f.get_investor_flows("005930.KS")
+            second = f.get_investor_flows("005930.KS", days=3)
+            assert mock_get.call_count == 1  # days가 달라도 캐시된 행을 슬라이스
+        assert first["days"][0] == second["days"][0]
+        assert len(second["days"]) == 3
+
+    def test_empty_payload_not_cached(self):
+        f = _fetcher()
+        with patch(_GET, return_value=_resp({"dealTrendInfos": []})) as mock_get:
+            assert f.get_investor_flows("005930.KS") is None
+            first_count = mock_get.call_count
+            assert f.get_investor_flows("005930.KS") is None
+            # 빈 결과는 캐시하지 않는다 — 다음 호출에서 재시도
+            assert mock_get.call_count > first_count
+
+    def test_renamed_core_key_fails_open(self):
+        drifted = {
+            "dealTrendInfos": [
+                {"bizdate": "20260710", "frgnPureBuyQuant": "+625,985",
+                 "organPureBuyQuant": "+2,313,745"},
+            ]
+        }
+        f = _fetcher()
+        with patch(_GET, return_value=_resp(drifted)):
+            assert f.get_investor_flows("005930.KS") is None
+
+    def test_concurrent_same_stock_single_fetch(self):
+        f = _fetcher()
+        barrier = threading.Barrier(8)
+        results = []
+
+        def worker():
+            barrier.wait()
+            results.append(f.get_investor_flows("005930.KS"))
+
+        with patch(_GET, return_value=_resp(NAVER_INTEGRATION_FIXTURE)) as mock_get:
+            threads = [threading.Thread(target=worker) for _ in range(8)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            assert mock_get.call_count == 1  # in-flight 락으로 코얼레싱
+        assert len(results) == 8
+        assert all(r is not None for r in results)
