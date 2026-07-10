@@ -12,6 +12,14 @@ import type {
   TaskListResponse,
 } from '../types/analysis';
 import type { RunFlowSnapshot } from '../types/runFlow';
+import type { UiLanguage } from '../i18n/uiText';
+import { getRuntimeInitialLanguage } from '../utils/uiLanguage';
+
+const ANALYSIS_API_TEXT: Record<UiLanguage, { marketReviewRunning: string; stockAnalyzing: string }> = {
+  zh: { marketReviewRunning: '大盘复盘正在执行中，请稍后再试', stockAnalyzing: '股票 {stockCode} 正在分析中' },
+  en: { marketReviewRunning: 'A market review is already running; please try again later', stockAnalyzing: 'Stock {stockCode} is already being analyzed' },
+  ko: { marketReviewRunning: '시장 리뷰가 이미 실행 중입니다. 잠시 후 다시 시도해 주세요', stockAnalyzing: '종목 {stockCode}은(는) 분석 중입니다' },
+};
 
 // ============ API Interfaces ============
 
@@ -116,7 +124,8 @@ export const analysisApi = {
       const message = detail && typeof detail === 'object' && 'message' in detail
         ? String((detail as { message?: unknown }).message || '')
         : String(response.data?.message || '');
-      throw new Error(message || '大盘复盘正在执行中，请稍后再试');
+      const text = ANALYSIS_API_TEXT[getRuntimeInitialLanguage()] ?? ANALYSIS_API_TEXT.zh;
+      throw new Error(message || text.marketReviewRunning);
     }
 
     return toCamelCase<MarketReviewAccepted>(response.data);
@@ -194,7 +203,8 @@ export class DuplicateTaskError extends Error {
   existingTaskId: string;
 
   constructor(stockCode: string, existingTaskId: string, message?: string) {
-    super(message || `股票 ${stockCode} 正在分析中`);
+    const text = ANALYSIS_API_TEXT[getRuntimeInitialLanguage()] ?? ANALYSIS_API_TEXT.zh;
+    super(message || text.stockAnalyzing.replace('{stockCode}', stockCode));
     this.name = 'DuplicateTaskError';
     this.stockCode = stockCode;
     this.existingTaskId = existingTaskId;

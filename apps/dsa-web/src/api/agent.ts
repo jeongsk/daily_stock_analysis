@@ -1,6 +1,14 @@
 import apiClient from './index';
 import { API_BASE_URL } from '../utils/constants';
 import { createApiError, isApiRequestError, parseApiError } from './error';
+import type { UiLanguage } from '../i18n/uiText';
+import { getRuntimeInitialLanguage } from '../utils/uiLanguage';
+
+const AGENT_API_TEXT: Record<UiLanguage, { sendFailed: string }> = {
+  zh: { sendFailed: '发送失败' },
+  en: { sendFailed: 'Send failed' },
+  ko: { sendFailed: '전송에 실패했습니다' },
+};
 
 export interface ChatStreamOptions {
   signal?: AbortSignal;
@@ -79,7 +87,8 @@ export const agentApi = {
     }>('/api/v1/agent/chat/send', { content });
     const data = response.data;
     if (data.success === false) {
-      throw new Error(data.message || '发送失败');
+      const text = AGENT_API_TEXT[getRuntimeInitialLanguage()] ?? AGENT_API_TEXT.zh;
+      throw new Error(data.message || text.sendFailed);
     }
     return { success: true };
   },

@@ -26,6 +26,38 @@ import type {
   ValidateSystemConfigRequest,
   ValidateSystemConfigResponse,
 } from '../types/systemConfig';
+import type { UiLanguage } from '../i18n/uiText';
+import { getRuntimeInitialLanguage } from '../utils/uiLanguage';
+
+const SYSTEM_CONFIG_API_TEXT: Record<UiLanguage, {
+  validationFailed: string;
+  versionConflict: string;
+  notificationTestTitle: string;
+  notificationTestContent: string;
+}> = {
+  zh: {
+    validationFailed: '配置校验失败',
+    versionConflict: '配置版本冲突',
+    notificationTestTitle: 'DSA 通知测试',
+    notificationTestContent: '这是一条来自 DSA Web 设置页的通知测试消息。',
+  },
+  en: {
+    validationFailed: 'Config validation failed',
+    versionConflict: 'Config version conflict',
+    notificationTestTitle: 'DSA notification test',
+    notificationTestContent: 'This is a notification test message from the DSA web settings page.',
+  },
+  ko: {
+    validationFailed: '설정 검증에 실패했습니다',
+    versionConflict: '설정 버전 충돌',
+    notificationTestTitle: 'DSA 알림 테스트',
+    notificationTestContent: 'DSA 웹 설정 페이지에서 보낸 알림 테스트 메시지입니다.',
+  },
+};
+
+function getSystemConfigApiText(): (typeof SYSTEM_CONFIG_API_TEXT)['zh'] {
+  return SYSTEM_CONFIG_API_TEXT[getRuntimeInitialLanguage()] ?? SYSTEM_CONFIG_API_TEXT.zh;
+}
 
 export class SystemConfigValidationError extends Error {
   issues: SystemConfigValidationErrorResponse['issues'];
@@ -36,7 +68,7 @@ export class SystemConfigValidationError extends Error {
     this.name = 'SystemConfigValidationError';
     this.issues = issues;
     this.parsedError = parsedError ?? createParsedApiError({
-      title: '配置校验失败',
+      title: getSystemConfigApiText().validationFailed,
       message,
       rawMessage: message,
       status: 400,
@@ -54,7 +86,7 @@ export class SystemConfigConflictError extends Error {
     this.name = 'SystemConfigConflictError';
     this.currentConfigVersion = currentConfigVersion;
     this.parsedError = parsedError ?? createParsedApiError({
-      title: '配置版本冲突',
+      title: getSystemConfigApiText().versionConflict,
       message,
       rawMessage: message,
       status: 409,
@@ -110,6 +142,7 @@ function toSnakeTestChannelPayload(payload: TestLLMChannelRequest): Record<strin
 }
 
 function toSnakeNotificationTestPayload(payload: TestNotificationChannelRequest): Record<string, unknown> {
+  const text = getSystemConfigApiText();
   return {
     channel: payload.channel,
     items: (payload.items || []).map((item) => ({
@@ -117,8 +150,8 @@ function toSnakeNotificationTestPayload(payload: TestNotificationChannelRequest)
       value: item.value,
     })),
     mask_token: payload.maskToken ?? '******',
-    title: payload.title ?? 'DSA 通知测试',
-    content: payload.content ?? '这是一条来自 DSA Web 设置页的通知测试消息。',
+    title: payload.title ?? text.notificationTestTitle,
+    content: payload.content ?? text.notificationTestContent,
     timeout_seconds: payload.timeoutSeconds ?? 20,
   };
 }
@@ -289,7 +322,7 @@ export const systemConfigApi = {
         if (status === 400) {
           const validationError = toCamelCase<SystemConfigValidationErrorResponse>(payloadData ?? {});
           throw new SystemConfigValidationError(
-            parsed.message || validationError.message || '配置校验失败',
+            parsed.message || validationError.message || getSystemConfigApiText().validationFailed,
             validationError.issues || [],
             parsed,
           );
@@ -298,7 +331,7 @@ export const systemConfigApi = {
         if (status === 409) {
           const conflict = toCamelCase<SystemConfigConflictResponse>(payloadData ?? {});
           throw new SystemConfigConflictError(
-            parsed.message || conflict.message || '配置版本冲突',
+            parsed.message || conflict.message || getSystemConfigApiText().versionConflict,
             conflict.currentConfigVersion,
             parsed,
           );

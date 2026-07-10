@@ -152,6 +152,11 @@ const getEdgeLabel = (label: string | null | undefined, t: RunFlowT): string | n
   if (!label) return null;
   if (label === '调用') return t('runFlow.edgeLabel.invoke');
   if (label === '详情') return t('runFlow.edgeLabel.details');
+  if (label === '降级') return t('runFlow.edgeLabel.fallback');
+  if (label === '重试') return t('runFlow.edgeLabel.retry');
+  if (label === '生成') return t('runFlow.edgeLabel.generate');
+  if (label === '保存') return t('runFlow.edgeLabel.save');
+  if (label === '通知') return t('runFlow.edgeLabel.notify');
   return label;
 };
 

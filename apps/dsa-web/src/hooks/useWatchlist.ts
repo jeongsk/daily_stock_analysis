@@ -1,6 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { systemConfigApi } from '../api/systemConfig';
+import { useUiLanguage } from '../contexts/UiLanguageContext';
+import type { UiLanguage } from '../i18n/uiText';
 import { findMatchingStockCode, includesStockCode } from '../utils/stockCode';
+
+const WATCHLIST_TEXT: Record<UiLanguage, {
+  added: string;
+  removed: string;
+  actionFailed: string;
+}> = {
+  zh: { added: '已加入自选 {stockCode}', removed: '已从自选移除 {stockCode}', actionFailed: '操作失败' },
+  en: { added: 'Added {stockCode} to watchlist', removed: 'Removed {stockCode} from watchlist', actionFailed: 'Operation failed' },
+  ko: { added: '관심 종목에 {stockCode}을(를) 추가했습니다', removed: '관심 종목에서 {stockCode}을(를) 제거했습니다', actionFailed: '작업에 실패했습니다' },
+};
 
 export interface UseWatchlistReturn {
   watchlistCodes: string[];
@@ -15,6 +27,9 @@ export interface UseWatchlistReturn {
 }
 
 export function useWatchlist(): UseWatchlistReturn {
+  const { language } = useUiLanguage();
+  const textRef = useRef(WATCHLIST_TEXT[language] ?? WATCHLIST_TEXT.zh);
+  textRef.current = WATCHLIST_TEXT[language] ?? WATCHLIST_TEXT.zh;
   const [codes, setCodes] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isActioning, setIsActioning] = useState(false);
@@ -76,10 +91,10 @@ export function useWatchlist(): UseWatchlistReturn {
       const result = await systemConfigApi.addToWatchlist(stockCode);
       if (mountedRef.current) {
         setCodes(result);
-        showMessage(`已加入自选 ${stockCode}`);
+        showMessage(textRef.current.added.replace('{stockCode}', stockCode));
       }
     } catch {
-      if (mountedRef.current) showMessage('操作失败');
+      if (mountedRef.current) showMessage(textRef.current.actionFailed);
     } finally {
       if (mountedRef.current) setIsActioning(false);
     }
@@ -92,10 +107,10 @@ export function useWatchlist(): UseWatchlistReturn {
       const result = await systemConfigApi.removeFromWatchlist(stockCode);
       if (mountedRef.current) {
         setCodes(result);
-        showMessage(`已从自选移除 ${stockCode}`);
+        showMessage(textRef.current.removed.replace('{stockCode}', stockCode));
       }
     } catch {
-      if (mountedRef.current) showMessage('操作失败');
+      if (mountedRef.current) showMessage(textRef.current.actionFailed);
     } finally {
       if (mountedRef.current) setIsActioning(false);
     }

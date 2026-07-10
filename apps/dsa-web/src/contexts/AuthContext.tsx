@@ -2,7 +2,15 @@ import type React from 'react';
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { createParsedApiError, getParsedApiError, type ParsedApiError } from '../api/error';
 import { authApi } from '../api/auth';
+import type { UiLanguage } from '../i18n/uiText';
 import { useStockPoolStore } from '../stores';
+import { getRuntimeInitialLanguage } from '../utils/uiLanguage';
+
+const LOGIN_RATE_LIMIT_TEXT: Record<UiLanguage, { title: string; message: string }> = {
+  zh: { title: '登录尝试过于频繁', message: '尝试次数过多，请稍后再试。' },
+  en: { title: 'Too many login attempts', message: 'Too many attempts; try again later.' },
+  ko: { title: '로그인 시도가 너무 잦습니다', message: '시도 횟수가 너무 많습니다. 잠시 후 다시 시도해 주세요.' },
+};
 
 type AuthContextValue = {
   authEnabled: boolean;
@@ -27,9 +35,10 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 function extractLoginError(err: unknown): ParsedApiError {
   const parsed = getParsedApiError(err);
   if (parsed.status === 429) {
+    const text = LOGIN_RATE_LIMIT_TEXT[getRuntimeInitialLanguage()] ?? LOGIN_RATE_LIMIT_TEXT.zh;
     return createParsedApiError({
-      title: '登录尝试过于频繁',
-      message: '尝试次数过多，请稍后再试。',
+      title: text.title,
+      message: text.message,
       rawMessage: parsed.rawMessage,
       status: parsed.status,
       category: parsed.category,

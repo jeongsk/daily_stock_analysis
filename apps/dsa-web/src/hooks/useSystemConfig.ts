@@ -1,12 +1,68 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { createParsedApiError, getParsedApiError, type ParsedApiError } from '../api/error';
 import { systemConfigApi, SystemConfigConflictError, SystemConfigValidationError } from '../api/systemConfig';
+import { useUiLanguage } from '../contexts/UiLanguageContext';
+import type { UiLanguage } from '../i18n/uiText';
 import type {
   ConfigValidationIssue,
   SystemConfigCategorySchema,
   SystemConfigItem,
   SystemConfigUpdateItem,
 } from '../types/systemConfig';
+
+const SYSTEM_CONFIG_TEXT: Record<UiLanguage, {
+  noChangesToast: string;
+  noChanges: string;
+  validationFailedTitle: string;
+  validationFailedMessage: string;
+  validationFailedRaw: string;
+  updated: string;
+  warningPrefix: string;
+  warningSeparator: string;
+  conflictTitle: string;
+  conflictReload: string;
+  saveFailed: string;
+}> = {
+  zh: {
+    noChangesToast: '当前没有可保存的修改。',
+    noChanges: '当前没有可保存的修改',
+    validationFailedTitle: '配置校验未通过',
+    validationFailedMessage: '请先修正表单错误后再保存。',
+    validationFailedRaw: '配置校验未通过，请先修正表单错误。',
+    updated: '配置已更新',
+    warningPrefix: '；警告：',
+    warningSeparator: '；',
+    conflictTitle: '配置版本冲突',
+    conflictReload: '，请先重新加载配置。',
+    saveFailed: '保存失败',
+  },
+  en: {
+    noChangesToast: 'There are no changes to save.',
+    noChanges: 'There are no changes to save',
+    validationFailedTitle: 'Configuration validation failed',
+    validationFailedMessage: 'Fix the form errors before saving.',
+    validationFailedRaw: 'Configuration validation failed; fix the form errors first.',
+    updated: 'Configuration updated',
+    warningPrefix: '; warnings: ',
+    warningSeparator: '; ',
+    conflictTitle: 'Configuration version conflict',
+    conflictReload: '; reload the configuration first.',
+    saveFailed: 'Save failed',
+  },
+  ko: {
+    noChangesToast: '저장할 변경 사항이 없습니다.',
+    noChanges: '저장할 변경 사항이 없습니다',
+    validationFailedTitle: '설정 검증 실패',
+    validationFailedMessage: '폼 오류를 먼저 수정한 뒤 저장해 주세요.',
+    validationFailedRaw: '설정 검증에 실패했습니다. 폼 오류를 먼저 수정해 주세요.',
+    updated: '설정이 업데이트되었습니다',
+    warningPrefix: ' / 경고: ',
+    warningSeparator: ', ',
+    conflictTitle: '설정 버전 충돌',
+    conflictReload: '. 설정을 먼저 다시 불러와 주세요.',
+    saveFailed: '저장 실패',
+  },
+};
 
 type ToastState = {
   type: 'success';
@@ -64,6 +120,10 @@ function normalizeFieldValue(value: string, schema: SystemConfigItem['schema'] |
 }
 
 export function useSystemConfig() {
+  const { language } = useUiLanguage();
+  const textRef = useRef(SYSTEM_CONFIG_TEXT[language] ?? SYSTEM_CONFIG_TEXT.zh);
+  textRef.current = SYSTEM_CONFIG_TEXT[language] ?? SYSTEM_CONFIG_TEXT.zh;
+
   // Server state
   const [configVersion, setConfigVersion] = useState<string>('');
   const [maskToken, setMaskToken] = useState<string>('******');
@@ -289,17 +349,18 @@ export function useSystemConfig() {
   }, [dirtyKeys, draftValues, serverItemByKey]);
 
   const save = useCallback(async (changedItems?: SystemConfigUpdateItem[]): Promise<SaveResult> => {
+    const text = textRef.current;
     const explicitItems = changedItems ?? [];
     const resolvedChangedItems = explicitItems.length > 0 ? explicitItems : getChangedItems();
 
     if (!explicitItems.length && !hasDirty) {
-      setToast({ type: 'success', message: '当前没有可保存的修改。' });
-      return { success: true, message: '当前没有可保存的修改' };
+      setToast({ type: 'success', message: text.noChangesToast });
+      return { success: true, message: text.noChanges };
     }
 
     if (!resolvedChangedItems.length) {
-      setToast({ type: 'success', message: '当前没有可保存的修改。' });
-      return { success: true, message: '当前没有可保存的修改' };
+      setToast({ type: 'success', message: text.noChangesToast });
+      return { success: true, message: text.noChanges };
     }
 
     setIsSaving(true);
@@ -312,15 +373,15 @@ export function useSystemConfig() {
 
       if (!validateResult.valid) {
         setSaveError(createParsedApiError({
-          title: '配置校验未通过',
-          message: '请先修正表单错误后再保存。',
-          rawMessage: '配置校验未通过，请先修正表单错误。',
+          title: text.validationFailedTitle,
+          message: text.validationFailedMessage,
+          rawMessage: text.validationFailedRaw,
           category: 'http_error',
         }));
         setRetryAction('save');
         return {
           success: false,
-          message: '配置校验未通过',
+          message: text.validationFailedTitle,
           issues: validateResult.issues,
         };
       }
@@ -336,9 +397,9 @@ export function useSystemConfig() {
       applyServerPayload(refreshed.items, refreshed.configVersion, refreshed.maskToken);
 
       const warningText = updateResult.warnings?.length
-        ? `；警告：${updateResult.warnings.join('；')}`
+        ? `${text.warningPrefix}${updateResult.warnings.join(text.warningSeparator)}`
         : '';
-      setToast({ type: 'success', message: `配置已更新${warningText}` });
+      setToast({ type: 'success', message: `${text.updated}${warningText}` });
       return { success: true };
     } catch (error: unknown) {
       if (error instanceof SystemConfigValidationError) {
@@ -346,8 +407,8 @@ export function useSystemConfig() {
         setSaveError(error.parsedError);
       } else if (error instanceof SystemConfigConflictError) {
         setSaveError(createParsedApiError({
-          title: '配置版本冲突',
-          message: `${error.message}，请先重新加载配置。`,
+          title: text.conflictTitle,
+          message: `${error.message}${text.conflictReload}`,
           rawMessage: error.parsedError.rawMessage,
           status: error.parsedError.status,
           category: error.parsedError.category,
@@ -358,7 +419,7 @@ export function useSystemConfig() {
 
       setToast({ type: 'error', error: getParsedApiError(error) });
       setRetryAction('save');
-      return { success: false, message: '保存失败' };
+      return { success: false, message: text.saveFailed };
     } finally {
       setIsSaving(false);
     }

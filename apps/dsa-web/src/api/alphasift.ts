@@ -1,6 +1,14 @@
 import apiClient from './index';
 import { systemConfigApi } from './systemConfig';
 import { toCamelCase } from './utils';
+import type { UiLanguage } from '../i18n/uiText';
+import { getRuntimeInitialLanguage } from '../utils/uiLanguage';
+
+const ALPHASIFT_API_TEXT: Record<UiLanguage, { adapterUnavailable: string }> = {
+  zh: { adapterUnavailable: 'AlphaSift 适配层不可用{reason}。请确认后端已安装项目依赖，必要时执行 pip install -r requirements.txt 或重建 Docker/桌面后端。' },
+  en: { adapterUnavailable: 'The AlphaSift adapter layer is unavailable{reason}. Make sure the backend has the project dependencies installed; if needed, run pip install -r requirements.txt or rebuild the Docker/desktop backend.' },
+  ko: { adapterUnavailable: 'AlphaSift 어댑터 계층을 사용할 수 없습니다{reason}. 백엔드에 프로젝트 의존성이 설치되어 있는지 확인하고, 필요하면 pip install -r requirements.txt를 실행하거나 Docker/데스크톱 백엔드를 다시 빌드해 주세요.' },
+};
 
 const ALPHASIFT_SCREEN_TIMEOUT_MS = 180000;
 const ALPHASIFT_INSTALL_TIMEOUT_MS = 300000;
@@ -334,8 +342,12 @@ export const alphasiftApi = {
     try {
       const status = await alphasiftApi.getStatus();
       if (!status.available) {
-        const reason = status.diagnostics?.reason ? `（${status.diagnostics.reason}）` : '';
-        throw new Error(`AlphaSift 适配层不可用${reason}。请确认后端已安装项目依赖，必要时执行 pip install -r requirements.txt 或重建 Docker/桌面后端。`);
+        const language = getRuntimeInitialLanguage();
+        const text = ALPHASIFT_API_TEXT[language] ?? ALPHASIFT_API_TEXT.zh;
+        const reason = status.diagnostics?.reason
+          ? (language === 'zh' ? `（${status.diagnostics.reason}）` : ` (${status.diagnostics.reason})`)
+          : '';
+        throw new Error(text.adapterUnavailable.replace('{reason}', reason));
       }
     } catch (error) {
       try {
