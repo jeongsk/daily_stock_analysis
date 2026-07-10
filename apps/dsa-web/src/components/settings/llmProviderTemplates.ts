@@ -1,3 +1,5 @@
+import type { UiLanguage } from '../../i18n/uiText';
+
 export type ChannelProtocol = 'openai' | 'deepseek' | 'gemini' | 'anthropic' | 'vertex_ai' | 'ollama';
 export type LLMProviderCapability =
   | 'openai-compatible'
@@ -47,6 +49,69 @@ export const LLM_PROVIDER_CAPABILITY_LABELS: Record<LLMProviderCapability, { lab
     hint: '需要当前运行环境能访问对应本地服务。',
   },
 };
+
+// 模板数据保持中文为规范值（含测试契约）；en/ko 仅在展示层通过 getter 覆盖。
+const LLM_PROVIDER_CAPABILITY_LABEL_OVERRIDES: Partial<Record<UiLanguage, Record<LLMProviderCapability, { label: string; hint: string }>>> = {
+  en: {
+    'openai-compatible': {
+      label: 'OpenAI compatible',
+      hint: 'Configure the Base URL as an OpenAI-compatible endpoint; /chat/completions is not appended automatically.',
+    },
+    aggregator: {
+      label: 'Aggregator',
+      hint: 'Model visibility, routing, and pricing may change with account permissions and platform policies.',
+    },
+    'official-api': {
+      label: 'Official API',
+      hint: 'Uses the provider\'s official protocol or official compatible endpoint.',
+    },
+    'model-discovery': {
+      label: 'Model discovery',
+      hint: 'Supports fetching the model list via /models; actual results still depend on account permissions and the API key.',
+    },
+    vision: {
+      label: 'Vision hint',
+      hint: 'The template marks this provider as commonly used for Vision; actual model capability still depends on your account and model list.',
+    },
+    'local-runtime': {
+      label: 'Local runtime',
+      hint: 'Requires the current runtime environment to reach the local service.',
+    },
+  },
+  ko: {
+    'openai-compatible': {
+      label: 'OpenAI 호환',
+      hint: 'Base URL을 OpenAI 호환 엔드포인트로 설정하세요. /chat/completions는 추가로 붙이지 않습니다.',
+    },
+    aggregator: {
+      label: '통합 플랫폼',
+      hint: '모델 가시성, 라우팅, 가격은 계정 권한과 플랫폼 정책에 따라 달라질 수 있습니다.',
+    },
+    'official-api': {
+      label: '공식 API',
+      hint: '서비스 제공자의 공식 프로토콜 또는 공식 호환 엔드포인트를 사용합니다.',
+    },
+    'model-discovery': {
+      label: '모델 목록 조회',
+      hint: '/models로 모델 목록 조회를 지원합니다. 실제 결과는 계정 권한과 API Key에 따라 달라집니다.',
+    },
+    vision: {
+      label: 'Vision 힌트',
+      hint: '이 제공자가 Vision 용도로 자주 사용됨을 나타내는 템플릿 힌트입니다. 실제 모델 능력은 계정과 모델 목록 기준입니다.',
+    },
+    'local-runtime': {
+      label: '로컬 실행',
+      hint: '현재 실행 환경에서 해당 로컬 서비스에 접근할 수 있어야 합니다.',
+    },
+  },
+};
+
+export function getProviderCapabilityText(
+  capability: LLMProviderCapability,
+  language: UiLanguage,
+): { label: string; hint: string } {
+  return LLM_PROVIDER_CAPABILITY_LABEL_OVERRIDES[language]?.[capability] ?? LLM_PROVIDER_CAPABILITY_LABELS[capability];
+}
 
 export const LLM_PROVIDER_TEMPLATES: LLMProviderTemplate[] = [
   {
@@ -223,6 +288,29 @@ export function getProviderTemplate(channelId: string): LLMProviderTemplate | un
 
 export function isKnownProviderTemplate(channelId: string): boolean {
   return channelId !== 'custom' && Boolean(getProviderTemplate(channelId));
+}
+
+const PROVIDER_CONFIG_HINT_OVERRIDES: Partial<Record<UiLanguage, Record<string, string>>> = {
+  en: {
+    anspire: 'The same ANSPIRE_API_KEYS can be reused for both search and LLM channels. The models and gateway below are configuration examples; actual availability depends on your account permissions and console. Run "Test connection" first to confirm.',
+    volcengine: 'Make sure the online inference endpoint/region is not mixed up with the Coding Plan dedicated entry.',
+    siliconflow: 'The model list and model visibility depend on account permissions and the API key.',
+    openrouter: 'The model list and model visibility depend on account permissions and the API key.',
+    ollama: 'Requires the local machine, Docker, or a self-hosted runner to reach the Ollama service.',
+  },
+  ko: {
+    anspire: '동일한 ANSPIRE_API_KEYS를 검색과 LLM 채널에 함께 사용할 수 있습니다. 아래 모델과 게이트웨이는 설정 예시이며, 실제 사용 가능 여부는 계정 권한과 콘솔 기준입니다. 먼저 "연결 테스트"로 확인하는 것을 권장합니다.',
+    volcengine: '온라인 추론 endpoint/region과 Coding Plan 전용 엔드포인트를 혼용하지 않도록 확인하세요.',
+    siliconflow: '모델 목록과 모델 가시성은 계정 권한과 API Key에 따라 달라집니다.',
+    openrouter: '모델 목록과 모델 가시성은 계정 권한과 API Key에 따라 달라집니다.',
+    ollama: '로컬 머신, Docker 또는 self-hosted runner에서 Ollama 서비스에 접근할 수 있어야 합니다.',
+  },
+};
+
+export function getProviderConfigHint(channelId: string, language: UiLanguage): string | undefined {
+  const template = getProviderTemplate(channelId);
+  if (!template?.configHint) return undefined;
+  return PROVIDER_CONFIG_HINT_OVERRIDES[language]?.[channelId] ?? template.configHint;
 }
 
 export const MODEL_PLACEHOLDERS_BY_PROTOCOL: Record<ChannelProtocol, string> = {
