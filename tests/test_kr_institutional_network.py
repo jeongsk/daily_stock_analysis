@@ -18,9 +18,12 @@ pytestmark = pytest.mark.network
 LIQUID_STOCK = "005930"  # 삼성전자 — 유동성 최상위, 수급 행 상시 존재
 
 
-def _get_or_skip(url, **kwargs):
+def _get_or_skip(url, *, params=None, headers=None):
+    merged = {"User-Agent": _UA}
+    if headers:
+        merged.update(headers)
     try:
-        resp = requests.get(url, headers={"User-Agent": _UA}, timeout=20, **kwargs)
+        resp = requests.get(url, params=params, headers=merged, timeout=20)
     except requests.RequestException as exc:
         pytest.skip(f"전송 불가(일시 장애/차단 추정): {exc}")
     if resp.status_code != 200:
