@@ -600,6 +600,7 @@ describe('SettingsPage', () => {
 
   it('renders first-run setup check titles and messages in Korean UI mode', async () => {
     localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'ko');
+    useSystemConfigMock.mockReturnValue(buildSystemConfigState({ activeCategory: 'base' }));
     getSetupStatus.mockResolvedValue({
       isComplete: true,
       readyForSmoke: true,

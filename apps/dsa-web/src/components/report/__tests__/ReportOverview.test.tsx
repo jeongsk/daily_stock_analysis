@@ -127,8 +127,8 @@ describe('ReportOverview', () => {
     expect(screen.getByText('추세 전망')).toBeVisible();
     expect(screen.getByText('박스권')).toBeVisible();
     expect(screen.getByText('관련 테마')).toBeVisible();
-    expect(screen.getByText('업종')).toBeVisible();
-    expect(screen.getByText('테마')).toBeVisible();
+    expect(screen.getByText('Technology')).toBeVisible();
+    expect(screen.getByText('Semiconductors')).toBeVisible();
     expect(screen.getByText('공포 탐욕 지수')).toBeVisible();
     expect(screen.getByText('중립')).toBeVisible();
   });
