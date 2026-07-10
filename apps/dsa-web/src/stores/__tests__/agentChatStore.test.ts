@@ -40,6 +40,9 @@ function createDeferred<T>() {
 
 beforeEach(() => {
   localStorage.clear();
+  // Pin runtime UI language to zh so parseApiError fallbacks stay deterministic
+  // (jsdom's navigator.language would otherwise resolve to en).
+  localStorage.setItem('dsa.uiLanguage', 'zh');
   useAgentChatStore.setState({
     messages: [],
     loading: false,

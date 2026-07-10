@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修复] 웹 API 오류 파서(parseApiError)의 하드코딩 중국어 i18n 처리: Agent 모드 비활성, 필수 매개변수 누락, 포트폴리오 초과 매도/장부 사용 중, AlphaSift 설치·스크리닝 오류, LLM 미설정, 도구 호출 비호환, 업스트림 시간 초과/네트워크/400 거부, 로컬 연결 실패, 요청 실패 폴백 등 오류 제목·본문 전체를 3언어(zh/en/ko) 테이블로 이전하고 제목-본문 구분자(：/: )도 로케일화.
 - [修复] 웹 훅·컨텍스트·API 계층의 잔여 하드코딩 중국어 i18n 처리: 실행 흐름 그래프 엣지 라벨(폴백/재시도/생성/저장/알림), 관심 종목 추가·제거 토스트, 시스템 설정 저장 피드백(검증 실패/버전 충돌/경고), 로그인 속도 제한 안내, API 기본 오류 문구(전송 실패, 시장 리뷰 중복 실행, 종목 분석 중, 파일/텍스트 필수, AlphaSift 어댑터 불가, 설정 검증/충돌 기본 제목, 알림 테스트 기본 제목·본문)를 3언어(zh/en/ko) 테이블로 이전 — React 밖 throw 시점 문자열은 `getRuntimeInitialLanguage()`로 언어 결정.
 - [修复] 웹 공용 컴포넌트·페이지·스토어의 잔여 하드코딩 중국어 i18n 처리: 알림 센터 테스트 결과/알림 채널·상태 라벨, 종목 자동완성·알림 폼·시장 리뷰 뷰, 스크리닝 전략 라벨, 설정 진단 힌트·빌드 시간, Chat 빠른 질문·후속 분석 프롬프트, 포트폴리오 가격 출처·환율 새로고침 피드백, 종목 코드 검증·분석 제출 오류 메시지를 3언어(zh/en/ko) 테이블로 이전.
 - [修复] 리포트 개요의 '관련 테마(关联板块)' 섹션 중복 렌더링 수정: upstream 동기화 머지에서 되살아난 구(舊) 관련 보드 블록을 제거하고 upstream 단일 섹션 구조로 복원 (ko 표시 언어 지원 유지).
