@@ -229,6 +229,24 @@ class KrInstitutionalFetcher:
         rows.sort(key=lambda r: r["date"], reverse=True)
         return rows
 
+    def _fetch_daum_stock(self, base: str) -> List[Dict[str, Any]]:
+        payload = self._get_json(
+            _DAUM_STOCK_URL,
+            params={"symbolCode": f"A{base}", "page": 1, "perPage": 10, "pagination": "true"},
+            # Referer가 없으면 다음이 요청을 거부한다 (2026-07-10 실측)
+            headers={"Referer": f"https://finance.daum.net/quotes/A{base}"},
+        )
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(data, list):
+            return []
+        rows = [
+            parsed
+            for parsed in (self._parse_daum_row(item) for item in data)
+            if parsed is not None
+        ]
+        rows.sort(key=lambda r: r["date"], reverse=True)
+        return rows
+
     def _stock_rows(self, base: str) -> Optional[Tuple[List[Dict[str, Any]], str]]:
         """종목 날짜 행 조회 — (행 리스트 내림차순, 소스명) 또는 None.
 
@@ -242,12 +260,18 @@ class KrInstitutionalFetcher:
             cached = self._read_cache(key)
             if cached is not None:
                 return cached
+            source = "NAVER"
             rows = self._try_source(
                 "naver_stock", f"naver stock {base}", lambda: self._fetch_naver_stock(base)
             )
             if not rows:
+                source = "DAUM"
+                rows = self._try_source(
+                    "daum_stock", f"daum stock {base}", lambda: self._fetch_daum_stock(base)
+                )
+            if not rows:
                 return None  # 빈 결과는 캐시하지 않는다
-            value = (rows, "NAVER")
+            value = (rows, source)
             self._store_cache(key, value)
             return value
 

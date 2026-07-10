@@ -18,6 +18,7 @@ from data_provider.kr_institutional_fetcher import (
     _date_from_yyyymmdd,
     _to_int,
 )
+from data_provider.realtime_types import CircuitBreaker
 
 _GET = "data_provider.kr_institutional_fetcher.requests.get"
 
@@ -376,3 +377,81 @@ class TestGetInvestorFlowsNaver:
             assert mock_get.call_count == 1  # in-flight 락으로 코얼레싱
         assert len(results) == 8
         assert all(r is not None for r in results)
+
+
+def _route_get(naver, daum):
+    """URL 호스트별로 다른 응답/예외를 돌려주는 requests.get side_effect."""
+
+    def _route(url, **kwargs):
+        if "m.stock.naver.com" in url:
+            result = naver
+        elif "finance.daum.net" in url:
+            result = daum
+        else:
+            raise AssertionError(f"unexpected url: {url}")
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    return _route
+
+
+class TestDaumFallback:
+    def test_naver_http_error_falls_back_to_daum(self):
+        f = _fetcher()
+        with patch(_GET, side_effect=_route_get(
+            requests.exceptions.HTTPError("500"), _resp(DAUM_INVESTOR_FIXTURE)
+        )):
+            record = f.get_investor_flows("005930.KS")
+        assert record is not None
+        assert record["source"] == "DAUM"
+        assert record["unit"] == "shares"
+        assert record["market"] == "kospi"
+        assert record["days"][0] == {
+            "date": "2026-07-10",
+            "foreign_net": 635576,
+            "institution_net": 2313745,
+            "individual_net": None,
+        }
+        assert record["summary"] == {
+            "foreign_net_5d": DAUM_FOREIGN_5D,
+            "institution_net_5d": DAUM_INSTITUTION_5D,
+        }
+
+    def test_naver_empty_falls_back_to_daum_with_referer(self):
+        f = _fetcher()
+        with patch(_GET, side_effect=_route_get(
+            _resp({"dealTrendInfos": []}), _resp(DAUM_INVESTOR_FIXTURE)
+        )) as mock_get:
+            record = f.get_investor_flows("005930.KS")
+        assert record["source"] == "DAUM"
+        daum_calls = [c for c in mock_get.call_args_list if "finance.daum.net" in c.args[0]]
+        assert daum_calls, "다음 fallback이 호출되지 않았다"
+        headers = daum_calls[0].kwargs["headers"]
+        assert headers["Referer"] == "https://finance.daum.net/quotes/A005930"
+        params = daum_calls[0].kwargs["params"]
+        assert params["symbolCode"] == "A005930"
+
+    def test_both_sources_fail_none(self):
+        f = _fetcher()
+        with patch(_GET, side_effect=_route_get(
+            requests.exceptions.ConnectionError("down"),
+            requests.exceptions.ConnectionError("down"),
+        )):
+            assert f.get_investor_flows("005930.KS") is None
+
+    def test_naver_breaker_open_goes_straight_to_daum(self):
+        f = _fetcher()
+        codes = ("005930.KS", "000660.KS", "035420.KS", "005380.KS")
+        with patch(_GET, side_effect=_route_get(
+            requests.exceptions.ConnectionError("blocked"), _resp(DAUM_INVESTOR_FIXTURE)
+        )) as mock_get:
+            records = [f.get_investor_flows(code) for code in codes]
+            naver_calls = [
+                c for c in mock_get.call_args_list if "m.stock.naver.com" in c.args[0]
+            ]
+        # 연속 3회 실패로 naver_stock 서킷 오픈 -> 4번째 종목은 네이버를 건너뜀
+        assert len(naver_calls) == 3
+        assert f._breaker.get_status().get("naver_stock") == CircuitBreaker.OPEN
+        # 다음 소스는 독립 브레이커라 4건 모두 DAUM으로 성공
+        assert all(r is not None and r["source"] == "DAUM" for r in records)
