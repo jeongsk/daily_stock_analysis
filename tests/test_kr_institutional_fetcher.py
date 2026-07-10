@@ -455,3 +455,125 @@ class TestDaumFallback:
         assert f._breaker.get_status().get("naver_stock") == CircuitBreaker.OPEN
         # 다음 소스는 독립 브레이커라 4건 모두 DAUM으로 성공
         assert all(r is not None and r["source"] == "DAUM" for r in records)
+
+
+# ---------------------------------------------------------------------------
+# GET https://finance.naver.com/sise/investorDealTrendDay.naver?bizdate=20260710&sosok=01
+# 의 대상 표 마크업 (EUC-KR 원문 구조 보존, 값 단위: 억원).
+# 날짜/개인/외국인/기관계/기타법인 열은 실캡처 값이고, 기관 세부 6열은
+# 기관계 합과 일치하는 대표값이다(파서는 선두 4열만 읽는다).
+# 선두의 헤더 불일치 표는 표 선택 로직 검증용 미끼다.
+# ---------------------------------------------------------------------------
+
+MARKET_HTML_FIXTURE = """<html><head><title>네이버페이 증권</title></head><body>
+<table class="type_1" summary="다른 표">
+<tr><th>지수</th><th>등락</th></tr>
+<tr><td>코스피</td><td>+1.2%</td></tr>
+</table>
+<table summary="일자별 순매수에 관한 표 입니다." cellpadding="0" cellspacing="0" class="type_1">
+<tr class="udline">
+  <th rowspan="2" class="noln">날짜</th>
+  <th rowspan="2">개인</th>
+  <th rowspan="2">외국인</th>
+  <th rowspan="2">기관계</th>
+  <th colspan="6" class="eb">기관</th>
+  <th rowspan="2">기타법인</th>
+</tr>
+<tr class="udline">
+  <th class="sub">금융투자</th><th class="sub">보험</th><th class="sub">투신<br>(사모)</th>
+  <th class="sub">은행</th><th class="sub">기타금융기관</th><th class="sub">연기금등</th>
+</tr>
+<tr>
+  <td class="date2">26.07.10</td>
+  <td class="rate_down3">-7,805</td>
+  <td class="rate_down3">-3,228</td>
+  <td class="rate_up3">11,314</td>
+  <td class="rate_up3">5,377</td><td class="rate_up3">632</td><td class="rate_up3">2,269</td>
+  <td class="rate_down3">-83</td><td class="rate_up3">169</td><td class="rate_up3">2,950</td>
+  <td class="rate_down3">-282</td>
+</tr>
+<tr>
+  <td class="date2">26.07.09</td>
+  <td class="rate_down3">-13,278</td>
+  <td class="rate_up3">1,343</td>
+  <td class="rate_up3">12,884</td>
+  <td class="rate_up3">9,347</td><td class="rate_up3">361</td><td class="rate_up3">1,721</td>
+  <td class="rate_up3">36</td><td class="rate_up3">96</td><td class="rate_up3">1,323</td>
+  <td class="rate_down3">-950</td>
+</tr>
+</table>
+</body></html>"""
+
+
+class TestMarketFlows:
+    def _market_resp(self):
+        return _resp(content=MARKET_HTML_FIXTURE.encode("euc-kr"))
+
+    def test_kospi_record_from_html_fixture(self):
+        f = _fetcher()
+        with patch(_GET, return_value=self._market_resp()):
+            record = f.get_market_investor_flows("kospi")
+        assert record is not None
+        assert "code" not in record
+        assert record["market"] == "kospi"
+        assert record["unit"] == "KRW"
+        assert record["source"] == "NAVER"
+        # 억원 -> 원 (×1e8)
+        assert record["days"][0] == {
+            "date": "2026-07-10",
+            "foreign_net": -322800000000,
+            "institution_net": 1131400000000,
+            "individual_net": -780500000000,
+        }
+        assert record["days"][1]["date"] == "2026-07-09"
+        assert record["summary"] == {
+            "foreign_net_5d": (-3228 + 1343) * 100000000,
+            "institution_net_5d": (11314 + 12884) * 100000000,
+        }
+
+    def test_market_arg_normalization_and_sosok_param(self):
+        f = _fetcher()
+        with patch(_GET, return_value=self._market_resp()) as mock_get:
+            record = f.get_market_investor_flows(" KOSDAQ ")
+        assert record["market"] == "kosdaq"
+        params = mock_get.call_args.kwargs["params"]
+        assert params["sosok"] == "02"
+        assert len(params["bizdate"]) == 8 and params["bizdate"].isdigit()
+
+    def test_invalid_market_none_without_fetch(self):
+        f = _fetcher()
+        with patch(_GET) as mock_get:
+            for market in ("nasdaq", "kr", "", None):
+                assert f.get_market_investor_flows(market) is None
+        mock_get.assert_not_called()
+
+    def test_header_rename_fails_open(self):
+        drifted = MARKET_HTML_FIXTURE.replace(">외국인<", ">외인<")
+        f = _fetcher()
+        with patch(_GET, return_value=_resp(content=drifted.encode("euc-kr"))):
+            assert f.get_market_investor_flows("kospi") is None
+
+    def test_days_slice(self):
+        f = _fetcher()
+        with patch(_GET, return_value=self._market_resp()):
+            record = f.get_market_investor_flows("kospi", days=1)
+        assert len(record["days"]) == 1
+        assert record["summary"]["foreign_net_5d"] == -322800000000
+
+    def test_market_cached_per_market(self):
+        f = _fetcher()
+        with patch(_GET, return_value=self._market_resp()) as mock_get:
+            f.get_market_investor_flows("kospi")
+            f.get_market_investor_flows("kospi", days=1)
+            assert mock_get.call_count == 1
+            f.get_market_investor_flows("kosdaq")
+            assert mock_get.call_count == 2
+
+    def test_market_breaker_opens_after_three_failures(self):
+        f = _fetcher()
+        with patch(_GET, side_effect=requests.exceptions.ConnectionError("down")) as mock_get:
+            for _ in range(3):
+                assert f.get_market_investor_flows("kospi") is None
+            assert f._breaker.get_status().get("naver_market") == CircuitBreaker.OPEN
+            assert f.get_market_investor_flows("kospi") is None
+            assert mock_get.call_count == 3  # 서킷 오픈 동안 요청 없음

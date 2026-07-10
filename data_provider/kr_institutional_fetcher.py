@@ -28,7 +28,7 @@ import logging
 import re
 import threading
 import time
-from datetime import timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import requests
@@ -215,6 +215,110 @@ class KrInstitutionalFetcher:
             return []
         self._breaker.record_success(breaker_key)
         return rows
+
+    # ------------------------------------------------------------------
+    # 시장 수급 (네이버 PC, EUC-KR HTML, 억원 -> KRW 원)
+    # ------------------------------------------------------------------
+
+    def _get_html(self, url: str, *, params: Optional[Dict[str, Any]] = None) -> str:
+        self._throttle()
+        resp = requests.get(
+            url, params=params, headers={"User-Agent": _UA}, timeout=self._timeout
+        )
+        resp.raise_for_status()
+        # 네이버 PC 페이지는 EUC-KR — requests의 인코딩 추정에 의존하지 않는다
+        return resp.content.decode("euc-kr", errors="replace")
+
+    @staticmethod
+    def _parse_market_table(html_text: str) -> List[Dict[str, Any]]:
+        try:
+            # 기존 설치 의존성(lxml) — 지연 임포트로 미설치 환경은 fail-open
+            import lxml.html as lxml_html
+        except ImportError:
+            logger.info("[kr-flows] lxml 미설치 — 시장 수급 fail-open")
+            return []
+        try:
+            doc = lxml_html.fromstring(html_text)
+        except Exception:
+            return []
+        for table in doc.xpath("//table"):
+            header = [th.text_content().strip() for th in table.xpath(".//tr[1]/th")]
+            if tuple(header[:4]) != _MARKET_HEAD:
+                continue  # 헤더 이름 검증 — rename/reorder된 표는 신뢰하지 않는다
+            rows: List[Dict[str, Any]] = []
+            for tr in table.xpath(".//tr[td]"):
+                cells = [td.text_content().strip() for td in tr.xpath("./td")]
+                if len(cells) < 4:
+                    continue
+                date = _date_from_dot_yy(cells[0])
+                if date is None:
+                    continue  # 구분선/공백 행
+                foreign = _to_int(cells[2])
+                institution = _to_int(cells[3])
+                if foreign is None or institution is None:
+                    continue  # 필수 결측 -> 행 폐기, 0 조작 금지
+                individual = _to_int(cells[1])
+                rows.append(
+                    {
+                        "date": date,
+                        "foreign_net": foreign * _EOK_KRW,
+                        "institution_net": institution * _EOK_KRW,
+                        "individual_net": (
+                            individual * _EOK_KRW if individual is not None else None
+                        ),
+                    }
+                )
+            rows.sort(key=lambda r: r["date"], reverse=True)
+            return rows
+        return []
+
+    def _fetch_naver_market(self, market: str) -> List[Dict[str, Any]]:
+        html_text = self._get_html(
+            _NAVER_MARKET_URL,
+            params={
+                # bizdate가 미래/휴일이어도 최신 확정일부터 내림차순으로 응답한다
+                "bizdate": datetime.now(_KST).strftime("%Y%m%d"),
+                "sosok": _MARKET_SOSOK[market],
+                "page": 1,
+            },
+        )
+        return self._parse_market_table(html_text)
+
+    def _market_rows(self, market: str) -> Optional[List[Dict[str, Any]]]:
+        key = ("market", market)
+        cached = self._read_cache(key)
+        if cached is not None:
+            return cached
+        with self._key_lock(key):
+            cached = self._read_cache(key)
+            if cached is not None:
+                return cached
+            rows = self._try_source(
+                "naver_market", f"naver market {market}", lambda: self._fetch_naver_market(market)
+            )
+            if not rows:
+                return None  # 빈 결과는 캐시하지 않는다
+            self._store_cache(key, rows)
+            return rows
+
+    def get_market_investor_flows(self, market: str, days: int = 5) -> Optional[Dict[str, Any]]:
+        """KOSPI/KOSDAQ 시장 전체 일별 투자자 수급 — KRW 원 단위(unit="KRW").
+
+        market: "kospi" | "kosdaq" (대소문자/공백 허용). 실패 시 None (fail-open).
+        """
+        try:
+            norm = str(market or "").strip().lower()
+            if norm not in _MARKET_SOSOK:
+                return None
+            rows = self._market_rows(norm)
+            if rows is None:
+                return None
+            return self._build_flows(norm, rows[: _clamp_days(days)], "NAVER", unit="KRW")
+        except Exception as exc:
+            logger.warning(
+                "[kr-flows] get_market_investor_flows(%s) fail-open: %s", market, exc
+            )
+            return None
 
     def _fetch_naver_stock(self, base: str) -> List[Dict[str, Any]]:
         payload = self._get_json(_NAVER_STOCK_URL.format(code=base))
