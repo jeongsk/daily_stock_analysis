@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [新功能] KR 개별 종목 분석에 투자자별 수급(외국인/기관/개인) 연동: 데이터 품질 전역 블록·LLM 프롬프트·리포트 요약 라인(zh/en/ko)에 반영 — fail-open, 비KR 시장 점수 동작 중립(ADR 0002). 시장 리뷰 연동은 후속 Phase.
 - [新功能] KR 투자자별 매매동향(수급) 데이터 계층 추가: `KrInstitutionalFetcher`가 네이버·다음 무인증 소스로 종목(주수)·KOSPI/KOSDAQ 시장(KRW) 일별 순매수를 수집 — fail-open·캐시·서킷브레이커 포함, 리포트 연동은 후속 Phase (설계: docs/superpowers/specs/2026-07-10-kr-investor-flows-design.md)
 - [修复] LLM 채널 설정 편집기의 잔여 하드코딩 중국어 i18n 처리: 진단 라벨(단계/오류 코드/문제 해결·원인 힌트), 저장 검증 메시지, 연결 테스트·모델 가져오기·능력 검사 상태 문구, 능력 옵션 툴팁·상태 배지, 제공자 라벨·설정 힌트·능력 배지(zh 규범값 유지 + en/ko 오버라이드 getter), 도움말 문서 라벨, 런타임 모델 드롭다운 '현재 설정' 라벨을 3언어(zh/en/ko)로 이전.
 - [修复] 웹 API 오류 파서(parseApiError)의 하드코딩 중국어 i18n 처리: Agent 모드 비활성, 필수 매개변수 누락, 포트폴리오 초과 매도/장부 사용 중, AlphaSift 설치·스크리닝 오류, LLM 미설정, 도구 호출 비호환, 업스트림 시간 초과/네트워크/400 거부, 로컬 연결 실패, 요청 실패 폴백 등 오류 제목·본문 전체를 3언어(zh/en/ko) 테이블로 이전하고 제목-본문 구분자(：/: )도 로케일화.
