@@ -3062,6 +3062,40 @@ class DataFetcherManager:
                 ["not supported for offshore market"],
             )
 
+        # investor_flows: kr (한국) has free unauthenticated per-stock investor net-buy
+        # feeds (Naver integration JSON + Daum fallback, Phase 1); every other market skips
+        # this. kr-only + strictly additive + fail-open: any error / no-data -> None, stored
+        # as result_ctx["investor_flows"] = None, which the context pack maps to FETCH_FAILED
+        # and never interrupts the main analysis. Raw normalized record only — the quality
+        # block / prompt / report consume it downstream (ADR 0002, spec §3).
+        kr_record = None
+        if market == "kr":
+            kr_fetcher = getattr(self, "_kr_institutional_fetcher", None)
+            if kr_fetcher is None:
+                # Wiring (import + construct) is a one-time op; a failure here is a
+                # programming / deploy bug, so log it LOUD (error). Still fail-open.
+                try:
+                    from data_provider.kr_institutional_fetcher import KrInstitutionalFetcher
+
+                    kr_fetcher = KrInstitutionalFetcher()
+                    self._kr_institutional_fetcher = kr_fetcher
+                except Exception as exc:  # noqa: BLE001 - wiring failure: loud but fail-open
+                    logger.error("[kr-flows] fetcher init failed (wiring bug?) code=%s: %s", stock_code, exc)
+                    kr_fetcher = None
+            # fetch_timeout == 0 disables per-fetch fundamental fetches (same semantic the
+            # valuation/bundle/tw-institution paths honour); respect it for kr flows too.
+            if kr_fetcher is not None and fetch_timeout > 0:
+                flows_timeout = max(stage_timeout - (time.time() - start_ts), 0.0)
+                if flows_timeout > 0:
+                    kr_record, flows_err, _flows_ms = self._run_with_retry(
+                        lambda: kr_fetcher.get_investor_flows(stock_code, days=5),
+                        flows_timeout,
+                        "fundamental_kr_investor_flows",
+                    )
+                    if flows_err:
+                        logger.warning("[kr-flows] fetch failed/timeout code=%s: %s", stock_code, flows_err)
+        result_ctx["investor_flows"] = kr_record if isinstance(kr_record, dict) else None
+
         result_ctx["belong_boards"] = belong_boards
 
         block_statuses = {
