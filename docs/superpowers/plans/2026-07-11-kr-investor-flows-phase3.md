@@ -64,7 +64,7 @@
 - Consumes: 기존 `normalize_report_language(value, default="zh")`(같은 모듈), 순매수 금액 `int`(원 단위)
 - Produces (Task 3·4가 사용): `format_net_krw_localized(value: Any, language: Optional[str]) -> str` — 부호 붙은 로케일 KRW 문자열. `None`/NaN/비수치 → `"N/A"`.
 
-- [ ] **Step 1: 실패하는 테스트 작성** — `tests/test_kr_market_flows_format.py` 생성:
+- [x] **Step 1: 실패하는 테스트 작성** — `tests/test_kr_market_flows_format.py` 생성:
 
 ```python
 # -*- coding: utf-8 -*-
@@ -106,12 +106,12 @@ class TestFormatNetKrwLocalized:
         assert format_net_krw_localized(51200000000, None) == "+512亿韩元"
 ```
 
-- [ ] **Step 2: 실패 확인**
+- [x] **Step 2: 실패 확인**
 
 Run: `uv run pytest tests/test_kr_market_flows_format.py -v`
 Expected: FAIL — `ImportError: cannot import name 'format_net_krw_localized'`
 
-- [ ] **Step 3: 최소 구현** — `src/report_language.py`에 `has_disallowed_report_script`(현재 779-785) **다음**에 함수 추가:
+- [x] **Step 3: 최소 구현** — `src/report_language.py`에 `has_disallowed_report_script`(현재 779-785) **다음**에 함수 추가:
 
 ```python
 def format_net_krw_localized(value: Any, language: Optional[str]) -> str:
@@ -141,7 +141,7 @@ def format_net_krw_localized(value: Any, language: Optional[str]) -> str:
 
 (주의: `Any`, `Optional`는 `report_language.py` 상단 typing import에 이미 있는지 확인 — 없으면 추가. `normalize_report_language`는 같은 모듈 함수다.)
 
-- [ ] **Step 4: 통과 확인**
+- [x] **Step 4: 통과 확인**
 
 Run: `uv run pytest tests/test_kr_market_flows_format.py -v`
 Expected: PASS (5 passed)
@@ -149,7 +149,7 @@ Expected: PASS (5 passed)
 Run: `uv run python -m py_compile src/report_language.py`
 Expected: 출력 없음
 
-- [ ] **Step 5: 커밋**
+- [x] **Step 5: 커밋**
 
 ```bash
 git add src/report_language.py tests/test_kr_market_flows_format.py
@@ -169,7 +169,7 @@ git commit -m "feat: add KRW locale formatter for KR market investor flows"
 - Consumes: `KrInstitutionalFetcher.get_market_investor_flows(market, days=5) -> Optional[dict]` (Phase 1), `self.data_manager`(MarketAnalyzer), `self._kr_institutional_fetcher`(Phase 2 lazy 싱글턴, base.py:3073)
 - Produces (Task 3·4·5가 사용): `MarketOverview.investor_flows: Optional[Dict[str, Any]]` = `{"kospi": rec, "kosdaq": rec}`(데이터 있는 시장만) 또는 `None`. rec shape: `{"market","unit":"KRW","days":[{date,foreign_net,institution_net,individual_net}],"summary":{"foreign_net_5d","institution_net_5d"},"source":"NAVER"}`. `DataFetcherManager.get_kr_market_investor_flows(market: str, days: int=5) -> Optional[Dict[str, Any]]`.
 
-- [ ] **Step 1: 실패하는 테스트 작성** — `tests/test_kr_market_flows_wiring.py` 생성:
+- [x] **Step 1: 실패하는 테스트 작성** — `tests/test_kr_market_flows_wiring.py` 생성:
 
 ```python
 # -*- coding: utf-8 -*-
@@ -281,12 +281,12 @@ if __name__ == "__main__":
     unittest.main()
 ```
 
-- [ ] **Step 2: 실패 확인**
+- [x] **Step 2: 실패 확인**
 
 Run: `uv run pytest tests/test_kr_market_flows_wiring.py -v`
 Expected: FAIL — `AttributeError: 'DataFetcherManager' object has no attribute 'get_kr_market_investor_flows'` / `overview.investor_flows` 없음.
 
-- [ ] **Step 3a: `DataFetcherManager` 메서드 추가** — `data_provider/base.py`의 `DataFetcherManager` 클래스 내부(예: 기존 `get_main_indices`(2490) 근처)에 추가:
+- [x] **Step 3a: `DataFetcherManager` 메서드 추가** — `data_provider/base.py`의 `DataFetcherManager` 클래스 내부(예: 기존 `get_main_indices`(2490) 근처)에 추가:
 
 ```python
     def get_kr_market_investor_flows(self, market: str, days: int = 5) -> Optional[Dict[str, Any]]:
@@ -311,7 +311,7 @@ Expected: FAIL — `AttributeError: 'DataFetcherManager' object has no attribute
 
 (주의: `Optional`, `Dict`, `Any`, `logger`는 base.py에 이미 있다(Phase 2에서 사용). 없으면 추가.)
 
-- [ ] **Step 3b: `MarketOverview` 필드 추가** — `src/market_analyzer.py`의 `MarketOverview` 데이터클래스(현재 100-116)에서 마지막 필드 `bottom_concepts` **다음 줄**에 추가:
+- [x] **Step 3b: `MarketOverview` 필드 추가** — `src/market_analyzer.py`의 `MarketOverview` 데이터클래스(현재 100-116)에서 마지막 필드 `bottom_concepts` **다음 줄**에 추가:
 
 ```python
     # KR 시장 수급(외국인/기관/개인, KRW) — {"kospi": rec, "kosdaq": rec}; 비KR은 None
@@ -320,7 +320,7 @@ Expected: FAIL — `AttributeError: 'DataFetcherManager' object has no attribute
 
 (`Optional`, `Dict`, `Any`는 market_analyzer.py:19에 이미 import됨.)
 
-- [ ] **Step 3c: 수집 헬퍼 + `get_market_overview` 브랜치** — `src/market_analyzer.py`. 먼저 `get_market_overview`(현재 525-550)의 `return overview`(550) **직전**에 KR 브랜치 추가:
+- [x] **Step 3c: 수집 헬퍼 + `get_market_overview` 브랜치** — `src/market_analyzer.py`. 먼저 `get_market_overview`(현재 525-550)의 `return overview`(550) **직전**에 KR 브랜치 추가:
 
 ```python
         # 5. KR 시장 수급(외국인/기관, KRW) — kr 전용, fail-open
@@ -356,7 +356,7 @@ Expected: FAIL — `AttributeError: 'DataFetcherManager' object has no attribute
 
 (`logger`는 market_analyzer.py에 이미 있다.)
 
-- [ ] **Step 4: 통과 확인**
+- [x] **Step 4: 통과 확인**
 
 Run: `uv run pytest tests/test_kr_market_flows_wiring.py -v`
 Expected: PASS (6 passed)
@@ -364,7 +364,7 @@ Expected: PASS (6 passed)
 Run: `uv run python -m py_compile data_provider/base.py src/market_analyzer.py`
 Expected: 출력 없음
 
-- [ ] **Step 5: 커밋**
+- [x] **Step 5: 커밋**
 
 ```bash
 git add data_provider/base.py src/market_analyzer.py tests/test_kr_market_flows_wiring.py
@@ -384,7 +384,7 @@ git commit -m "feat: collect KR market investor flows into MarketOverview (fail-
 - Produces (Task 4가 라인 렌더러 재사용): `_kr_market_flow_lines(overview, language) -> List[str]`, `_kr_market_flows_asof(overview) -> str`, `_build_kr_market_flows_prompt_block(overview, review_language) -> str`
 - 배치: `_build_review_prompt`의 stats_block/sector_block 언어 분기(현재 1682-1746) **다음**, `data_no_indices_hint`(1748) **직전**에 KR 대체 훅 1개. KR은 `has_market_stats=False`라 stats_block이 "데이터 없음" 문구이므로 실제 수급으로 대체한다(비KR 미진입 → 바이트 동일).
 
-- [ ] **Step 1: 실패하는 테스트 작성** — `tests/test_kr_market_flows_prompt.py` 생성:
+- [x] **Step 1: 실패하는 테스트 작성** — `tests/test_kr_market_flows_prompt.py` 생성:
 
 ```python
 # -*- coding: utf-8 -*-
@@ -469,12 +469,12 @@ class TestBuildReviewPromptIntegration:
         assert "시장 투자자 수급" not in prompt
 ```
 
-- [ ] **Step 2: 실패 확인**
+- [x] **Step 2: 실패 확인**
 
 Run: `uv run pytest tests/test_kr_market_flows_prompt.py -v`
 Expected: FAIL — `AttributeError: ... has no attribute '_build_kr_market_flows_prompt_block'`
 
-- [ ] **Step 3a: 공유 라인 렌더러 + 프롬프트 블록** — `src/market_analyzer.py`의 `_build_stats_block`(현재 1093) **앞**(예: `_inject_data_into_review` 근처)에 메서드 3개 추가:
+- [x] **Step 3a: 공유 라인 렌더러 + 프롬프트 블록** — `src/market_analyzer.py`의 `_build_stats_block`(현재 1093) **앞**(예: `_inject_data_into_review` 근처)에 메서드 3개 추가:
 
 ```python
     def _kr_market_flow_lines(self, overview: MarketOverview, language: str) -> List[str]:
@@ -555,7 +555,7 @@ Expected: FAIL — `AttributeError: ... has no attribute '_build_kr_market_flows
 
 (주의: `format_net_krw_localized`를 파일 상단 `from src.report_language import (...)` 블록(24-29)에 추가한다.)
 
-- [ ] **Step 3b: `_build_review_prompt` KR stats_block 대체** — `src/market_analyzer.py`의 stats_block/sector_block 언어 분기가 끝나는 지점(현재 1746, zh `data_limits_block` 조립 뒤) **다음**, `data_no_indices_hint =`(1748) **직전**에 삽입:
+- [x] **Step 3b: `_build_review_prompt` KR stats_block 대체** — `src/market_analyzer.py`의 stats_block/sector_block 언어 분기가 끝나는 지점(현재 1746, zh `data_limits_block` 조립 뒤) **다음**, `data_no_indices_hint =`(1748) **직전**에 삽입:
 
 ```python
         # KR: 수급이 곧 시장 폭 신호 — "데이터 없음" stats_block을 실제 수급으로 대체.
@@ -567,7 +567,7 @@ Expected: FAIL — `AttributeError: ... has no attribute '_build_kr_market_flows
 
 ```
 
-- [ ] **Step 4: 통과 확인**
+- [x] **Step 4: 통과 확인**
 
 Run: `uv run pytest tests/test_kr_market_flows_prompt.py -v`
 Expected: PASS (6 passed)
@@ -575,7 +575,7 @@ Expected: PASS (6 passed)
 Run: `uv run python -m py_compile src/market_analyzer.py`
 Expected: 출력 없음
 
-- [ ] **Step 5: 커밋**
+- [x] **Step 5: 커밋**
 
 ```bash
 git add src/market_analyzer.py tests/test_kr_market_flows_prompt.py
@@ -595,7 +595,7 @@ git commit -m "feat: inject KR market investor flows into market review prompt"
 - Produces: `_build_kr_market_flows_block(overview) -> str` (결정적 블록, `self` 언어 사용). `_inject_data_into_review`가 `시장 요약`(market_summary) 섹션 뒤에 주입, 헤딩 미탐지 시 fallback append.
 - 게이트 순서 주의: 이 주입은 `generate_market_review`의 중국어 거부 게이트 **이후**에 실행되므로 ko 블록은 순수 한글이어야 한다(Task 3의 라인 렌더러가 이미 보장 — ko는 외국인/기관/억).
 
-- [ ] **Step 1: 실패하는 테스트 작성** — `tests/test_kr_market_flows_report.py` 생성:
+- [x] **Step 1: 실패하는 테스트 작성** — `tests/test_kr_market_flows_report.py` 생성:
 
 ```python
 # -*- coding: utf-8 -*-
@@ -679,12 +679,12 @@ class TestInjectFlowsIntoReview:
         assert "시장 투자자 수급" not in out
 ```
 
-- [ ] **Step 2: 실패 확인**
+- [x] **Step 2: 실패 확인**
 
 Run: `uv run pytest tests/test_kr_market_flows_report.py -v`
 Expected: FAIL — `AttributeError: ... has no attribute '_build_kr_market_flows_block'`
 
-- [ ] **Step 3a: 결정적 블록 렌더러** — `src/market_analyzer.py`의 `_build_stats_block`(현재 1093) **앞**(Task 3에서 추가한 메서드들 근처)에 추가:
+- [x] **Step 3a: 결정적 블록 렌더러** — `src/market_analyzer.py`의 `_build_stats_block`(현재 1093) **앞**(Task 3에서 추가한 메서드들 근처)에 추가:
 
 ```python
     def _build_kr_market_flows_block(self, overview: MarketOverview) -> str:
@@ -708,7 +708,7 @@ Expected: FAIL — `AttributeError: ... has no attribute '_build_kr_market_flows
         return "\n".join([head, ""] + lines)
 ```
 
-- [ ] **Step 3b: `_inject_data_into_review` 주입** — `src/market_analyzer.py`의 `_inject_data_into_review`(현재 1023-1072)에서 sector_block 처리 블록(1056-1070) **다음**, `return review`(1072) **직전**에 삽입:
+- [x] **Step 3b: `_inject_data_into_review` 주입** — `src/market_analyzer.py`의 `_inject_data_into_review`(현재 1023-1072)에서 sector_block 처리 블록(1056-1070) **다음**, `return review`(1072) **직전**에 삽입:
 
 ```python
         flows_block = self._build_kr_market_flows_block(overview)
@@ -733,7 +733,7 @@ Expected: FAIL — `AttributeError: ... has no attribute '_build_kr_market_flows
 
 (`patterns`·`language`는 이 메서드 상단 1034-1040에서 이미 정의됨.)
 
-- [ ] **Step 4: 통과 확인**
+- [x] **Step 4: 통과 확인**
 
 Run: `uv run pytest tests/test_kr_market_flows_report.py -v`
 Expected: PASS (6 passed)
@@ -741,7 +741,7 @@ Expected: PASS (6 passed)
 Run: `uv run python -m py_compile src/market_analyzer.py`
 Expected: 출력 없음
 
-- [ ] **Step 5: 커밋**
+- [x] **Step 5: 커밋**
 
 ```bash
 git add src/market_analyzer.py tests/test_kr_market_flows_report.py
@@ -760,7 +760,7 @@ git commit -m "feat: render KR market investor flows line in market review body"
 - Consumes: Task 2 `overview.investor_flows`
 - Produces: 페이로드 `payload["investor_flows"] = {"kospi": rec, "kosdaq": rec}`(데이터 있는 시장만). 데이터 없으면 키 부재(비KR 포함). 웹/데스크톱/푸시 구조화 소비자용 원시 레코드 — 마크다운 본문(Task 4)과 별개.
 
-- [ ] **Step 1: 실패하는 테스트 작성** — `tests/test_kr_market_flows_payload.py` 생성:
+- [x] **Step 1: 실패하는 테스트 작성** — `tests/test_kr_market_flows_payload.py` 생성:
 
 ```python
 # -*- coding: utf-8 -*-
@@ -826,12 +826,12 @@ class TestPayloadInvestorFlows:
         assert "investor_flows" not in payload
 ```
 
-- [ ] **Step 2: 실패 확인**
+- [x] **Step 2: 실패 확인**
 
 Run: `uv run pytest tests/test_kr_market_flows_payload.py -v`
 Expected: FAIL — `KeyError`/`assert "investor_flows" in payload` 실패.
 
-- [ ] **Step 3: 최소 구현** — `src/market_analyzer.py`의 `build_market_review_payload`(현재 890-962)에서 breadth 조립(951-960) **다음**, `return payload`(962) **직전**에 삽입:
+- [x] **Step 3: 최소 구현** — `src/market_analyzer.py`의 `build_market_review_payload`(현재 890-962)에서 breadth 조립(951-960) **다음**, `return payload`(962) **직전**에 삽입:
 
 ```python
         flows_payload = {}
@@ -846,7 +846,7 @@ Expected: FAIL — `KeyError`/`assert "investor_flows" in payload` 실패.
         return payload
 ```
 
-- [ ] **Step 4: 통과 확인**
+- [x] **Step 4: 통과 확인**
 
 Run: `uv run pytest tests/test_kr_market_flows_payload.py -v`
 Expected: PASS (4 passed)
@@ -854,7 +854,7 @@ Expected: PASS (4 passed)
 Run: `uv run python -m py_compile src/market_analyzer.py`
 Expected: 출력 없음
 
-- [ ] **Step 5: 커밋**
+- [x] **Step 5: 커밋**
 
 ```bash
 git add src/market_analyzer.py tests/test_kr_market_flows_payload.py
@@ -871,17 +871,17 @@ git commit -m "feat: add KR market investor flows to market review payload"
 
 **Interfaces:** 없음 (문서 전용, 테스트 미실행)
 
-- [ ] **Step 1: market-support.md 갱신** — **구현 전에 `docs/market-support.md`의 실제 구조를 읽고** KR 마켓 리뷰 항목에 "시장 전체 투자자별 수급(외국인/기관, KRW, KOSPI/KOSDAQ)" 지원을 기존 서술 스타일로 추가한다. 무인증 소스(네이버 단일)·fail-open·기준일(최신 확정 거래일) 규칙을 1~2줄로 명시한다. Phase 2에서 KR **종목** 수급을 이미 기재했다면, KR **마켓 리뷰** 수급을 별도로 구분해 추가한다.
+- [x] **Step 1: market-support.md 갱신** — **구현 전에 `docs/market-support.md`의 실제 구조를 읽고** KR 마켓 리뷰 항목에 "시장 전체 투자자별 수급(외국인/기관, KRW, KOSPI/KOSDAQ)" 지원을 기존 서술 스타일로 추가한다. 무인증 소스(네이버 단일)·fail-open·기준일(최신 확정 거래일) 규칙을 1~2줄로 명시한다. Phase 2에서 KR **종목** 수급을 이미 기재했다면, KR **마켓 리뷰** 수급을 별도로 구분해 추가한다.
 
-- [ ] **Step 2: CHANGELOG 갱신** — `docs/CHANGELOG.md`의 `## [Unreleased]` 항목 목록에 플랫 1줄 추가(`### 类目标题` 신설 금지):
+- [x] **Step 2: CHANGELOG 갱신** — `docs/CHANGELOG.md`의 `## [Unreleased]` 항목 목록에 플랫 1줄 추가(`### 类目标题` 신설 금지):
 
 ```markdown
 - [新功能] KR 마켓 리뷰에 시장 전체 투자자별 수급(외국인/기관, KOSPI/KOSDAQ, KRW) 연동: LLM 프롬프트·리뷰 본문 결정적 라인·구조화 페이로드에 반영 — fail-open, 비KR 리뷰 바이트 동일, 중국어 거부 게이트 통과(ko 순수 한글).
 ```
 
-- [ ] **Step 3: 문서 일관성 확인** — 추가한 파일명·소스명·동작 서술이 실제 구현(Task 1~5)과 일치하는지 대조한다. 중영 이중 문서가 있으면(예: `docs/market-support.*` 영문본) 동기화 필요 여부를 판단하고, 미동기화 시 교부 설명에 이유를 남긴다.
+- [x] **Step 3: 문서 일관성 확인** — 추가한 파일명·소스명·동작 서술이 실제 구현(Task 1~5)과 일치하는지 대조한다. 중영 이중 문서가 있으면(예: `docs/market-support.*` 영문본) 동기화 필요 여부를 판단하고, 미동기화 시 교부 설명에 이유를 남긴다.
 
-- [ ] **Step 4: 커밋**
+- [x] **Step 4: 커밋**
 
 ```bash
 git add docs/market-support.md docs/CHANGELOG.md
@@ -894,35 +894,35 @@ git commit -m "docs: document KR market review investor flows support"
 
 **Files:** 없음 (검증 전용)
 
-- [ ] **Step 1: 오프라인 전체 게이트**
+- [x] **Step 1: 오프라인 전체 게이트**
 
 Run: `uv run pytest -m "not network" -q`
 Expected: 기존 전체 스위트 + 신규 테스트(format/wiring/prompt/report/payload) 전부 PASS, 실패 0. 특히 마켓 리뷰 회귀(`tests/test_market_review.py`, `tests/test_market_analyzer_generate_text.py`)가 통과하는지 확인 — 비KR 프롬프트/리포트 불변.
 
-- [ ] **Step 2: lint/CI 게이트**
+- [x] **Step 2: lint/CI 게이트**
 
 Run: `uv run ./scripts/ci_gate.sh`
 Expected: exit 0 (flake8 포함 통과). 미사용 import(F401)·라인 길이 위반 없는지 확인.
 
-- [ ] **Step 3: 변경 파일 컴파일 확인**
+- [x] **Step 3: 변경 파일 컴파일 확인**
 
 Run: `uv run python -m py_compile src/report_language.py data_provider/base.py src/market_analyzer.py`
 Expected: 출력 없음
 
-- [ ] **Step 4: (선택, 네트워크 있으면) 실 KR 마켓 리뷰 스모크** — `MARKET_REVIEW_REGION=kr uv run python main.py --market-review --dry-run` 계열로 KR 마켓 리뷰가 예외 없이 완료되고 리포트에 시장 수급 라인이 나오는지 육안 확인. PR 설명에 리포트 발췌/스크린샷을 첨부한다(AGENTS.md: 리포트 렌더링 변경은 스크린샷 필수). 네트워크 미가용 시 이유를 명시하고 오프라인 렌더 테스트(Task 4)로 갈음한다.
+- [x] **Step 4: (선택, 네트워크 있으면) 실 KR 마켓 리뷰 스모크** — `MARKET_REVIEW_REGION=kr uv run python main.py --market-review --dry-run` 계열로 KR 마켓 리뷰가 예외 없이 완료되고 리포트에 시장 수급 라인이 나오는지 육안 확인. PR 설명에 리포트 발췌/스크린샷을 첨부한다(AGENTS.md: 리포트 렌더링 변경은 스크린샷 필수). 네트워크 미가용 시 이유를 명시하고 오프라인 렌더 테스트(Task 4)로 갈음한다.
 
 ---
 
 ## 완료 기준 (스펙 §4 대조)
 
-- [ ] KR 마켓 리뷰 시 `get_market_investor_flows("kospi"/"kosdaq", 5)`를 호출해 `MarketOverview.investor_flows`에 fail-open으로 채운다(비KR·실패 시 None). (Task 2)
-- [ ] LLM 프롬프트에 시장 수급 요약 섹션(외국인/기관 5일 누적 + 기준일, 로케일 zh/en/ko, "보조 신호" 가이드) 주입, 데이터 없으면 생략. (Task 3)
-- [ ] 리뷰 리포트 본문에 결정적 요약 라인(KOSPI/KOSDAQ 2줄, 외국인/기관 5일 누적, 최신 확정일·출처, 로케일 KRW 억/亿韩元/₩B, 개인 제외) zh/en/ko. (Task 4)
-- [ ] 구조화 페이로드에 `investor_flows` 원시 레코드 키. (Task 5)
-- [ ] fail-open: 수급 데이터 없으면 섹션 생략, 리뷰 정상 진행. (Task 2·3·4·5 전부)
-- [ ] 중국어 혼입 거부 게이트 통과 — ko 결정적 블록은 순수 한글. (Task 3·4)
-- [ ] `docs/market-support.md` + `docs/CHANGELOG.md` 갱신. (Task 6)
-- [ ] 오프라인 게이트(`-m "not network"` + `ci_gate.sh`) 통과, 신규 의존성·설정 0, 비KR 마켓 리뷰 바이트 동일. (Task 7)
+- [x] KR 마켓 리뷰 시 `get_market_investor_flows("kospi"/"kosdaq", 5)`를 호출해 `MarketOverview.investor_flows`에 fail-open으로 채운다(비KR·실패 시 None). (Task 2)
+- [x] LLM 프롬프트에 시장 수급 요약 섹션(외국인/기관 5일 누적 + 기준일, 로케일 zh/en/ko, "보조 신호" 가이드) 주입, 데이터 없으면 생략. (Task 3)
+- [x] 리뷰 리포트 본문에 결정적 요약 라인(KOSPI/KOSDAQ 2줄, 외국인/기관 5일 누적, 최신 확정일·출처, 로케일 KRW 억/亿韩元/₩B, 개인 제외) zh/en/ko. (Task 4)
+- [x] 구조화 페이로드에 `investor_flows` 원시 레코드 키. (Task 5)
+- [x] fail-open: 수급 데이터 없으면 섹션 생략, 리뷰 정상 진행. (Task 2·3·4·5 전부)
+- [x] 중국어 혼입 거부 게이트 통과 — ko 결정적 블록은 순수 한글. (Task 3·4)
+- [x] `docs/market-support.md` + `docs/CHANGELOG.md` 갱신. (Task 6)
+- [x] 오프라인 게이트(`-m "not network"` + `ci_gate.sh`) 통과, 신규 의존성·설정 0, 비KR 마켓 리뷰 바이트 동일. (Task 7)
 
 **롤백:** 전부 additive(비KR는 `region!="kr"`·`investor_flows=None`으로 미진입) → PR revert만으로 완전 롤백. 하위 호환 파손 없음(`MarketOverview.investor_flows`는 기본값 None optional 필드, 페이로드는 optional 키).
 
