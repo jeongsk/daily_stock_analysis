@@ -14,6 +14,7 @@ BLOCK_LABELS_ZH = {
     "chip": "筹码",
     "fundamentals": "基本面",
     "news": "新闻",
+    "investor_flows": "投资者",
 }
 
 BLOCK_LABELS_EN = {
@@ -23,6 +24,7 @@ BLOCK_LABELS_EN = {
     "chip": "chip",
     "fundamentals": "fundamentals",
     "news": "news",
+    "investor_flows": "investor flows",
 }
 
 BLOCK_LABELS_KO = {
@@ -32,6 +34,7 @@ BLOCK_LABELS_KO = {
     "chip": "수급",
     "fundamentals": "기본면",
     "news": "뉴스",
+    "investor_flows": "투자자매매",
 }
 
 STATUS_LABELS_ZH = {

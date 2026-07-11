@@ -336,3 +336,38 @@ def test_builder_to_prompt_renders_aux_fetch_failed_without_confidence_cap() -> 
     assert "已知限制：基本面：抓取失败" in section
     assert "置信度规则" not in section
     assert "confidence_level" not in section
+
+
+def _kr_pack(source="NAVER"):
+    from src.services.analysis_context_builder import PipelineAnalysisArtifacts
+
+    rec = {
+        "code": "005930", "market": "kospi", "unit": "shares",
+        "days": [{"date": "2026-07-10", "foreign_net": 1, "institution_net": 2, "individual_net": 3}],
+        "summary": {"foreign_net_5d": 1, "institution_net_5d": 2},
+        "source": source,
+    }
+    artifacts = PipelineAnalysisArtifacts(
+        code="005930.KS", stock_name="삼성전자", market="kr", phase=None,
+        base_context={}, enhanced_context={}, realtime_quote=None, trend_result=None,
+        chip_data=None, fundamental_context={"investor_flows": rec},
+        news_context=None, news_result_count=None, metadata={},
+    )
+    return AnalysisContextBuilder.build(artifacts)
+
+
+class TestInvestorFlowsStatusLine:
+    def test_ko_renders_investor_flows_status(self):
+        pack = _kr_pack("NAVER")
+        text = format_analysis_context_pack_prompt_section(pack, report_language="ko")
+        assert "투자자매매" in text
+
+    def test_en_renders_investor_flows_status(self):
+        pack = _kr_pack("NAVER")
+        text = format_analysis_context_pack_prompt_section(pack, report_language="en")
+        assert "investor flows" in text.lower()
+
+    def test_zh_renders_investor_flows_status(self):
+        pack = _kr_pack("DAUM")
+        text = format_analysis_context_pack_prompt_section(pack, report_language="zh")
+        assert "投资者" in text
