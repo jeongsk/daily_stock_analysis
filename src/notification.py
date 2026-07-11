@@ -2050,6 +2050,7 @@ class NotificationService(
                 "concept_bottom": [],
                 "institution": {},
                 "institution_status": None,
+                "investor_flows": None,
             }
 
         earnings_block = ctx.get("earnings") if isinstance(ctx.get("earnings"), dict) else {}
@@ -2093,6 +2094,7 @@ class NotificationService(
             "concept_bottom": concept_bottom,
             "institution": institution_data,
             "institution_status": institution_block.get("status"),
+            "investor_flows": ctx.get("investor_flows") if isinstance(ctx.get("investor_flows"), dict) else None,
         }
 
     def _append_fundamental_blocks(self, lines: List[str], result: AnalysisResult) -> None:
@@ -2109,6 +2111,7 @@ class NotificationService(
         self._append_financial_summary(lines, blocks, labels)
         self._append_shareholder_return(lines, blocks, labels)
         self._append_institutional_flow(lines, blocks, labels)
+        self._append_kr_investor_flows(lines, blocks, labels, report_language)
         self._append_related_boards(lines, blocks, labels)
 
     def _append_financial_summary(
@@ -2216,6 +2219,35 @@ class NotificationService(
             return f"{sign}{a / 1e4:.2f} 万股"
         return f"{sign}{a:.0f} 股"
 
+    @classmethod
+    def _format_net_shares_localized(cls, value: Any, language: str) -> str:
+        """부호 붙은 순매수 주수를 로케일 단위로 포맷(+ = 순매수).
+
+        ko: 억주/만주/주, zh: 亿股/万股/股, en: M shares(백만주). None/NaN/비수치 -> N/A.
+        """
+        try:
+            amount = float(value)
+        except (TypeError, ValueError):
+            return "N/A"
+        if amount != amount:  # NaN
+            return "N/A"
+        sign = "+" if amount > 0 else ("-" if amount < 0 else "")
+        a = abs(amount)
+        if language == "en":
+            return f"{sign}{a / 1e6:.2f}M shares"
+        if language == "ko":
+            if a >= 1e8:
+                return f"{sign}{a / 1e8:.2f}억주"
+            if a >= 1e4:
+                return f"{sign}{a / 1e4:.2f}만주"
+            return f"{sign}{a:.0f}주"
+        # zh (default)
+        if a >= 1e8:
+            return f"{sign}{a / 1e8:.2f}亿股"
+        if a >= 1e4:
+            return f"{sign}{a / 1e4:.2f}万股"
+        return f"{sign}{a:.0f}股"
+
     def _append_institutional_flow(
         self,
         lines: List[str],
@@ -2252,6 +2284,47 @@ class NotificationService(
             ),
             "|-----:|-----:|------:|------------:|",
             f"| {cells['foreign']} | {cells['trust']} | {cells['dealer']} | {cells['total']} |",
+            "",
+        ])
+
+    def _append_kr_investor_flows(
+        self,
+        lines: List[str],
+        blocks: Dict[str, Any],
+        labels: Dict[str, str],
+        report_language: str,
+    ) -> None:
+        """KR 종목 수급 결정적 요약 라인 — kr-only, 데이터 있을 때만 렌더(严格 additive).
+
+        5일 누적 외국인/기관 순매수(주수)를 최신 확정 거래일·출처와 함께 1줄로.
+        개인은 nullable이고 외국인·기관 합의 역방향이라 라인에서 제외한다.
+        """
+        record = blocks.get("investor_flows")
+        if not isinstance(record, dict):
+            return
+        days = record.get("days")
+        if not isinstance(days, list) or not days:
+            return
+        summary = record.get("summary") if isinstance(record.get("summary"), dict) else {}
+        foreign = self._format_net_shares_localized(summary.get("foreign_net_5d"), report_language)
+        institution = self._format_net_shares_localized(summary.get("institution_net_5d"), report_language)
+        if foreign == "N/A" and institution == "N/A":
+            return
+        latest = days[0] if isinstance(days[0], dict) else {}
+        date = self._format_text(latest.get("date"))
+        source = self._format_text(record.get("source"))
+        window = min(len(days), 5)
+        flow_label = labels.get("kr_flow_label", "Investor Flows")
+        foreign_label = labels.get("inst_foreign_label", "Foreign")
+        inst_label = labels.get("kr_flow_institution_label", "Institutions")
+        if report_language == "en":
+            head = f"**{flow_label}** ({window}d · as of {date})"
+        elif report_language == "ko":
+            head = f"**{flow_label}**({window}일 · {date} 기준)"
+        else:  # zh
+            head = f"**{flow_label}**（{window}日 · 截至{date}）"
+        lines.extend([
+            f"{head}: {foreign_label} {foreign} / {inst_label} {institution} · {source}",
             "",
         ])
 
