@@ -1373,6 +1373,42 @@ def _capital_flow_status_for_stability(reason: str, language: str) -> str:
     return "资金流数据不可用" if language == "zh" else "capital flow unavailable"
 
 
+def _kr_investor_flows_prompt_section(fundamental_context: Optional[Dict[str, Any]]) -> str:
+    """KR 수급 레코드 -> LLM 프롬프트 섹션(zh). 레코드 없으면 "".
+
+    TW 三大法人 주입과 동일 정신(값 표기, 파생 신호 없음). 주수 단위 명시 +
+    "보조 신호" 가이드. 개인 순매수도 참고로 포함하되 과대해석 방지 문구 첨부.
+    """
+    if not isinstance(fundamental_context, dict):
+        return ""
+    record = fundamental_context.get("investor_flows")
+    if not isinstance(record, dict):
+        return ""
+    days = record.get("days")
+    if not isinstance(days, list) or not days:
+        return ""
+    summary = record.get("summary") if isinstance(record.get("summary"), dict) else {}
+    latest = days[0] if isinstance(days[0], dict) else {}
+    foreign_5d = summary.get("foreign_net_5d")
+    inst_5d = summary.get("institution_net_5d")
+    if foreign_5d is None or inst_5d is None:
+        return ""
+    date = latest.get("date", "N/A")
+    source = record.get("source", "N/A")
+    ind = latest.get("individual_net")
+    ind_cell = "N/A" if ind is None else ind
+    return f"""
+### 韩股投资者供需动向（外国人/机构/个人，净买卖，单位:股，最近确定交易日 {date}）
+| 主体 | 5日累计净买卖 | 最新一日({date}) | 决策含义 |
+|------|------|------|----------|
+| 外国人 | {foreign_5d} | {latest.get('foreign_net', 'N/A')} | 正值=净买偏支持，负值=净卖偏压制 |
+| 机构 | {inst_5d} | {latest.get('institution_net', 'N/A')} | 韩股机构方向参考 |
+| 个人 | (未提供累计) | {ind_cell} | 常与外资/机构反向，仅作参考 |
+
+> 供需（投资者动向）是**辅助信号**，用于价格位置的过滤参考，不作为独立买卖决策依据。数据来源 {source}。单位为股，不要换算为金额。
+"""
+
+
 def _set_decision_stability_unavailable(
     result: "AnalysisResult",
     language: str,
@@ -3927,6 +3963,9 @@ class GeminiAnalyzer:
 
 > 三大法人是台股的筹码过滤器（相当于 A 股主力资金/龙虎榜的角色，但口径不同、不可混用）：外资与投信同向净买支持价格、同向净卖压制价格。请据此判断台股筹码结构，不要在有本数据时写“筹码结构：数据缺失”。
 """
+
+        # 韩股投资者供需（外国人/机构/个人）— kr-only；레코드 없으면 빈 문자열로 생략, 严格 additive。
+        prompt += _kr_investor_flows_prompt_section(fundamental_context)
 
         # 添加筹码分布数据
         if 'chip' in context:
