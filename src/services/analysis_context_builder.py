@@ -577,9 +577,11 @@ def _build_data_quality(
         status = _quality_block_status(blocks, key)
         score = _STATUS_SCORES.get(status, _STATUS_SCORES[ContextFieldStatus.MISSING])
         block_scores[key] = score  # 진단용: NOT_SUPPORTED 점수도 기록
-        if status == ContextFieldStatus.NOT_SUPPORTED:
-            # ADR 0002: NOT_SUPPORTED 블록은 분자·분모 모두에서 제외한다.
-            # 점수 의미 = "이 시장이 지원하는 블록 대비 수집 완결성".
+        if key == "investor_flows" and status == ContextFieldStatus.NOT_SUPPORTED:
+            # ADR 0002 (scoped): only the investor_flows block is excluded when
+            # NOT_SUPPORTED, so a non-KR stock's investor_flows never affects its
+            # score AND every other block keeps its pre-branch treatment
+            # (fundamentals NOT_SUPPORTED still counted) — non-KR stays byte-identical.
             continue
         weighted_sum += score * weight
         total_weight += weight

@@ -691,3 +691,28 @@ class TestQualityNormalization:
         # NOT_SUPPORTED / MISSING은 aux limitation에 넣지 않는다(노이즈 방지)
         pack = AnalysisContextBuilder.build(_flows_artifacts("AAPL"))
         assert not any("investor_flows" in lim for lim in pack.data_quality.limitations)
+
+    def test_non_kr_fundamentals_not_supported_score_is_behavior_neutral(self):
+        # Regression: fundamentals CAN be NOT_SUPPORTED for non-KR (pipeline disabled
+        # or offshore uncovered symbol). It must stay COUNTED (only investor_flows is
+        # excluded), so the non-KR score is byte-identical to the pre-branch /100 formula.
+        pack = AnalysisContextBuilder.build(
+            _flows_artifacts("AAPL", fundamental_context={"status": "not_supported"})
+        )
+        dq = pack.data_quality
+        # divergent path actually exercised: fundamentals is NOT_SUPPORTED here
+        assert dq.block_scores["fundamentals"] == 70
+        assert dq.block_scores["investor_flows"] == 70
+        # only investor_flows excluded -> denominator is the 6 pre-branch blocks (=100)
+        expected = round(
+            (
+                dq.block_scores["quote"] * 25
+                + dq.block_scores["daily_bars"] * 25
+                + dq.block_scores["technical"] * 25
+                + dq.block_scores["news"] * 10
+                + dq.block_scores["fundamentals"] * 10
+                + dq.block_scores["chip"] * 5
+            )
+            / 100
+        )
+        assert dq.overall_score == expected  # == 38 for this fixture, not 35

@@ -173,10 +173,13 @@ class KrInstitutionalFetcher:
 3. **품질 점수 반영** (ADR 0002 참조):
    - `_QUALITY_BLOCK_WEIGHTS`에 `investor_flows` **전역 가중치 5** 추가 —
      KR 전용 슬롯이 아닌 전 시장 공통 블록.
-   - 채점을 **NOT_SUPPORTED 제외 정규화**로 변경: `NOT_SUPPORTED` 블록은
-     분자·분모에서 모두 제외하고, 하드코딩 분모 100 대신 참여 가중치 합으로
-     나눈다. 현재 `NOT_SUPPORTED`가 되는 블록은 없으므로 기존 시장 점수는
-     **동작 중립**이며 회귀 테스트로 고정한다.
+   - 채점을 **NOT_SUPPORTED 제외 정규화**로 변경하되, 제외 대상은
+     `investor_flows` 블록 하나로 **한정**한다: 하드코딩 분모 100 대신 참여
+     가중치 합으로 나누되, `investor_flows`가 `NOT_SUPPORTED`일 때만 그
+     블록을 분자·분모에서 뺀다. `fundamentals`도 비KR에서 `NOT_SUPPORTED`가
+     될 수 있으므로(파이프라인 비활성/커버리지 밖 심볼) 제외를 전 블록으로
+     일반화하면 비KR 점수가 흔들린다 — `investor_flows`로 한정해야 기존
+     시장 점수가 **동작 중립**을 유지하며 회귀 테스트로 고정한다.
    - 효과: KR은 가중치 풀 105로 채점(`AVAILABLE` 100이면 점수 개선,
      `FETCH_FAILED` 25면 수집 장애가 점수에 드러남), 비KR은 100 그대로.
    - limitation 노트: aux limitation 키 튜플(`news`/`fundamentals`/`chip`)에

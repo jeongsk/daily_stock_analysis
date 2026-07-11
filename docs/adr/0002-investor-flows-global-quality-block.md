@@ -1,10 +1,15 @@
-# investor_flows는 전 시장 공통 품질 블록 + NOT_SUPPORTED 제외 정규화
+# investor_flows는 전 시장 공통 품질 블록 + investor_flows 한정 NOT_SUPPORTED 제외 정규화
 
 KR 수급(investor_flows)을 KR 전용 부가 메타데이터가 아니라 분석 컨텍스트 팩의
 **전 시장 공통 품질 블록**으로 추가하고, 데이터 품질 점수 계산을 "하드코딩
-분모 100"에서 "**NOT_SUPPORTED 블록을 분자·분모 모두에서 제외한 참여 가중치
-합으로 정규화**"로 변경한다. 시장별 가중치 테이블 분기 없이, 시장이 지원하지
-않는 블록이 채점에서 자연스럽게 빠지는 일관된 모델을 얻기 위해서다.
+분모 100"에서 "**`investor_flows` 블록이 `NOT_SUPPORTED`일 때만 그 블록을
+분자·분모에서 제외한 참여 가중치 합으로 정규화**"로 변경한다. 제외 대상을
+`investor_flows` 블록 하나로 한정한 이유는, `fundamentals`처럼 다른 블록도
+`NOT_SUPPORTED`가 될 수 있는 비KR 종목(예: `ENABLE_FUNDAMENTAL_PIPELINE=false`,
+커버리지 밖 해외 심볼/ETF)에서 일반화된 제외 규칙을 적용하면 그 블록까지
+분모에서 빠져 비KR 점수가 흔들리기 때문이다. 시장별 가중치 테이블 분기 없이,
+KR 외 시장의 `investor_flows`가 채점에서 자연스럽게 빠지는 일관된 모델을
+얻기 위해서다.
 
 ## Considered Options
 
@@ -16,9 +21,10 @@ KR 수급(investor_flows)을 KR 전용 부가 메타데이터가 아니라 분�
 
 ## Consequences
 
-- 현재 `NOT_SUPPORTED` 상태가 되는 블록이 없으므로 기존 시장의 점수는 **동작
-  중립**이다(회귀 테스트로 고정). KR만 investor_flows가 참여해 가중치 풀
-  105로 채점된다.
+- 제외 조건이 `investor_flows` 블록에 한정되어 있어, 비KR 종목에서
+  `fundamentals` 등 다른 블록이 `NOT_SUPPORTED`가 되더라도 그 블록은 기존
+  그대로 분자·분모에 포함된다 — 비KR 시장의 점수는 **동작 중립**이다(회귀
+  테스트로 고정). KR만 investor_flows가 참여해 가중치 풀 105로 채점된다.
 - 채점 의미론이 "고정 100점 만점"에서 "**해당 시장이 지원하는 블록 대비
   완결성**"으로 바뀐다. 이후 다른 시장 수급(TW 등)이 이 블록에 합류해도 채점
   엔진 변경이 필요 없다.
