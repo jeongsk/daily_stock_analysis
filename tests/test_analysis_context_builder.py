@@ -428,6 +428,7 @@ def test_data_quality_scores_fixed_blocks_and_limits_auxiliary_missing() -> None
         "news": 100,
         "fundamentals": 100,
         "chip": 100,
+        "investor_flows": 70,  # NOT_SUPPORTED (non-KR fixture) — excluded from overall_score
     }
     assert pack.data_quality.limitations == []
 
@@ -555,3 +556,138 @@ def test_builder_module_stays_zero_fetch_and_zero_storage_import(monkeypatch) ->
     pack = reloaded.AnalysisContextBuilder.build(_artifacts())
 
     assert pack.blocks["quote"].status == ContextFieldStatus.AVAILABLE
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: KR investor_flows 전역 품질 블록 + NOT_SUPPORTED 제외 정규화
+# ---------------------------------------------------------------------------
+
+from src.schemas.analysis_context_pack import ContextFieldStatus
+from src.services.analysis_context_builder import (
+    AnalysisContextBuilder,
+    PipelineAnalysisArtifacts,
+)
+
+_KR_FLOWS_REC = {
+    "code": "005930",
+    "market": "kospi",
+    "unit": "shares",
+    "days": [
+        {"date": "2026-07-10", "foreign_net": 625985, "institution_net": 2313745, "individual_net": -2851466},
+        {"date": "2026-07-09", "foreign_net": 845552, "institution_net": 1107761, "individual_net": -1739937},
+    ],
+    "summary": {"foreign_net_5d": 1471537, "institution_net_5d": 3421506},
+    "source": "NAVER",
+}
+
+
+def _flows_artifacts(code, *, fundamental_context=None):
+    """블록 빌더 테스트용 최소 아티팩트 — 네트워크/피처 불필요."""
+    return PipelineAnalysisArtifacts(
+        code=code,
+        stock_name="TEST",
+        market="kr" if code.upper().endswith((".KS", ".KQ")) else "us",
+        phase=None,
+        base_context={},
+        enhanced_context={},
+        realtime_quote=None,
+        trend_result=None,
+        chip_data=None,
+        fundamental_context=fundamental_context,
+        news_context=None,
+        news_result_count=None,
+        metadata={},
+    )
+
+
+class TestInvestorFlowsBlock:
+    def test_non_kr_is_not_supported(self):
+        pack = AnalysisContextBuilder.build(_flows_artifacts("AAPL"))
+        block = pack.blocks["investor_flows"]
+        assert block.status == ContextFieldStatus.NOT_SUPPORTED
+
+    def test_kr_none_record_is_fetch_failed(self):
+        pack = AnalysisContextBuilder.build(
+            _flows_artifacts("005930.KS", fundamental_context={"investor_flows": None})
+        )
+        assert pack.blocks["investor_flows"].status == ContextFieldStatus.FETCH_FAILED
+
+    def test_kr_missing_key_is_fetch_failed(self):
+        # KR인데 fundamental_context에 investor_flows 키 자체가 없는 경우도 수집 실패
+        pack = AnalysisContextBuilder.build(
+            _flows_artifacts("005930.KS", fundamental_context={})
+        )
+        assert pack.blocks["investor_flows"].status == ContextFieldStatus.FETCH_FAILED
+
+    def test_kr_naver_is_available(self):
+        pack = AnalysisContextBuilder.build(
+            _flows_artifacts("005930.KS", fundamental_context={"investor_flows": dict(_KR_FLOWS_REC)})
+        )
+        block = pack.blocks["investor_flows"]
+        assert block.status == ContextFieldStatus.AVAILABLE
+        assert block.source == "NAVER"
+
+    def test_kr_daum_is_fallback(self):
+        rec = dict(_KR_FLOWS_REC, source="DAUM")
+        pack = AnalysisContextBuilder.build(
+            _flows_artifacts("068270.KQ", fundamental_context={"investor_flows": rec})
+        )
+        assert pack.blocks["investor_flows"].status == ContextFieldStatus.FALLBACK
+
+
+class TestQualityNormalization:
+    def test_non_kr_score_is_behavior_neutral(self):
+        # investor_flows(NOT_SUPPORTED)는 분자·분모에서 제외 -> 비KR 점수 불변.
+        # 모든 코어/aux 블록이 MISSING인 최소 아티팩트: 정규화 분모는 여전히 100.
+        pack = AnalysisContextBuilder.build(_flows_artifacts("AAPL"))
+        dq = pack.data_quality
+        # investor_flows는 block_scores에는 기록되지만(진단용) overall에는 미반영
+        assert dq.block_scores["investor_flows"] == 70  # NOT_SUPPORTED score
+        # 비KR: investor_flows 제외 후 6블록 가중치 합 100으로 정규화 (동작 중립)
+        expected = round(
+            (
+                dq.block_scores["quote"] * 25
+                + dq.block_scores["daily_bars"] * 25
+                + dq.block_scores["technical"] * 25
+                + dq.block_scores["news"] * 10
+                + dq.block_scores["fundamentals"] * 10
+                + dq.block_scores["chip"] * 5
+            )
+            / 100
+        )
+        assert dq.overall_score == expected
+
+    def test_kr_investor_flows_participates_in_score(self):
+        # KR + AVAILABLE(100)이면 investor_flows가 분자·분모(가중치 5)에 참여.
+        rec = dict(_KR_FLOWS_REC)
+        pack = AnalysisContextBuilder.build(
+            _flows_artifacts("005930.KS", fundamental_context={"investor_flows": rec})
+        )
+        dq = pack.data_quality
+        assert dq.block_scores["investor_flows"] == 100
+        # 분모가 105로 늘어 investor_flows AVAILABLE이 점수에 기여
+        total_weight = 25 + 25 + 25 + 10 + 10 + 5 + 5
+        weighted = (
+            dq.block_scores["quote"] * 25
+            + dq.block_scores["daily_bars"] * 25
+            + dq.block_scores["technical"] * 25
+            + dq.block_scores["news"] * 10
+            + dq.block_scores["fundamentals"] * 10
+            + dq.block_scores["chip"] * 5
+            + 100 * 5
+        )
+        assert dq.overall_score == round(weighted / total_weight)
+
+    def test_kr_fetch_failed_lowers_score_and_notes_limitation(self):
+        pack = AnalysisContextBuilder.build(
+            _flows_artifacts("005930.KS", fundamental_context={"investor_flows": None})
+        )
+        dq = pack.data_quality
+        assert dq.block_scores["investor_flows"] == 25  # FETCH_FAILED
+        # aux limitation: FETCH_FAILED는 표기된다
+        assert any("investor_flows" in lim for lim in dq.limitations)
+
+    def test_non_kr_not_supported_is_not_a_limitation(self):
+        # NOT_SUPPORTED / MISSING은 aux limitation에 넣지 않는다(노이즈 방지)
+        pack = AnalysisContextBuilder.build(_flows_artifacts("AAPL"))
+        assert not any("investor_flows" in lim for lim in pack.data_quality.limitations)

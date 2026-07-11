@@ -16,6 +16,7 @@ from src.schemas.analysis_context_pack import (
     ContextFieldStatus,
     DataQuality,
 )
+from src.services.market_symbol_utils import is_kr_suffix_symbol
 
 
 _REALTIME_OVERLAY_WARNING = "intraday_realtime_overlay"
@@ -28,6 +29,7 @@ _QUALITY_BLOCK_WEIGHTS: Dict[str, int] = {
     "news": 10,
     "fundamentals": 10,
     "chip": 5,
+    "investor_flows": 5,  # ADR 0002: 전 시장 공통 품질 블록(비KR은 NOT_SUPPORTED로 정규화 제외)
 }
 _STATUS_SCORES: Dict[ContextFieldStatus, int] = {
     ContextFieldStatus.AVAILABLE: 100,
@@ -94,6 +96,7 @@ class AnalysisContextBuilder:
         blocks["chip"] = _build_chip_block(artifacts)
         blocks["fundamentals"] = _build_fundamentals_block(artifacts)
         blocks["news"] = _build_news_block(artifacts)
+        blocks["investor_flows"] = _build_investor_flows_block(artifacts)
         portfolio_block = _build_portfolio_block(artifacts)
         if portfolio_block is not None:
             blocks["portfolio"] = portfolio_block
@@ -354,6 +357,67 @@ def _build_chip_block(artifacts: PipelineAnalysisArtifacts) -> AnalysisContextBl
     )
 
 
+def _build_investor_flows_block(artifacts: PipelineAnalysisArtifacts) -> AnalysisContextBlock:
+    """KR 투자자별 수급 블록 — 전 시장 공통 품질 블록(ADR 0002).
+
+    상태 매핑(스펙 §3 item2):
+      - 비KR 종목            -> NOT_SUPPORTED (정규화에서 분자·분모 제외)
+      - KR + 레코드 없음/None -> FETCH_FAILED (상장 KR은 포털에 수급이 항상 있으므로
+                               None은 사실상 수집 실패)
+      - KR + source="DAUM"   -> FALLBACK
+      - KR + source="NAVER"  -> AVAILABLE
+    """
+    code = str(getattr(artifacts, "code", "") or "")
+    if not is_kr_suffix_symbol(code):
+        return AnalysisContextBlock(
+            status=ContextFieldStatus.NOT_SUPPORTED,
+            items={
+                "investor_flows": AnalysisContextItem(
+                    status=ContextFieldStatus.NOT_SUPPORTED,
+                    missing_reason="investor_flows_not_supported",
+                )
+            },
+        )
+
+    context = artifacts.fundamental_context if isinstance(artifacts.fundamental_context, dict) else {}
+    record = context.get("investor_flows")
+    if not isinstance(record, dict) or not record.get("days"):
+        return AnalysisContextBlock(
+            status=ContextFieldStatus.FETCH_FAILED,
+            items={
+                "investor_flows": AnalysisContextItem(
+                    status=ContextFieldStatus.FETCH_FAILED,
+                    missing_reason="investor_flows_fetch_failed",
+                )
+            },
+        )
+
+    source = _source_text(record.get("source"))
+    status = (
+        ContextFieldStatus.FALLBACK
+        if str(record.get("source") or "").upper() == "DAUM"
+        else ContextFieldStatus.AVAILABLE
+    )
+    summary = record.get("summary") if isinstance(record.get("summary"), dict) else {}
+    latest = record["days"][0] if isinstance(record["days"][0], dict) else {}
+    return AnalysisContextBlock(
+        status=status,
+        items={
+            "foreign_net_5d": AnalysisContextItem(
+                status=status, value=summary.get("foreign_net_5d"), source=source
+            ),
+            "institution_net_5d": AnalysisContextItem(
+                status=status, value=summary.get("institution_net_5d"), source=source
+            ),
+            "latest_date": AnalysisContextItem(
+                status=status, value=latest.get("date"), source=source
+            ),
+        },
+        source=source,
+        metadata={"unit": record.get("unit"), "days": len(record["days"])},
+    )
+
+
 def _build_fundamentals_block(artifacts: PipelineAnalysisArtifacts) -> AnalysisContextBlock:
     context = artifacts.fundamental_context if isinstance(artifacts.fundamental_context, dict) else None
     if not context:
@@ -508,13 +572,19 @@ def _build_data_quality(
 ) -> DataQuality:
     block_scores: Dict[str, int] = {}
     weighted_sum = 0
+    total_weight = 0
     for key, weight in _QUALITY_BLOCK_WEIGHTS.items():
         status = _quality_block_status(blocks, key)
         score = _STATUS_SCORES.get(status, _STATUS_SCORES[ContextFieldStatus.MISSING])
-        block_scores[key] = score
+        block_scores[key] = score  # 진단용: NOT_SUPPORTED 점수도 기록
+        if status == ContextFieldStatus.NOT_SUPPORTED:
+            # ADR 0002: NOT_SUPPORTED 블록은 분자·분모 모두에서 제외한다.
+            # 점수 의미 = "이 시장이 지원하는 블록 대비 수집 완결성".
+            continue
         weighted_sum += score * weight
+        total_weight += weight
 
-    overall_score = int(round(weighted_sum / 100))
+    overall_score = int(round(weighted_sum / total_weight)) if total_weight else 0
     return DataQuality(
         overall_score=overall_score,
         level=_quality_level(overall_score),
@@ -557,7 +627,7 @@ def _quality_limitations(blocks: Dict[str, AnalysisContextBlock]) -> List[str]:
         if status in _CORE_LIMITATION_STATUSES:
             limitations.append(f"{key}: {status.value}")
 
-    for key in ("news", "fundamentals", "chip"):
+    for key in ("news", "fundamentals", "chip", "investor_flows"):
         status = _quality_block_status(blocks, key)
         if status in _AUX_LIMITATION_STATUSES:
             limitations.append(f"{key}: {status.value}")
