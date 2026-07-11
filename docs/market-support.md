@@ -39,7 +39,7 @@
 不承诺项：
 
 - 不承诺实时行情；Yahoo Finance 数据可能延迟或字段缺失。
-- 不承诺完整基本面、行业/板块、市场宽度或涨跌家数。JP/KR 大盘复盘 v1 仅提供主要指数、新闻线索与模板/LLM 复盘，不提供日韩市场宽度或板块排行。
+- 不承诺完整基本面、行业/板块、市场宽度或涨跌家数。JP/KR 大盘复盘 v1 提供主要指数、新闻线索与模板/LLM 复盘，`kr` 另提供市场整体外国人/机构资金流统计（`jp` 不提供），但均不提供日韩市场宽度或板块排行。
 - 不承诺完整日韩全市场股票列表；Web 自动补全当前仅覆盖仓内种子索引中的常用标的（已扩充至各 30 只左右的头部标的），未命中时仍可手动输入 suffix 代码。
 - 不补齐 Portfolio 的 JPY/KRW 汇率、成本、市值完整口径；相关字段仅放开市场类型以避免前后端校验拒绝。
 
@@ -59,7 +59,7 @@
   - `^KQ11`：<https://finance.yahoo.com/quote/%5EKQ11/>
 - Web 设置页通过 `MARKET_REVIEW_REGION` 文本框输入逗号分隔子集（如 `cn,jp`、`cn,us,jp,kr`）；交易日检查会按 `XTKS / Asia/Tokyo` 与 `XKRX / Asia/Seoul` 过滤 `both` 中当日开市市场。
 - 复盘策略、新闻搜索词、Prompt 市场语义和中英文通知标题均按 JP/KR 独立 profile 处理。
-- **韩股市场大盘复盘投资者别买卖动向（수급，市场级，KR-only）**：`kr` 大盘复盘接入 KOSPI/KOSDAQ 市场整体外国人/机构日别净买卖（单位 **KRW**，`KrInstitutionalFetcher.get_market_investor_flows`，`data_provider/kr_institutional_fetcher.py`）。数据源为 Naver **无认证**公开页面（`finance.naver.com/sise/investorDealTrendDay.naver`，单一来源，无 Daum 备援），基准日为最新已确认交易日；接口失败/字段缺失一律 **fail-open** 返回无数据，不中断复盘主流程，`jp` 大盘复盘及非 `kr` 复盘不受影响。已接入复盘 LLM Prompt 辅助信号、报告正文确定性摘要行（zh/en/ko，个人净买卖不计入摘要行）与结构化 payload `investor_flows` 键。
+- **韩股市场大盘复盘投资者别买卖动向（수급，市场级，KR-only）**：`kr` 大盘复盘接入 KOSPI/KOSDAQ 市场整体外国人/机构日别净买卖（单位 **KRW**，`KrInstitutionalFetcher.get_market_investor_flows`，`data_provider/kr_institutional_fetcher.py`）。数据源为 Naver **无认证**公开页面（`finance.naver.com/sise/investorDealTrendDay.naver`，单一来源，无 Daum 备援），基准日为最新已确认交易日；接口失败/字段缺失一律 **fail-open** 返回无数据，不中断复盘主流程，`jp` 大盘复盘及非 `kr` 复盘不受影响。已接入复盘 LLM Prompt 辅助信号、报告正文确定性摘要行（zh/en/ko：外国人/机构 5 日累计净买卖，个人净买卖不计入摘要行）与结构化 payload `investor_flows` 键。
 
 说明（兼容性与验收口径）：
 
@@ -86,7 +86,7 @@ PY
 
 边界：
 
-- JP/KR 大盘复盘 v1 不提供涨跌家数、涨跌停、行业/板块排行或资金流统计；结构化 payload 中 `breadth` 仍只在有市场宽度数据时出现。
+- JP/KR 大盘复盘 v1 不提供涨跌家数、涨跌停或行业/板块排行；结构化 payload 中 `breadth` 仍只在有市场宽度数据时出现。市场整体外国人/机构资金流统计现已随 `kr` 大盘复盘提供（见上文「韩股市场大盘复盘投资者别买卖动向」小节），`jp` 大盘复盘仍不提供资金流统计。
 - 单一 JP/KR 指数拉取失败按既有 yfinance fail-open 逻辑跳过，不拖垮其它指数或其它市场。
 - 如果 `exchange-calendars` 缺少对应交易所日历，继续沿用既有交易日 fail-open/fail-closed 语义。
 
