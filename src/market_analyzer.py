@@ -986,6 +986,15 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
                 "turnover_unit": self._get_turnover_unit_label(),
             }
 
+        flows_payload = {}
+        if isinstance(overview.investor_flows, dict):
+            for market_key in ("kospi", "kosdaq"):
+                rec = overview.investor_flows.get(market_key)
+                if isinstance(rec, dict) and rec.get("days"):
+                    flows_payload[market_key] = rec
+        if flows_payload:
+            payload["investor_flows"] = flows_payload
+
         return payload
 
     def _supports_market_light(self) -> bool:
