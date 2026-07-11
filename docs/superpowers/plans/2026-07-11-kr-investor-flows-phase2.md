@@ -1179,3 +1179,4 @@ Expected: 출력 없음
 - **agent 경로 동기화(§9 확정)** = 자동. 컨텍스트 팩 요약이 표준/agent 양쪽 공유 → 블록만 추가하면 전파. per-agent 배선 변경 없음.
 - **프롬프트 언어 편차** = analyzer 프롬프트는 zh 고정(주변 프롬프트·TW 선례 일관, 출력 언어는 별도 제어). 스펙 §3 item4의 "zh/en/ko 프롬프트"는 실제 코드 현실과 어긋나며, zh/en/ko 다국어는 컨텍스트 팩 상태 라인(Task 3)과 리포트 라인(Task 5)에서 충족.
 - **요약 라인 값 = 5일 누적** = fetcher `summary.foreign_net_5d`/`institution_net_5d`. 스펙 §3 item5 예시(`외국인 +62.6만주`)는 07-10 단일일 수치로 보이나(5일 누적은 부호가 다름), fetcher summary 계약·"5일" 라벨·§2 5일 누적 일관성을 위해 5일 누적을 렌더한다. 검토자가 단일일 표기를 원하면 라인 소스만 `days[0]`로 교체.
+- **품질 정규화 = investor_flows 한정 제외 (구현 시 확정, 최종 리뷰 반영)** — Task 2 본문의 코드/설명은 "모든 NOT_SUPPORTED 블록 제외"를 기술하지만, 최종 whole-branch 리뷰에서 `fundamentals`도 비KR에서 NOT_SUPPORTED가 될 수 있어(파이프라인 비활성/커버리지 밖 심볼) 일반화하면 비KR 점수가 이동함(실측 38→35)이 확인되었다. 스펙 §1 하드 기준("비KR 점수 불변")을 지키기 위해 제외를 **`investor_flows` 블록 하나로 한정**했다(commit `fix: scope investor_flows quality exclusion...`). 최종 shipped 메커니즘의 단일 진실 원천은 ADR 0002와 스펙 §3 item3이다.
