@@ -1096,6 +1096,23 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
                 fallback_heading = fallback_headings[language]
                 review = f"{review.rstrip()}\n\n{fallback_heading}\n{sector_block}\n"
 
+        flows_block = self._build_kr_market_flows_block(overview)
+        if flows_block:
+            original_review = review
+            review = self._insert_after_section(
+                review,
+                patterns["market_summary"],
+                flows_block,
+            )
+            if review == original_review and flows_block not in review:
+                fallback_headings = {
+                    "en": "### 1. Market Summary",
+                    "ko": "### 1. 시장 요약",
+                    "zh": "### 一、盘面总览",
+                }
+                fallback_heading = fallback_headings[language]
+                review = f"{review.rstrip()}\n\n{fallback_heading}\n{flows_block}\n"
+
         return review
 
     @staticmethod
@@ -1191,6 +1208,26 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
                 "不作为独立交易决策依据。）"
             )
         return "\n".join([heading, guide, ""] + lines)
+
+    def _build_kr_market_flows_block(self, overview: MarketOverview) -> str:
+        """KR 시장 수급 결정적 블록(로케일) — 리포트 본문 주입용. 데이터 없으면 "".
+
+        `시장 요약` 섹션에 삽입되므로 별도 ### 헤딩 없이 볼드 헤더 + 시장별 라인.
+        _get_review_language()를 쓰며, ko는 순수 한글(거부 게이트 이후 주입 안전).
+        """
+        language = self._get_review_language()
+        lines = self._kr_market_flow_lines(overview, language)
+        if not lines:
+            return ""
+        date = self._kr_market_flows_asof(overview) or "N/A"
+        window = 5
+        if language == "en":
+            head = f"**Market Investor Flows** ({window}d · as of {date})"
+        elif language == "ko":
+            head = f"**시장 투자자 수급**({window}일 · {date} 기준)"
+        else:
+            head = f"**市场投资者动向**（{window}日 · 截至{date}）"
+        return "\n".join([head, ""] + lines)
 
     def _build_stats_block(self, overview: MarketOverview) -> str:
         """Build market statistics block."""
