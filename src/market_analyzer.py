@@ -22,6 +22,7 @@ import pandas as pd
 
 from src.config import get_config
 from src.report_language import (
+    format_net_krw_localized,
     has_disallowed_report_script,
     localize_market_review_label,
     normalize_report_language,
@@ -1116,6 +1117,81 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
         # Insert the block before the next heading, with spacing
         return text[:insert_pos].rstrip() + '\n\n' + block + '\n\n' + text[insert_pos:].lstrip('\n')
 
+    def _kr_market_flow_lines(self, overview: MarketOverview, language: str) -> List[str]:
+        """KOSPI/KOSDAQ 시장 수급을 로케일 라인 리스트로. 데이터 없으면 [].
+
+        각 라인: `- KOSPI: 외국인 -3,228억 / 기관 +11,314억 · NAVER`.
+        개인(individual)은 제외(외국인·기관 역방향 중복). 두 시장 모두 없으면 [].
+        """
+        records = overview.investor_flows if isinstance(overview.investor_flows, dict) else {}
+        if language == "en":
+            foreign_label, inst_label = "Foreign", "Institutions"
+        elif language == "ko":
+            foreign_label, inst_label = "외국인", "기관"
+        else:
+            foreign_label, inst_label = "外国人", "机构"
+        lines: List[str] = []
+        for market_key, market_name in (("kospi", "KOSPI"), ("kosdaq", "KOSDAQ")):
+            rec = records.get(market_key)
+            if not isinstance(rec, dict):
+                continue
+            days = rec.get("days")
+            if not isinstance(days, list) or not days:
+                continue
+            summary = rec.get("summary") if isinstance(rec.get("summary"), dict) else {}
+            foreign = format_net_krw_localized(summary.get("foreign_net_5d"), language)
+            institution = format_net_krw_localized(summary.get("institution_net_5d"), language)
+            if foreign == "N/A" and institution == "N/A":
+                continue
+            source = str(rec.get("source") or "").strip() or "N/A"
+            lines.append(
+                f"- {market_name}: {foreign_label} {foreign} / {inst_label} {institution} · {source}"
+            )
+        return lines
+
+    @staticmethod
+    def _kr_market_flows_asof(overview: MarketOverview) -> str:
+        """수급 최신 확정 거래일(두 시장 중 최신). 없으면 ""."""
+        records = overview.investor_flows if isinstance(overview.investor_flows, dict) else {}
+        dates: List[str] = []
+        for market_key in ("kospi", "kosdaq"):
+            rec = records.get(market_key)
+            if isinstance(rec, dict):
+                days = rec.get("days")
+                if isinstance(days, list) and days and isinstance(days[0], dict):
+                    date = days[0].get("date")
+                    if date:
+                        dates.append(str(date))
+        return max(dates) if dates else ""
+
+    def _build_kr_market_flows_prompt_block(
+        self, overview: MarketOverview, review_language: str
+    ) -> str:
+        """KR 시장 수급 -> LLM 프롬프트 섹션(로케일). 데이터 없으면 ""."""
+        lines = self._kr_market_flow_lines(overview, review_language)
+        if not lines:
+            return ""
+        date = self._kr_market_flows_asof(overview) or "N/A"
+        if review_language == "en":
+            heading = "## Market Investor Flows (KOSPI/KOSDAQ)"
+            guide = (
+                f"(5-day cumulative net buy in KRW, as of {date}. Investor flows are an "
+                "auxiliary market-breadth signal, not a standalone trade decision.)"
+            )
+        elif review_language == "ko":
+            heading = "## 시장 투자자 수급 (KOSPI/KOSDAQ)"
+            guide = (
+                f"(5일 누적 순매수, 원 단위, {date} 기준. 투자자 수급은 시장 폭을 보는 "
+                "보조 신호이며 단독 매매 판단 근거가 아닙니다.)"
+            )
+        else:
+            heading = "## 市场投资者动向 (KOSPI/KOSDAQ)"
+            guide = (
+                f"（5日累计净买卖，韩元单位，截至{date}。投资者动向是市场宽度的辅助信号，"
+                "不作为独立交易决策依据。）"
+            )
+        return "\n".join([heading, guide, ""] + lines)
+
     def _build_stats_block(self, overview: MarketOverview) -> str:
         """Build market statistics block."""
         has_stats = overview.up_count or overview.down_count or overview.total_amount
@@ -1770,6 +1846,13 @@ Concept lagging: {bottom_concepts_text if bottom_concepts_text else "N/A"}"""
                 data_limit_lines.append("- 该市场暂无行业板块/概念题材涨跌榜。")
             if data_limit_lines:
                 data_limits_block = "## 数据边界\n" + "\n".join(data_limit_lines)
+
+        # KR: 수급이 곧 시장 폭 신호 — "데이터 없음" stats_block을 실제 수급으로 대체.
+        # region 가드로 비KR은 미진입(바이트 동일). 데이터 없으면 기존 문구 유지.
+        if self.region == "kr":
+            kr_flows_prompt = self._build_kr_market_flows_prompt_block(overview, review_language)
+            if kr_flows_prompt:
+                stats_block = kr_flows_prompt
 
         data_no_indices_hint = (
             "注意：由于行情数据获取失败，请主要根据【市场新闻】进行定性分析和总结，不要编造具体的指数点位。"
