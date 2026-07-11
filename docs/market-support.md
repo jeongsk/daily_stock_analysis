@@ -17,7 +17,7 @@
 - 日股/韩股 suffix 识别已集中到共享市场代码工具，数据源路由、Prompt 市场识别、交易日历和股票索引裸码解析复用同一组规则，减少后续市场扩展时的规则漂移。
 - 日股/韩股日线和基础实时/近实时行情只走 `YfinanceFetcher`，不尝试 AkShare、Tushare、Efinance、Pytdx、Baostock 等 A 股专属数据源；yfinance 报价会尽量带上 `market`、`currency`、`data_quality`、`missing_fields` 等质量元数据。
 - 基本面复用既有 offshore yfinance 轻量路径；A 股专属资金流、龙虎榜、板块等能力按 `not_supported` 降级，offshore 基本面上下文也会标记 provider、as_of、data_quality 和缺失块。
-- **韩股个股投资者别买卖动向（수급，KR-only，不含日股）**：`KrInstitutionalFetcher`（`data_provider/kr_institutional_fetcher.py`）通过 Naver（主）/Daum（备援）**无认证**公开页面获取外国人/机构/个人逐日净买卖（单位：**股数**），基准日为最新已确认交易日。已接入分析上下文包全市场统一品质区块（`investor_flows`，权重 5，ADR 0002：非 KR 市场按 `NOT_SUPPORTED` 排除于正规化分母，评分行为中立）、LLM 分析 Prompt（辅助信号）以及报告/通知确定性摘要行（zh/en/ko：外国人/机构 5 日累计净买卖 + 最新确认日 + 来源，个人不计入摘要行）。接口失败/限流/字段缺失一律 **fail-open** 返回无数据，不中断分析；市场级（KOSPI/KOSDAQ）大盘复盘接入尚未纳入，见后续 Phase。
+- **韩股个股投资者别买卖动向（수급，KR-only，不含日股）**：`KrInstitutionalFetcher`（`data_provider/kr_institutional_fetcher.py`）通过 Naver（主）/Daum（备援）**无认证**公开页面获取外国人/机构/个人逐日净买卖（单位：**股数**），基准日为最新已确认交易日。已接入分析上下文包全市场统一品质区块（`investor_flows`，权重 5，ADR 0002：非 KR 市场按 `NOT_SUPPORTED` 排除于正规化分母，评分行为中立）、LLM 分析 Prompt（辅助信号）以及报告/通知确定性摘要行（zh/en/ko：外国人/机构 5 日累计净买卖 + 最新确认日 + 来源，个人不计入摘要行）。接口失败/限流/字段缺失一律 **fail-open** 返回无数据，不中断分析；市场级（KOSPI/KOSDAQ）大盘复盘投资者别买卖动向另见下文「日本/韩国大盘复盘 v1」小节。
 - 报告 Prompt 已增加日股/韩股市场语义，避免套用 A 股涨跌停、北向资金、龙虎榜、融资融券等概念。
 - 交易日历注册 `jp: XTKS / Asia/Tokyo` 与 `kr: XKRX / Asia/Seoul`。日股常规阶段可识别盘前、盘中、午休、15:25-15:30 收盘集合竞价、盘后与非交易日；韩股常规阶段可识别盘前、盘中、15:20-15:30 收盘集合竞价、盘后与非交易日。若本地 `exchange-calendars` 版本缺少对应日历，既有 fail-open/fail-closed 语义保持不变。
 
@@ -59,6 +59,7 @@
   - `^KQ11`：<https://finance.yahoo.com/quote/%5EKQ11/>
 - Web 设置页通过 `MARKET_REVIEW_REGION` 文本框输入逗号分隔子集（如 `cn,jp`、`cn,us,jp,kr`）；交易日检查会按 `XTKS / Asia/Tokyo` 与 `XKRX / Asia/Seoul` 过滤 `both` 中当日开市市场。
 - 复盘策略、新闻搜索词、Prompt 市场语义和中英文通知标题均按 JP/KR 独立 profile 处理。
+- **韩股市场大盘复盘投资者别买卖动向（수급，市场级，KR-only）**：`kr` 大盘复盘接入 KOSPI/KOSDAQ 市场整体外国人/机构日别净买卖（单位 **KRW**，`KrInstitutionalFetcher.get_market_investor_flows`，`data_provider/kr_institutional_fetcher.py`）。数据源为 Naver **无认证**公开页面（`finance.naver.com/sise/investorDealTrendDay.naver`，单一来源，无 Daum 备援），基准日为最新已确认交易日；接口失败/字段缺失一律 **fail-open** 返回无数据，不中断复盘主流程，`jp` 大盘复盘及非 `kr` 复盘不受影响。已接入复盘 LLM Prompt 辅助信号、报告正文确定性摘要行（zh/en/ko，个人净买卖不计入摘要行）与结构化 payload `investor_flows` 键。
 
 说明（兼容性与验收口径）：
 

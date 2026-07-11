@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [新功能] KR 마켓 리뷰에 시장 전체 투자자별 수급(외국인/기관, KOSPI/KOSDAQ, KRW) 연동: LLM 프롬프트·리뷰 본문 결정적 라인·구조화 페이로드에 반영 — fail-open, 비KR 리뷰 바이트 동일, 중국어 거부 게이트 통과(ko 순수 한글).
 - [新功能] KR 개별 종목 분석에 투자자별 수급(외국인/기관/개인) 연동: 데이터 품질 전역 블록·LLM 프롬프트·리포트 요약 라인(zh/en/ko)에 반영 — fail-open, 비KR 시장 점수 동작 중립(ADR 0002). 시장 리뷰 연동은 후속 Phase.
 - [新功能] KR 투자자별 매매동향(수급) 데이터 계층 추가: `KrInstitutionalFetcher`가 네이버·다음 무인증 소스로 종목(주수)·KOSPI/KOSDAQ 시장(KRW) 일별 순매수를 수집 — fail-open·캐시·서킷브레이커 포함, 리포트 연동은 후속 Phase (설계: docs/superpowers/specs/2026-07-10-kr-investor-flows-design.md)
 - [修复] LLM 채널 설정 편집기의 잔여 하드코딩 중국어 i18n 처리: 진단 라벨(단계/오류 코드/문제 해결·원인 힌트), 저장 검증 메시지, 연결 테스트·모델 가져오기·능력 검사 상태 문구, 능력 옵션 툴팁·상태 배지, 제공자 라벨·설정 힌트·능력 배지(zh 규범값 유지 + en/ko 오버라이드 getter), 도움말 문서 라벨, 런타임 모델 드롭다운 '현재 설정' 라벨을 3언어(zh/en/ko)로 이전.
