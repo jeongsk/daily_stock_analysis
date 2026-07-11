@@ -115,6 +115,9 @@ class MarketOverview:
     top_concepts: List[Dict] = field(default_factory=list)    # 涨幅前5概念
     bottom_concepts: List[Dict] = field(default_factory=list) # 跌幅前5概念
 
+    # KR 시장 수급(외국인/기관/개인, KRW) — {"kospi": rec, "kosdaq": rec}; 비KR은 None
+    investor_flows: Optional[Dict[str, Any]] = None
+
 
 @dataclass
 class MarketLightReviewResult:
@@ -546,10 +549,33 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
         
         # 4. 获取北向资金（可选）
         # self._get_north_flow(overview)
-        
+
+        # 5. KR 시장 수급(외국인/기관, KRW) — kr 전용, fail-open
+        if self.region == "kr":
+            overview.investor_flows = self._get_kr_market_investor_flows()
+
         return overview
 
-    
+    def _get_kr_market_investor_flows(self) -> Optional[Dict[str, Any]]:
+        """KOSPI/KOSDAQ 시장 수급 레코드 수집 — kr 전용, 전면 fail-open.
+
+        {"kospi": rec, "kosdaq": rec}(데이터 있는 시장만) 반환. 둘 다 없으면 None.
+        어떤 예외도 삼켜 마켓 리뷰 메인 흐름을 중단시키지 않는다.
+        """
+        flows: Dict[str, Any] = {}
+        for market_key in ("kospi", "kosdaq"):
+            try:
+                rec = self.data_manager.get_kr_market_investor_flows(market_key, days=5)
+            except Exception as exc:  # noqa: BLE001 - fail-open
+                logger.warning(
+                    "[大盘] %s action=kr_market_flows market=%s status=fail-open error=%s",
+                    self._log_context(), market_key, exc,
+                )
+                rec = None
+            if isinstance(rec, dict) and rec.get("days"):
+                flows[market_key] = rec
+        return flows or None
+
     def _get_main_indices(self) -> List[MarketIndex]:
         """获取主要指数实时行情"""
         indices = []

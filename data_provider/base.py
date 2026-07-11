@@ -2513,6 +2513,25 @@ class DataFetcherManager:
                 continue
         return []
 
+    def get_kr_market_investor_flows(self, market: str, days: int = 5) -> Optional[Dict[str, Any]]:
+        """KOSPI/KOSDAQ 시장 전체 투자자 수급(KRW) — KR 마켓 리뷰용, fail-open.
+
+        Phase 1 KrInstitutionalFetcher.get_market_investor_flows를 lazy 싱글턴으로
+        호출한다(종목 수급 훅과 동일 인스턴스 self._kr_institutional_fetcher 재사용).
+        비대상/실패/예외 시 None (절대 raise하지 않음).
+        """
+        try:
+            fetcher = getattr(self, "_kr_institutional_fetcher", None)
+            if fetcher is None:
+                from data_provider.kr_institutional_fetcher import KrInstitutionalFetcher
+
+                fetcher = KrInstitutionalFetcher()
+                self._kr_institutional_fetcher = fetcher
+            return fetcher.get_market_investor_flows(market, days=days)
+        except Exception as exc:  # noqa: BLE001 - fail-open
+            logger.warning("[kr-flows] get_kr_market_investor_flows(%s) fail-open: %s", market, exc)
+            return None
+
     def get_market_stats(self, *, purpose: str = "unspecified") -> Dict[str, Any]:
         """获取市场涨跌统计（自动切换数据源）"""
         logger.info("[MarketStats] component=market_stats action=start purpose=%s", purpose)
