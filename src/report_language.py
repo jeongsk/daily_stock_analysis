@@ -785,6 +785,31 @@ def has_disallowed_report_script(requested_language: str, text: str) -> bool:
     )
 
 
+def format_net_krw_localized(value: Any, language: Optional[str]) -> str:
+    """부호 붙은 순매수 금액(원)을 로케일 단위로 포맷(+ = 순매수).
+
+    시장 수급 레코드는 원 단위 대금이 커서 억(1e8)/십억(1e9) 스케일로만 표기한다.
+      - ko: `억`  (예: -3,228억)
+      - zh: `亿韩元` (예: -3,228亿韩元)
+      - en: `₩…B` 십억 원 (예: ₩-322.8B)
+    None/NaN/비수치 -> "N/A". language None/미지원 -> zh 기본(normalize_report_language).
+    """
+    try:
+        amount = float(value)
+    except (TypeError, ValueError):
+        return "N/A"
+    if amount != amount:  # NaN
+        return "N/A"
+    sign = "+" if amount > 0 else ("-" if amount < 0 else "")
+    a = abs(amount)
+    lang = normalize_report_language(language)
+    if lang == "en":
+        return f"₩{sign}{a / 1e9:,.1f}B"
+    if lang == "ko":
+        return f"{sign}{a / 1e8:,.0f}억"
+    return f"{sign}{a / 1e8:,.0f}亿韩元"
+
+
 def is_supported_report_language_value(value: Optional[str]) -> bool:
     """Return whether the raw value is a supported language code or alias."""
     candidate = (value or "").strip().lower().replace(" ", "_")
