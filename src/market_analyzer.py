@@ -1827,6 +1827,12 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
         stats_block = ""
         sector_block = ""
         data_limits_block = ""
+        # KR 마켓 리뷰가 수급을 주입하면(아래 region 가드) 자금흐름이 실제로 제공되므로,
+        # en/zh 데이터 경계 문구에서 "자금흐름 없음"만 제외한다(시장 폭/거래대금/참여도는 여전히 미제공).
+        # 비KR은 region 가드로 False -> 기존 문구 유지(바이트 동일). ko는 data_limits_block 미생성.
+        kr_flows_present = self.region == "kr" and bool(
+            self._kr_market_flow_lines(overview, review_language)
+        )
         if review_language == "en":
             if self.profile.has_market_stats:
                 stats_block = f"""## Market Breadth
@@ -1845,9 +1851,14 @@ Concept lagging: {bottom_concepts_text if bottom_concepts_text else "N/A"}"""
 
             data_limit_lines = []
             if not self.profile.has_market_stats:
-                data_limit_lines.append(
-                    "- Market breadth, aggregate turnover, participation, and fund-flow signals are not available for this market."
-                )
+                if kr_flows_present:
+                    data_limit_lines.append(
+                        "- Market breadth, aggregate turnover, and participation are not available for this market."
+                    )
+                else:
+                    data_limit_lines.append(
+                        "- Market breadth, aggregate turnover, participation, and fund-flow signals are not available for this market."
+                    )
             if not self.profile.has_sector_rankings:
                 data_limit_lines.append("- Sector/theme ranking data is not available for this market.")
             if data_limit_lines:
@@ -1887,7 +1898,10 @@ Concept lagging: {bottom_concepts_text if bottom_concepts_text else "N/A"}"""
 
             data_limit_lines = []
             if not self.profile.has_market_stats:
-                data_limit_lines.append("- 该市场暂无涨跌家数、涨跌停、成交额汇总、参与度或资金流信号。")
+                if kr_flows_present:
+                    data_limit_lines.append("- 该市场暂无涨跌家数、涨跌停、成交额汇总或参与度。")
+                else:
+                    data_limit_lines.append("- 该市场暂无涨跌家数、涨跌停、成交额汇总、参与度或资金流信号。")
             if not self.profile.has_sector_rankings:
                 data_limit_lines.append("- 该市场暂无行业板块/概念题材涨跌榜。")
             if data_limit_lines:

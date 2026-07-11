@@ -78,3 +78,32 @@ class TestBuildReviewPromptIntegration:
         prompt = an._build_review_prompt(_overview(_FLOWS), [])
         # us는 KR 브랜치 미진입 -> 수급 섹션 없음
         assert "시장 투자자 수급" not in prompt
+
+
+class TestDataLimitsFundFlowClause:
+    """KR 수급 주입 시 en/zh 데이터 경계 문구의 '자금흐름 없음' 자기모순 제거.
+
+    수급이 주입되면 자금흐름이 실제로 제공되므로 en/zh 데이터 경계에서 자금흐름
+    문구만 빠진다(시장 폭/거래대금/참여도 미제공은 유지). 비KR·ko·수급없는 KR은 불변.
+    """
+
+    def test_kr_en_flows_drops_fund_flow_clause(self):
+        prompt = _analyzer("en")._build_review_prompt(_overview(_FLOWS), [])
+        assert "fund-flow signals are not available" not in prompt
+        # 시장 폭/거래대금/참여도 미제공 문구는 유지
+        assert "Market breadth, aggregate turnover, and participation are not available" in prompt
+
+    def test_kr_zh_flows_drops_fund_flow_clause(self):
+        prompt = _analyzer("zh")._build_review_prompt(_overview(_FLOWS), [])
+        assert "资金流信号" not in prompt
+        assert "该市场暂无涨跌家数、涨跌停、成交额汇总或参与度" in prompt
+
+    def test_kr_en_without_flows_keeps_fund_flow_clause(self):
+        # 수급 데이터가 없으면 자금흐름 미제공 문구를 유지(kr_flows_present False)
+        prompt = _analyzer("en")._build_review_prompt(_overview(None), [])
+        assert "participation, and fund-flow signals are not available" in prompt
+
+    def test_non_kr_en_keeps_fund_flow_clause(self):
+        # 비KR(us)은 수급 레코드가 있어도 region 가드로 미진입 -> 원문 유지(바이트 동일)
+        prompt = _analyzer("en", region="us")._build_review_prompt(_overview(_FLOWS), [])
+        assert "participation, and fund-flow signals are not available" in prompt
