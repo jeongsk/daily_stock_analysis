@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Fetch the full KOSPI/KOSDAQ listing via pykrx and write data/stock_list_kr.csv.
+"""Fetch the full KOSPI/KOSDAQ listing via FinanceDataReader and write data/stock_list_kr.csv.
 
-Build-time only. pykrx is a `[dependency-groups]` script dependency and is never
-imported at runtime. Curated seeds in scripts/stock_index_seeds/stock_list_kr.csv
-override fetched rows so multilingual names/aliases are preserved.
+Build-time only. finance-datareader is a `[dependency-groups]` script dependency
+and is never imported at runtime. Curated seeds in
+scripts/stock_index_seeds/stock_list_kr.csv override fetched rows so multilingual
+names/aliases are preserved.
 
 Usage:
     uv sync --group scripts
@@ -17,13 +18,15 @@ import csv
 import os
 import sys
 from pathlib import Path
-from typing import Callable, Dict, List
+from typing import Dict, Iterable, List, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SEED_PATH = REPO_ROOT / "scripts" / "stock_index_seeds" / "stock_list_kr.csv"
 OUTPUT_PATH = REPO_ROOT / "data" / "stock_list_kr.csv"
 FIELDNAMES = ["ts_code", "symbol", "name", "enname", "name_ko", "aliases"]
-MARKET_SUFFIX = (("KOSPI", "KS"), ("KOSDAQ", "KQ"))
+# KRX market -> Yahoo suffix. KOSDAQ GLOBAL is a KOSDAQ segment (.KQ). KONEX and
+# other boards are excluded (no standard .KS/.KQ Yahoo symbol in this project).
+MARKET_SUFFIX = {"KOSPI": "KS", "KOSDAQ": "KQ", "KOSDAQ GLOBAL": "KQ"}
 MIN_EXPECTED_KR_STOCKS = 2000
 
 
@@ -39,24 +42,23 @@ def build_kr_row(ts_code: str, name_ko: str) -> Dict[str, str]:
     }
 
 
-def collect_kr_rows(
-    ticker_list_fn: Callable[[str], List[str]],
-    ticker_name_fn: Callable[[str], str],
-    excluded_tickers: set,
-) -> List[Dict[str, str]]:
-    """Collect common-stock rows for KOSPI+KOSDAQ, skipping excluded tickers."""
+def collect_kr_rows(listing: Iterable[Tuple[str, str, str]]) -> List[Dict[str, str]]:
+    """Map (code, name, market) listing records to KR CSV rows.
+
+    KOSPI -> .KS, KOSDAQ / KOSDAQ GLOBAL -> .KQ. Records whose market is not in
+    MARKET_SUFFIX (e.g. KONEX), or with a blank code/name, or a duplicate code,
+    are skipped.
+    """
     rows: List[Dict[str, str]] = []
     seen: set = set()
-    for market, suffix in MARKET_SUFFIX:
-        for ticker in ticker_list_fn(market):
-            ticker = str(ticker).strip()
-            if not ticker or ticker in excluded_tickers or ticker in seen:
-                continue
-            name = str(ticker_name_fn(ticker) or "").strip()
-            if not name:
-                continue
-            seen.add(ticker)
-            rows.append(build_kr_row(f"{ticker}.{suffix}", name))
+    for code, name, market in listing:
+        code = str(code).strip()
+        name = str(name).strip()
+        suffix = MARKET_SUFFIX.get(str(market).strip())
+        if not code or not name or suffix is None or code in seen:
+            continue
+        seen.add(code)
+        rows.append(build_kr_row(f"{code}.{suffix}", name))
     return rows
 
 
@@ -106,40 +108,35 @@ def write_csv(rows: List[Dict[str, str]], output_path: Path = OUTPUT_PATH) -> No
             pass
 
 
-def _fetch_from_pykrx() -> List[Dict[str, str]]:
-    """Collect KR rows using live pykrx (network). Imported lazily on purpose."""
-    from pykrx import stock
+def _fetch_from_fdr() -> List[Dict[str, str]]:
+    """Collect KR rows using FinanceDataReader (network). Imported lazily on purpose."""
+    import FinanceDataReader as fdr
 
-    business_date = stock.get_nearest_business_day_in_a_week()
-
-    def ticker_list_fn(market: str) -> List[str]:
-        return list(stock.get_market_ticker_list(business_date, market=market))
-
-    excluded = set(stock.get_etf_ticker_list(business_date))
-    try:
-        excluded |= set(stock.get_etn_ticker_list(business_date))
-    except Exception:  # noqa: BLE001 - ETN endpoint is optional
-        pass
-
-    return collect_kr_rows(ticker_list_fn, stock.get_market_ticker_name, excluded)
+    df = fdr.StockListing("KRX")
+    listing = zip(
+        df["Code"].astype(str).tolist(),
+        df["Name"].astype(str).tolist(),
+        df["Market"].astype(str).tolist(),
+    )
+    return collect_kr_rows(listing)
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="Fetch full KOSPI/KOSDAQ list via pykrx")
+    parser = argparse.ArgumentParser(description="Fetch full KOSPI/KOSDAQ list via FinanceDataReader")
     parser.add_argument("--output", default=str(OUTPUT_PATH))
     args = parser.parse_args(argv)
 
     try:
-        fetched = _fetch_from_pykrx()
+        fetched = _fetch_from_fdr()
     except ImportError:
         print(
-            "[fetch_kr_stock_list] ERROR: pykrx not installed. "
+            "[fetch_kr_stock_list] ERROR: finance-datareader not installed. "
             "Install with: uv sync --group scripts",
             file=sys.stderr,
         )
         return 2
     except Exception as exc:  # noqa: BLE001 - fail-open at build time
-        print(f"[fetch_kr_stock_list] ERROR: KRX fetch failed: {exc}", file=sys.stderr)
+        print(f"[fetch_kr_stock_list] ERROR: KR listing fetch failed: {exc}", file=sys.stderr)
         return 1
 
     if len(fetched) < MIN_EXPECTED_KR_STOCKS:

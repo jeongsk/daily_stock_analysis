@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Offline tests for scripts/fetch_kr_stock_list.py (pykrx is never imported)."""
+"""Offline tests for scripts/fetch_kr_stock_list.py (FinanceDataReader is never imported)."""
 import csv
 import sys
 from pathlib import Path
@@ -19,12 +19,6 @@ from fetch_kr_stock_list import (  # noqa: E402
 )
 
 
-def _fake_market(kospi, kosdaq):
-    def ticker_list_fn(market):
-        return {"KOSPI": kospi, "KOSDAQ": kosdaq}[market]
-    return ticker_list_fn
-
-
 def test_build_kr_row_is_korean_primary():
     row = build_kr_row("005930.KS", "삼성전자")
     assert row == {
@@ -37,15 +31,20 @@ def test_build_kr_row_is_korean_primary():
     }
 
 
-def test_collect_maps_suffix_and_excludes_etf_and_blank():
-    names = {"005930": "삼성전자", "035720": "카카오", "069500": "KODEX 200", "900000": ""}
-    rows = collect_kr_rows(
-        _fake_market(["005930", "069500", "900000"], ["035720"]),
-        lambda t: names.get(t, ""),
-        excluded_tickers={"069500"},
-    )
-    codes = {r["ts_code"] for r in rows}
-    assert codes == {"005930.KS", "035720.KQ"}  # ETF excluded, blank-name skipped
+def test_collect_maps_market_suffix_and_skips_others():
+    listing = [
+        ("005930", "삼성전자", "KOSPI"),
+        ("035720", "카카오", "KOSDAQ"),
+        ("900000", "글로벌종목", "KOSDAQ GLOBAL"),   # KOSDAQ segment -> .KQ
+        ("000001", "코넥스종목", "KONEX"),           # excluded (no .KS/.KQ)
+        ("111111", "", "KOSPI"),                     # blank name skipped
+        ("035720", "중복이름", "KOSDAQ"),            # duplicate code skipped
+    ]
+    rows = collect_kr_rows(listing)
+    by_code = {r["ts_code"]: r for r in rows}
+    assert set(by_code) == {"005930.KS", "035720.KQ", "900000.KQ"}
+    assert by_code["005930.KS"]["name_ko"] == "삼성전자"
+    assert by_code["005930.KS"]["name"] == by_code["005930.KS"]["name_ko"]  # Korean-primary
 
 
 def test_merge_seeds_override_fetched_and_sorted():
@@ -95,7 +94,7 @@ def test_load_seed_rows_reads_curated_seed_file():
 
 def test_main_refuses_overwrite_below_threshold(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        "fetch_kr_stock_list._fetch_from_pykrx",
+        "fetch_kr_stock_list._fetch_from_fdr",
         lambda: [build_kr_row("005930.KS", "삼성전자")],  # 1 row < threshold
     )
     out = tmp_path / "stock_list_kr.csv"

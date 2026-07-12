@@ -51,7 +51,7 @@ dev = [
     "pytest",
 ]
 scripts = [
-    "pykrx>=1.0.45",
+    "finance-datareader>=0.9.50",
 ]
 
 [tool.uv.sources]
