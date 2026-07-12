@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 import sys
+import tempfile
 from pathlib import Path
 from typing import Callable, Dict, List
 
@@ -82,13 +84,28 @@ def merge_rows(fetched: List[Dict[str, str]], seeds: List[Dict[str, str]]) -> Li
 
 
 def write_csv(rows: List[Dict[str, str]], output_path: Path = OUTPUT_PATH) -> None:
-    """Write rows to output_path in the seed CSV schema."""
+    """Atomically write rows to output_path in the seed CSV schema.
+
+    Writes to a temp file in the same directory, then os.replace() into place,
+    so a mid-write failure can never truncate an existing good CSV.
+    """
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8-sig", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=FIELDNAMES)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({key: row.get(key, "") for key in FIELDNAMES})
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(output_path.parent), prefix=".stock_list_kr.", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8-sig", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=FIELDNAMES)
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({key: row.get(key, "") for key in FIELDNAMES})
+        os.replace(tmp_name, output_path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
 def _fetch_from_pykrx() -> List[Dict[str, str]]:

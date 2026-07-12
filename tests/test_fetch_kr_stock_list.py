@@ -4,6 +4,8 @@ import csv
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 from fetch_kr_stock_list import (  # noqa: E402
@@ -67,6 +69,22 @@ def test_write_csv_round_trips_schema(tmp_path):
         assert reader.fieldnames == FIELDNAMES
         rows = list(reader)
     assert rows[0]["ts_code"] == "035720.KQ" and rows[0]["name_ko"] == "카카오"
+
+
+def test_write_csv_atomic_preserves_existing_on_failure(tmp_path, monkeypatch):
+    out = tmp_path / "stock_list_kr.csv"
+    write_csv([build_kr_row("005930.KS", "삼성전자")], out)  # existing good file
+    original = out.read_bytes()
+
+    def boom(self, row):
+        raise RuntimeError("simulated disk failure")
+    monkeypatch.setattr("csv.DictWriter.writerow", boom)
+
+    with pytest.raises(RuntimeError):
+        write_csv([build_kr_row("035720.KQ", "카카오")], out)
+
+    assert out.read_bytes() == original  # original untouched
+    assert list(out.parent.glob(".stock_list_kr.*.tmp")) == []  # no leftover temp
 
 
 def test_load_seed_rows_reads_curated_seed_file():
