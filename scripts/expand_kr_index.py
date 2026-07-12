@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Expand ONLY the KR entries of the committed stock index using pykrx.
+"""Expand ONLY the KR entries of the committed stock index.
 
 Unlike refresh_stock_index.py (which regenerates the whole index from Tushare +
-KR and needs a TUSHARE_TOKEN), this fetches the full KOSPI/KOSDAQ listing via
-pykrx and splices it into the existing committed stocks.index.json, replacing
-the KR rows only. CN/HK/US/JP/BSE rows are left byte-for-byte unchanged.
+KR and needs a TUSHARE_TOKEN), this runs scripts/fetch_kr_stock_list.py
+(FinanceDataReader) to get the full KOSPI/KOSDAQ listing and splices it into the
+existing committed stocks.index.json, replacing the KR rows only. CN/HK/US/JP/BSE
+rows are left byte-for-byte unchanged.
 
-Build-time only. Requires the `scripts` dependency group (pykrx):
+Build-time only. Requires the `scripts` dependency group (finance-datareader):
     uv sync --group scripts
     uv run python scripts/expand_kr_index.py
 """

@@ -76,7 +76,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--skip-kr",
         action="store_true",
-        help="跳过 KR (pykrx) 股票列表抓取，仅用现有 data/stock_list_kr.csv",
+        help="跳过 KR (FinanceDataReader) 股票列表抓取，仅用现有 data/stock_list_kr.csv",
     )
     args = parser.parse_args(argv)
 

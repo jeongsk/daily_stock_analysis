@@ -40,7 +40,7 @@
 
 - 不承诺实时行情；Yahoo Finance 数据可能延迟或字段缺失。
 - 不承诺完整基本面、行业/板块、市场宽度或涨跌家数。JP/KR 大盘复盘 v1 提供主要指数、新闻线索与模板/LLM 复盘，`kr` 另提供市场整体外国人/机构资金流统计（`jp` 不提供），但均不提供日韩市场宽度或板块排行。
-- 不承诺完整日韩全市场股票列表；Web 自动补全当前仅覆盖仓内种子索引中的常用标的（已扩充至各 30 只左右的头部标的），未命中时仍可手动输入 suffix 代码。
+- 韩股 Web 自动补全已覆盖 KOSPI/KOSDAQ 全量上市股票（约 2,767 只）：构建期由 `scripts/expand_kr_index.py` 经 **FinanceDataReader**（`[dependency-groups]` 的 `scripts` 组，仅构建期依赖，`uv sync --group scripts` 后 `uv run python scripts/expand_kr_index.py`）拉取全量 KR 列表，并只将 KR 行拼接进既有 `stocks.index.json`（CN/HK/US/JP 行保持不变）；人工种子的多语言名/别名（如 `005930.KS` 的中文/英文名）在同代码上优先覆盖。后端 `resolve_name_to_code` 可按韩文名解析到 `.KS`/`.KQ`（歧义名排除、fail-open），裸 6 位代码命中唯一 KR 条目时按“池命中→KR，未命中→A 股默认”的既有契约解析。日股自动补全仍仅覆盖仓内种子索引（约 30 只头部标的），未命中时手动输入 suffix 代码。
 - 不补齐 Portfolio 的 JPY/KRW 汇率、成本、市值完整口径；相关字段仅放开市场类型以避免前后端校验拒绝。
 
 回滚方式：移除 `jp/kr` 市场识别、交易日历注册、YFinance 路由扩展、Web/API 类型放行、`scripts/stock_index_seeds/` 日韩种子索引，并删除本文档中的能力声明。

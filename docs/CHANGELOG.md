@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
-- [新功能] KR 종목 한글명→코드 백엔드 해석 및 전체 종목 리스트 취득 파이프라인 추가: 생성 인덱스의 nameKo로 "삼성전자"→005930.KS 해석(name_to_code_resolver, 모호명 제외·fail-open), 빌드타임 pykrx 취득 스크립트(scripts/fetch_kr_stock_list.py, 시드 override 병합·원자적 쓰기)와 refresh_stock_index --skip-kr 단계 추가, pykrx는 [dependency-groups] 빌드타임 전용(런타임·requirements.txt 미의존). 자동완성 전체 확장(KR 30→~2,700)은 인덱스 재생성 후속 단계에서 반영.
+- [新功能] KR 종목 자동완성·백엔드 한글명 해석을 KOSPI/KOSDAQ 전체 상장(약 2,767)으로 확장: FinanceDataReader(빌드타임 전용, [dependency-groups])로 전체 리스트 취득 → 기존 인덱스에 KR 행만 스플라이스(CN/HK/US/JP 무변경, scripts/expand_kr_index.py), 생성 인덱스 nameKo로 "삼성전자"→005930.KS 해석(name_to_code_resolver, 모호명 제외·fail-open), 큐레이션 시드 다국어명/별칭 override 유지, 나코드는 문서화된 풀 계약대로 KR 해석. 런타임·requirements.txt 미의존.
 - [新功能] KR 마켓 리뷰에 시장 전체 투자자별 수급(외국인/기관, KOSPI/KOSDAQ, KRW) 연동: LLM 프롬프트·리뷰 본문 결정적 라인·구조화 페이로드에 반영 — fail-open, 비KR 리뷰 바이트 동일, 중국어 거부 게이트 통과(ko 순수 한글).
 - [新功能] KR 개별 종목 분석에 투자자별 수급(외국인/기관/개인) 연동: 데이터 품질 전역 블록·LLM 프롬프트·리포트 요약 라인(zh/en/ko)에 반영 — fail-open, 비KR 시장 점수 동작 중립(ADR 0002). 시장 리뷰 연동은 후속 Phase.
 - [新功能] KR 투자자별 매매동향(수급) 데이터 계층 추가: `KrInstitutionalFetcher`가 네이버·다음 무인증 소스로 종목(주수)·KOSPI/KOSDAQ 시장(KRW) 일별 순매수를 수집 — fail-open·캐시·서킷브레이커 포함, 리포트 연동은 후속 Phase (설계: docs/superpowers/specs/2026-07-10-kr-investor-flows-design.md)

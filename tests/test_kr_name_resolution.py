@@ -55,3 +55,23 @@ def test_resolver_cn_local_map_unaffected():
         pytest.skip("no local reverse names available")
     name, code = next(iter(nr._LOCAL_REVERSE_MAP.items()))
     assert nr.resolve_name_to_code(name) == code
+
+
+def test_expanded_kr_map_reaches_loader():
+    # After the KR expansion, the loader's KR map reflects the full listing,
+    # proving the expanded committed index flows through to backend resolution.
+    from src.data.stock_index_loader import clear_stock_index_cache, get_kr_name_to_code_map
+
+    clear_stock_index_cache()
+    kr_map = get_kr_name_to_code_map()
+    assert len(kr_map) >= 2000
+    assert kr_map.get("삼성전자") == "005930.KS"  # curated seed still resolves
+
+
+def test_representative_a_share_bare_code_stays_cn():
+    # Expanding KR must not shadow a real A-share bare code via resolve_index_stock_code:
+    # 000001 is Ping An Bank (000001.SZ) and has no unambiguous KR index entry.
+    from src.services.stock_code_utils import resolve_index_stock_code_for_analysis
+
+    resolved = resolve_index_stock_code_for_analysis("000001")
+    assert not resolved.endswith(".KS") and not resolved.endswith(".KQ")
