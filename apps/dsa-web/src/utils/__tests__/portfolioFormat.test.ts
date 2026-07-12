@@ -37,6 +37,13 @@ describe('portfolioFormat', () => {
     expect(formatSignedPct(-1.2)).toBe('-1.20%');
   });
 
+  it('renders KRW with zero fraction digits and other currencies with two', () => {
+    expect(formatMoney(699000, 'KRW')).toBe('KRW 699,000');
+    expect(formatMoney(1234.5, 'KRW')).toBe('KRW 1,235');
+    expect(formatMoney(1234.5, 'CNY')).toBe('CNY 1,234.50');
+    expect(formatMoney(1234.5)).toBe('CNY 1,234.50');
+  });
+
   it('formats position price fields based on price availability', () => {
     expect(formatPositionPrice(pricedPosition)).toBe('321.1234');
     expect(formatPositionMoney(123, pricedPosition)).toBe('CNY 123.00');

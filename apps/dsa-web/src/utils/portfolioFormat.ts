@@ -66,11 +66,25 @@ export function getTodayIso(): string {
   return toDateInputValue(new Date());
 }
 
+// Currency -> money display fraction digits. KRW is a zero-decimal currency; others
+// use 2. Mirror of the Python table (report/notification) documented in
+// docs/superpowers/specs/2026-07-12-kr-portfolio-krw-design.md — keep both in sync.
+const CURRENCY_FRACTION_DIGITS: Record<string, number> = {
+  KRW: 0,
+};
+const DEFAULT_FRACTION_DIGITS = 2;
+
+export function getCurrencyFractionDigits(currency: string | undefined | null): number {
+  const key = (currency ?? '').toUpperCase();
+  return CURRENCY_FRACTION_DIGITS[key] ?? DEFAULT_FRACTION_DIGITS;
+}
+
 export function formatMoney(value: number | undefined | null, currency = 'CNY'): string {
   if (value == null || Number.isNaN(value)) return '--';
+  const digits = getCurrencyFractionDigits(currency);
   return `${currency} ${Number(value).toLocaleString('zh-CN', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
   })}`;
 }
 

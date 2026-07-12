@@ -40,16 +40,42 @@ PORTFOLIO_FX_REFRESH_DISABLED_REASON = "portfolio_fx_update_disabled"
 PORTFOLIO_REALTIME_QUOTE_MAX_WORKERS = 4
 
 
+# Limitations that describe missing *analytics* fields (sector/turnover/PE, best-effort
+# quote sourcing) rather than a degraded valuation. Their presence must not mark a
+# snapshot as `partial`; only valuation-affecting limitations do. Shared across markets.
+INFORMATIONAL_LIMITATIONS = frozenset(
+    {
+        "realtime_quote_best_effort",
+        "sector_and_risk_metrics_limited",
+    }
+)
+
+
 def _portfolio_limitations_for_market(market: str) -> List[str]:
     """Return explicit snapshot limitations for markets with partial valuation semantics."""
 
     if market not in PARTIAL_VALUATION_MARKETS:
         return []
-    return [
+    labels = [
         "realtime_quote_best_effort",
         "fx_and_cost_basis_partial",
         "sector_and_risk_metrics_limited",
     ]
+    if market == "kr":
+        # KR portfolios compute KRW cost basis / valuation / P&L at full fidelity
+        # (FX pairs and quotes verified; see docs/superpowers/specs/2026-07-12-kr-portfolio-krw-design.md).
+        # Keep only the informational labels for transparency; drop the valuation-degradation label.
+        labels = [item for item in labels if item != "fx_and_cost_basis_partial"]
+    return labels
+
+
+def _portfolio_data_quality(limitations: Iterable[str]) -> str:
+    """`partial` only when a valuation-affecting (non-informational) limitation is present."""
+
+    for item in limitations:
+        if item and item not in INFORMATIONAL_LIMITATIONS:
+            return "partial"
+    return "ok"
 
 
 def _merge_portfolio_limitations(*groups: Iterable[str]) -> List[str]:
@@ -485,7 +511,16 @@ class PortfolioService:
             account_rows = self.repo.list_accounts(include_inactive=False)
 
         accounts_payload: List[Dict[str, Any]] = []
-        aggregate_currency = "CNY"
+        # Aggregate in the accounts' shared base currency when they agree (single KR
+        # account or an all-KR portfolio -> KRW, an identity FX with no CNY round-trip);
+        # fall back to CNY for mixed-currency portfolios (unchanged behaviour).
+        base_currencies: Set[str] = set()
+        for account in account_rows:
+            try:
+                base_currencies.add(self._normalize_currency(account.base_currency))
+            except ValueError:
+                base_currencies.add("CNY")
+        aggregate_currency = next(iter(base_currencies)) if len(base_currencies) == 1 else "CNY"
         aggregate = {
             "total_cash": 0.0,
             "total_market_value": 0.0,
@@ -601,7 +636,7 @@ class PortfolioService:
             "fee_total": round(aggregate["fee_total"], 6),
             "tax_total": round(aggregate["tax_total"], 6),
             "fx_stale": aggregate["fx_stale"],
-            "data_quality": "partial" if aggregate["limitations"] else "ok",
+            "data_quality": _portfolio_data_quality(aggregate["limitations"]),
             "limitations": aggregate["limitations"],
             "accounts": accounts_payload,
         }
@@ -970,7 +1005,7 @@ class PortfolioService:
             "fee_total": round(fees_total_base, 6),
             "tax_total": round(taxes_total_base, 6),
             "fx_stale": fx_stale,
-            "data_quality": "partial" if limitations else "ok",
+            "data_quality": _portfolio_data_quality(limitations),
             "limitations": limitations,
             "positions": position_rows,
         }
@@ -1112,7 +1147,7 @@ class PortfolioService:
                     "price_date": price_info.price_date.isoformat() if price_info.price_date else None,
                     "price_stale": price_info.is_stale,
                     "price_available": price_info.is_available,
-                    "data_quality": "partial" if limitations else "ok",
+                    "data_quality": _portfolio_data_quality(limitations),
                     "limitations": limitations,
                 }
             )
@@ -1729,4 +1764,6 @@ class PortfolioService:
             return "HKD"
         if market == "us":
             return "USD"
+        if market == "kr":
+            return "KRW"
         return "CNY"

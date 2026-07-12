@@ -472,41 +472,123 @@ class PortfolioServiceTestCase(unittest.TestCase):
                 self.assertEqual(position["data_quality"], "ok")
                 self.assertEqual(position["limitations"], [])
 
-    def test_jp_kr_portfolio_snapshot_marks_partial_valuation_boundaries(self) -> None:
-        for market, currency, symbol, close in [
-            ("jp", "JPY", "7203.T", 3000.0),
-            ("kr", "KRW", "005930.KS", 70000.0),
-        ]:
-            with self.subTest(market=market):
-                aid = self._create_account_with_position(
-                    market=market,
-                    currency=currency,
-                    symbol=symbol,
-                    close=close,
-                )
+    def test_jp_portfolio_snapshot_still_marks_partial_valuation_boundaries(self) -> None:
+        # JP is out of scope for the KRW effort and must be unchanged: full 3-label
+        # degradation (incl. fx_and_cost_basis_partial) -> data_quality=partial.
+        aid = self._create_account_with_position(
+            market="jp",
+            currency="JPY",
+            symbol="7203.T",
+            close=3000.0,
+        )
 
-                snapshot = self.service.get_portfolio_snapshot(
-                    account_id=aid,
-                    as_of=date(2026, 1, 3),
-                    cost_method="fifo",
-                )
-                account = snapshot["accounts"][0]
-                position = account["positions"][0]
+        snapshot = self.service.get_portfolio_snapshot(
+            account_id=aid,
+            as_of=date(2026, 1, 3),
+            cost_method="fifo",
+        )
+        account = snapshot["accounts"][0]
+        position = account["positions"][0]
 
-                self.assertEqual(account["market"], market)
-                self.assertEqual(account["base_currency"], currency)
-                self.assertEqual(account["data_quality"], "partial")
-                self.assertEqual(
-                    account["limitations"],
-                    [
-                        "realtime_quote_best_effort",
-                        "fx_and_cost_basis_partial",
-                        "sector_and_risk_metrics_limited",
-                    ],
-                )
-                self.assertEqual(position["symbol"], symbol)
-                self.assertEqual(position["data_quality"], "partial")
-                self.assertIn("fx_and_cost_basis_partial", position["limitations"])
+        self.assertEqual(account["base_currency"], "JPY")
+        self.assertEqual(account["data_quality"], "partial")
+        self.assertEqual(
+            account["limitations"],
+            [
+                "realtime_quote_best_effort",
+                "fx_and_cost_basis_partial",
+                "sector_and_risk_metrics_limited",
+            ],
+        )
+        self.assertEqual(position["data_quality"], "partial")
+        self.assertIn("fx_and_cost_basis_partial", position["limitations"])
+
+    def test_kr_portfolio_snapshot_is_ok_with_informational_limitations_only(self) -> None:
+        # KR carries full-fidelity KRW valuation: fx_and_cost_basis_partial is dropped,
+        # only informational labels remain, so data_quality=ok (not partial).
+        aid = self._create_account_with_position(
+            market="kr",
+            currency="KRW",
+            symbol="005930.KS",
+            close=70000.0,
+        )
+
+        snapshot = self.service.get_portfolio_snapshot(
+            account_id=aid,
+            as_of=date(2026, 1, 3),
+            cost_method="fifo",
+        )
+        account = snapshot["accounts"][0]
+        position = account["positions"][0]
+
+        self.assertEqual(account["base_currency"], "KRW")
+        self.assertEqual(account["data_quality"], "ok")
+        self.assertEqual(
+            account["limitations"],
+            [
+                "realtime_quote_best_effort",
+                "sector_and_risk_metrics_limited",
+            ],
+        )
+        self.assertNotIn("fx_and_cost_basis_partial", account["limitations"])
+        self.assertEqual(position["data_quality"], "ok")
+        self.assertNotIn("fx_and_cost_basis_partial", position["limitations"])
+
+    def test_default_currency_for_market_kr_is_krw(self) -> None:
+        self.assertEqual(self.service._default_currency_for_market("kr"), "KRW")
+        # Out-of-scope markets unchanged.
+        self.assertEqual(self.service._default_currency_for_market("jp"), "CNY")
+        self.assertEqual(self.service._default_currency_for_market("tw"), "CNY")
+        self.assertEqual(self.service._default_currency_for_market("us"), "USD")
+        self.assertEqual(self.service._default_currency_for_market("hk"), "HKD")
+        self.assertEqual(self.service._default_currency_for_market("cn"), "CNY")
+
+    def test_pure_kr_aggregate_uses_krw_identity_fx(self) -> None:
+        # Load-bearing: a pure-KR portfolio aggregates in KRW via an identity FX
+        # (no KRW->CNY round-trip), so unrealized P&L is the native KRW figure and
+        # fx_stale stays False (no fallback FX applied). data_quality=ok.
+        self._create_account_with_position(
+            market="kr",
+            currency="KRW",
+            symbol="005930.KS",
+            quantity=10.0,
+            price=100.0,
+            close=70000.0,
+        )
+
+        snapshot = self.service.get_portfolio_snapshot(
+            as_of=date(2026, 1, 3),
+            cost_method="fifo",
+        )
+
+        self.assertEqual(snapshot["currency"], "KRW")
+        self.assertEqual(snapshot["data_quality"], "ok")
+        self.assertFalse(snapshot["fx_stale"])
+        # native KRW P&L: (70000 - 100) * 10
+        self.assertAlmostEqual(snapshot["unrealized_pnl"], (70000.0 - 100.0) * 10.0, places=6)
+
+    def test_mixed_currency_aggregate_falls_back_to_cny(self) -> None:
+        # Mixed base currencies -> CNY fallback (unchanged aggregation behaviour).
+        self._create_account_with_position(
+            market="cn",
+            currency="CNY",
+            symbol="600519",
+            close=120.0,
+        )
+        self._create_account_with_position(
+            market="kr",
+            currency="KRW",
+            symbol="005930.KS",
+            close=70000.0,
+        )
+
+        snapshot = self.service.get_portfolio_snapshot(
+            as_of=date(2026, 1, 3),
+            cost_method="fifo",
+        )
+
+        self.assertEqual(snapshot["account_count"], 2)
+        self.assertEqual(snapshot["currency"], "CNY")
 
     def test_aggregate_snapshot_marks_partial_when_any_account_has_limitations(self) -> None:
         self._create_account_with_position(

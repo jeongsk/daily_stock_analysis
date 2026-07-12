@@ -61,6 +61,55 @@ class _FakePortfolioService:
         }
 
 
+class _FakeKrPortfolioService:
+    """Pure-KR snapshot: aggregates in KRW with data_quality=ok (informational limitations only)."""
+
+    def get_portfolio_snapshot(self, **_kwargs):
+        return {
+            "as_of": "2026-03-15",
+            "cost_method": "fifo",
+            "currency": "KRW",
+            "account_count": 1,
+            "total_cash": 100000.0,
+            "total_market_value": 700000.0,
+            "total_equity": 800000.0,
+            "realized_pnl": 0.0,
+            "unrealized_pnl": 699000.0,
+            "fx_stale": False,
+            "data_quality": "ok",
+            "limitations": [
+                "realtime_quote_best_effort",
+                "sector_and_risk_metrics_limited",
+            ],
+            "accounts": [
+                {
+                    "account_id": 1,
+                    "account_name": "KR-account",
+                    "market": "kr",
+                    "base_currency": "KRW",
+                    "total_equity": 800000.0,
+                    "total_market_value": 700000.0,
+                    "total_cash": 100000.0,
+                    "realized_pnl": 0.0,
+                    "unrealized_pnl": 699000.0,
+                    "fx_stale": False,
+                    "data_quality": "ok",
+                    "positions": [
+                        {
+                            "symbol": "005930.KS",
+                            "market": "kr",
+                            "currency": "KRW",
+                            "quantity": 10.0,
+                            "avg_cost": 100.0,
+                            "last_price": 70000.0,
+                            "market_value_base": 700000.0,
+                        },
+                    ],
+                }
+            ],
+        }
+
+
 class _FakeRiskService:
     def __init__(self, **_kwargs):
         pass
@@ -127,6 +176,18 @@ class TestGetPortfolioSnapshotTool(unittest.TestCase):
         invalid = _handle_get_portfolio_snapshot(as_of="2026/03/15")
         self.assertIn("error", invalid)
         self.assertIn("YYYY-MM-DD", invalid["error"])
+
+    @patch("src.services.portfolio_service.PortfolioService", _FakeKrPortfolioService)
+    @patch("src.services.portfolio_risk_service.PortfolioRiskService", _FakeRiskService)
+    def test_kr_snapshot_exposes_krw_and_ok_quality_to_llm(self) -> None:
+        # Contract: a pure-KR snapshot reaches the LLM as KRW with data_quality=ok
+        # (no misleading `partial`). Guards the KR valuation-accuracy fix end-to-end.
+        result = _handle_get_portfolio_snapshot(account_id=1)
+        self.assertEqual(result["status"], "ok")
+        snapshot = result["snapshot"]
+        self.assertEqual(snapshot["currency"], "KRW")
+        self.assertEqual(snapshot["data_quality"], "ok")
+        self.assertEqual(snapshot["accounts"][0]["base_currency"], "KRW")
 
 
 if __name__ == "__main__":

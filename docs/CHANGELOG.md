@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修复] KR 포트폴리오 KRW 손익 정확도: 집계 통화를 계정별 `base_currency`에서 파생(전부 일치 시 그 통화, 아니면 CNY fallback)해 순수 KR 조합이 KRW로 identity 환산(KRW→CNY 왕복 제거)되도록 정정, `_default_currency_for_market` kr→KRW(신규 KR 계정·거래 자동 KRW, JP/TW 불변), `data_quality`를 평가정확도 신호로 재정의(정보성 라벨 상수 분리)해 KR `fx_and_cost_basis_partial` 제거→`data_quality=ok`(JP/TW partial 유지), Web `formatMoney` 통화별 소수자릿수(KRW 0자리·그 외 2자리), agent-tool compact 스냅샷에 `data_quality` 노출. 스토리지·마이그레이션 무변경(컬럼 기존재). 설계: docs/superpowers/specs/2026-07-12-kr-portfolio-krw-design.md
 - [新功能] KR 종목 자동완성·백엔드 한글명 해석을 KOSPI/KOSDAQ 전체 상장(약 2,767)으로 확장: FinanceDataReader(빌드타임 전용, [dependency-groups])로 전체 리스트 취득 → 기존 인덱스에 KR 행만 스플라이스(CN/HK/US/JP/BSE 무변경, scripts/expand_kr_index.py), 생성 인덱스 nameKo로 "삼성전자"→005930.KS 해석(name_to_code_resolver, 모호명 제외·fail-open), 큐레이션 시드 다국어명/별칭 override 유지, 베어(무접미사) 6자리 코드는 풀 계약(적중→KR, 미적중→A주 기본)대로 해석. 런타임·requirements.txt 미의존.
 - [新功能] KR 마켓 리뷰에 시장 전체 투자자별 수급(외국인/기관, KOSPI/KOSDAQ, KRW) 연동: LLM 프롬프트·리뷰 본문 결정적 라인·구조화 페이로드에 반영 — fail-open, 비KR 리뷰 바이트 동일, 중국어 거부 게이트 통과(ko 순수 한글).
 - [新功能] KR 개별 종목 분석에 투자자별 수급(외국인/기관/개인) 연동: 데이터 품질 전역 블록·LLM 프롬프트·리포트 요약 라인(zh/en/ko)에 반영 — fail-open, 비KR 시장 점수 동작 중립(ADR 0002). 시장 리뷰 연동은 후속 Phase.
