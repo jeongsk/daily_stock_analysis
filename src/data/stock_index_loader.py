@@ -21,6 +21,7 @@ _STOCK_INDEX_FILENAME = "stocks.index.json"
 _STOCK_INDEX_CACHE: Dict[str, str] | None = None
 _STOCK_INDEX_RECORD_CACHE: Dict[str, dict[str, str]] | None = None
 _STOCK_CODE_LOOKUP_CACHE: Dict[str, str] | None = None
+_KR_NAME_TO_CODE_CACHE: Dict[str, str] | None = None
 _REMOTE_INDEX_VALIDITY_CACHE: tuple[Path, float, int, bool] | None = None
 _STOCK_INDEX_CACHE_LOCK = RLock()
 
@@ -397,6 +398,48 @@ def get_stock_code_index_map() -> Dict[str, str]:
         return _STOCK_CODE_LOOKUP_CACHE
 
 
+def _build_kr_name_to_code_map(raw_items: list) -> Dict[str, str]:
+    """Build a KR Hangul name -> canonical code map; drop ambiguous names."""
+    name_to_codes: dict[str, set] = {}
+    for item in raw_items:
+        if not isinstance(item, list) or len(item) < 12:
+            continue
+        if str(item[6] or "").strip().upper() != "KR":
+            continue
+        canonical = str(item[0] or "").strip()
+        name_ko = str(item[11] or "").strip()
+        if not canonical or not name_ko:
+            continue
+        name_to_codes.setdefault(name_ko, set()).add(canonical)
+    return {name: next(iter(codes)) for name, codes in name_to_codes.items() if len(codes) == 1}
+
+
+def get_kr_name_to_code_map() -> Dict[str, str]:
+    """Lazily load and cache the KR name->code map from the generated index."""
+    global _KR_NAME_TO_CODE_CACHE
+
+    if _KR_NAME_TO_CODE_CACHE is not None:
+        return _KR_NAME_TO_CODE_CACHE
+
+    with _STOCK_INDEX_CACHE_LOCK:
+        if _KR_NAME_TO_CODE_CACHE is not None:
+            return _KR_NAME_TO_CODE_CACHE
+
+        remote_path = get_remote_stock_index_cache_path()
+        for index_path in _get_fresh_stock_index_candidates(get_stock_index_candidate_paths(), remote_path):
+            try:
+                raw_items = _load_stock_index_payload(index_path)
+                if _same_path(index_path, remote_path):
+                    validate_stock_index_payload(raw_items)
+                _KR_NAME_TO_CODE_CACHE = _build_kr_name_to_code_map(raw_items)
+                return _KR_NAME_TO_CODE_CACHE
+            except (OSError, TypeError, ValueError) as exc:
+                logger.debug("[股票名称] 加载 KR 名称映射失败 %s: %s", index_path, exc)
+
+        _KR_NAME_TO_CODE_CACHE = {}
+        return _KR_NAME_TO_CODE_CACHE
+
+
 def _resolve_index_stock_code_uncached(query: str) -> str | None:
     code = str(query or "").strip().upper()
     if not code:
@@ -419,11 +462,13 @@ def _resolve_index_stock_code_uncached(query: str) -> str | None:
 
 def clear_stock_index_cache() -> None:
     """Clear the in-process stock index lookup cache."""
-    global _REMOTE_INDEX_VALIDITY_CACHE, _STOCK_INDEX_CACHE, _STOCK_INDEX_RECORD_CACHE, _STOCK_CODE_LOOKUP_CACHE
+    global _REMOTE_INDEX_VALIDITY_CACHE, _STOCK_INDEX_CACHE, _STOCK_INDEX_RECORD_CACHE
+    global _STOCK_CODE_LOOKUP_CACHE, _KR_NAME_TO_CODE_CACHE
     with _STOCK_INDEX_CACHE_LOCK:
         _STOCK_INDEX_CACHE = None
         _STOCK_INDEX_RECORD_CACHE = None
         _STOCK_CODE_LOOKUP_CACHE = None
+        _KR_NAME_TO_CODE_CACHE = None
         _REMOTE_INDEX_VALIDITY_CACHE = None
 
 
