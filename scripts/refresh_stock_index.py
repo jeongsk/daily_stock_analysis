@@ -54,12 +54,29 @@ def _sync_static_index() -> None:
     print(f"[refresh_stock_index] synced {WEB_INDEX_PATH} -> {STATIC_INDEX_PATH}", flush=True)
 
 
+def _run_kr_fetch() -> None:
+    """Fetch the full KR list; fail-open so KR issues never abort the refresh."""
+    try:
+        _run([sys.executable, "scripts/fetch_kr_stock_list.py"])
+    except subprocess.CalledProcessError as exc:
+        print(
+            f"[refresh_stock_index] WARNING: KR fetch failed (exit {exc.returncode}); "
+            "keeping existing data/stock_list_kr.csv",
+            file=sys.stderr,
+        )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="刷新股票自动补全索引")
     parser.add_argument(
         "--skip-fetch",
         action="store_true",
         help="跳过 Tushare 抓取，仅用现有 data/stock_list_*.csv 重新生成索引",
+    )
+    parser.add_argument(
+        "--skip-kr",
+        action="store_true",
+        help="跳过 KR (pykrx) 股票列表抓取，仅用现有 data/stock_list_kr.csv",
     )
     args = parser.parse_args(argv)
 
@@ -75,6 +92,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
                 return 2
             _run([sys.executable, "scripts/fetch_tushare_stock_list.py", "--a-rk"])
+
+        if args.skip_kr:
+            print("[refresh_stock_index] skip KR fetch; using existing data/stock_list_kr.csv")
+        else:
+            _run_kr_fetch()
 
         _run([sys.executable, "scripts/generate_index_from_csv.py", "--source", "tushare"])
         _sync_static_index()

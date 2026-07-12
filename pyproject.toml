@@ -50,6 +50,9 @@ dev = [
     "flake8",
     "pytest",
 ]
+scripts = [
+    "pykrx>=1.0.45",
+]
 
 [tool.uv.sources]
 alphasift = { git = "https://github.com/ZhuLinsen/alphasift.git", rev = "377049857cc04175dc3cca62121ee41adec6cdb8" }

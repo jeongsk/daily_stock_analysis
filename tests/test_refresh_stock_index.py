@@ -32,6 +32,10 @@ def test_main_fetches_tushare_with_a_rk_by_default():
     ]
     assert run.call_args_list[1].args[0] == [
         sys.executable,
+        "scripts/fetch_kr_stock_list.py",
+    ]
+    assert run.call_args_list[2].args[0] == [
+        sys.executable,
         "scripts/generate_index_from_csv.py",
         "--source",
         "tushare",
