@@ -97,7 +97,7 @@ def write_index(index: List[list], output_path: Path) -> None:
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="Expand KR entries of the stock index via pykrx")
+    parser = argparse.ArgumentParser(description="Expand KR entries of the stock index via FinanceDataReader")
     parser.add_argument(
         "--skip-fetch", action="store_true",
         help="use existing data/stock_list_kr.csv instead of fetching",

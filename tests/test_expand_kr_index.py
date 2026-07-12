@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Offline tests for scripts/expand_kr_index.py (pykrx/network never used)."""
+"""Offline tests for scripts/expand_kr_index.py (FinanceDataReader/network never used)."""
 import csv
 import sys
 from pathlib import Path
