@@ -135,6 +135,17 @@ def _is_single_char_typo(input_name: str, candidate_name: str) -> bool:
     return diff == 1
 
 
+def _get_kr_name_to_code_map_safe() -> Dict[str, str]:
+    """Load KR name->code map from the generated index; fail-open to {}."""
+    try:
+        from src.data.stock_index_loader import get_kr_name_to_code_map
+
+        return get_kr_name_to_code_map()
+    except Exception as exc:  # noqa: BLE001 - KR resolution is additive/optional
+        logger.debug(f"[NameResolver] KR 名称映射加载失败: {exc}")
+        return {}
+
+
 def resolve_name_to_code(name: str) -> Optional[str]:
     """
     Resolve stock name to code.
@@ -170,6 +181,14 @@ def resolve_name_to_code(name: str) -> Optional[str]:
     if s in _LOCAL_AMBIGUOUS_NAMES:
         logger.debug(f"[NameResolver] 命中本地歧义名称，快速返回 None: {s}")
         return None
+
+    # 2.5 KR localized (Hangul) name from the generated index.
+    # Hangul is outside the Han-ideograph range checked by _contains_cjk, so it
+    # must be resolved before the non-CJK early return below.
+    kr_reverse = _get_kr_name_to_code_map_safe()
+    if s in kr_reverse:
+        logger.debug(f"[NameResolver] 命中 KR 索引名称映射: {s} -> {kr_reverse[s]}")
+        return kr_reverse[s]
 
     # 3. Pinyin match (exact)
     try:
