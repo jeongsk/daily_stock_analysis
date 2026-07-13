@@ -94,7 +94,8 @@ def format_decision_signal_excerpt(summary: Any, report_language: str = "zh") ->
     if parts:
         lines.append(" | ".join(parts))
     for key in ("reason", "watch_conditions", "risk_summary"):
-        text = _public_text(summary.get(key), max_length=120)
+        max_length = None if key == "reason" else 120
+        text = _public_text(summary.get(key), max_length=max_length)
         if text:
             lines.append(f"- {labels[key]}: {text}")
     return "\n".join(lines)
@@ -106,7 +107,7 @@ def _public_scalar(value: Any, *, max_length: int) -> str:
     return sanitize_decision_signal_text(value)[:max_length]
 
 
-def _public_text(value: Any, *, max_length: int) -> str:
+def _public_text(value: Any, *, max_length: Optional[int]) -> str:
     if value in (None, "", [], {}):
         return ""
     if isinstance(value, (list, tuple)):
@@ -119,4 +120,5 @@ def _public_text(value: Any, *, max_length: int) -> str:
         )
     else:
         text = str(value).strip()
-    return sanitize_decision_signal_text(text)[:max_length]
+    sanitized = sanitize_decision_signal_text(text)
+    return sanitized if max_length is None else sanitized[:max_length]

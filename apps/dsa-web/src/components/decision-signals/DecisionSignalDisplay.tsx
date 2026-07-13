@@ -19,6 +19,7 @@ import {
 } from '../../utils/decisionAction';
 import { cn } from '../../utils/cn';
 import { parseDecisionSignalDate } from '../../utils/decisionSignalTime';
+import { getDecisionSignalProfileLabel } from '../../utils/decisionSignalProfile';
 import {
   getDecisionSignalHorizonLabel,
   getDecisionSignalMarketLabel,
@@ -224,6 +225,7 @@ export const DecisionSignalCard: React.FC<DecisionSignalCardProps> = ({ item, on
   const { language, t } = useUiLanguage();
   const stockNameDisplay = getStockNameDisplayText(item.stockName, language) || item.stockCode;
   const actionLabel = getActionLabel(item, t);
+  const profileLabel = getDecisionSignalProfileLabel(item, t);
   const interactive = Boolean(onSelect);
   const entryRange = formatEntryRange(item);
   const pricePlanItems = [
@@ -243,6 +245,7 @@ export const DecisionSignalCard: React.FC<DecisionSignalCardProps> = ({ item, on
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant={getActionVariant(item)}>{actionLabel}</Badge>
             <Badge variant={STATUS_VARIANTS[item.status]}>{t(STATUS_LABEL_KEYS[item.status])}</Badge>
+            <Badge variant="info">{t('decisionSignals.profile')}: {profileLabel}</Badge>
             <span className="font-mono text-sm text-secondary-text">{item.stockCode}</span>
           </div>
           <h3 className="mt-2 text-base font-semibold text-foreground">
@@ -355,6 +358,7 @@ export const DecisionSignalDetails: React.FC<DecisionSignalDetailsProps> = ({
   const { language, t } = useUiLanguage();
   const stockNameDisplay = getStockNameDisplayText(item.stockName, language) || item.stockCode;
   const actionLabel = getActionLabel(item, t);
+  const profileLabel = getDecisionSignalProfileLabel(item, t);
   const entryRange = formatEntryRange(item);
   const evidenceData = asJsonViewerData(item.evidence);
   const qualityData = asJsonViewerData(item.dataQualitySummary);
@@ -367,6 +371,7 @@ export const DecisionSignalDetails: React.FC<DecisionSignalDetailsProps> = ({
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant={getActionVariant(item)} size="md">{actionLabel}</Badge>
             <Badge variant={STATUS_VARIANTS[item.status]} size="md">{t(STATUS_LABEL_KEYS[item.status])}</Badge>
+            <Badge variant="info" size="md">{t('decisionSignals.profile')}: {profileLabel}</Badge>
           </div>
           <h3 className="mt-3 text-xl font-semibold text-foreground">{stockNameDisplay}</h3>
           <p className="mt-1 font-mono text-sm text-secondary-text">{item.stockCode} · {getDecisionSignalMarketLabel(item.market, t)}</p>
@@ -378,6 +383,7 @@ export const DecisionSignalDetails: React.FC<DecisionSignalDetailsProps> = ({
         <DetailRow label={t('decisionSignals.score')} value={formatNumber(item.score)} />
         <DetailRow label={t('decisionSignals.confidence')} value={formatConfidence(item.confidence)} />
         <DetailRow label={t('decisionSignals.horizon')} value={getDecisionSignalHorizonLabel(item.horizon, t)} />
+        <DetailRow label={t('decisionSignals.profile')} value={profileLabel} />
         <DetailRow label={t('decisionSignals.planQuality')} value={getDecisionSignalPlanQualityLabel(item.planQuality, t)} />
         <DetailRow label={t('decisionSignals.marketPhase')} value={getDecisionSignalMarketPhaseLabel(item.marketPhase, t)} />
         <DetailRow label={t('decisionSignals.sourceReport')} value={item.sourceReportId ? `#${item.sourceReportId}` : '-'} />

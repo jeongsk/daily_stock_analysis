@@ -9,6 +9,7 @@ import type {
   SystemConfigItem,
   SystemConfigUpdateItem,
 } from '../types/systemConfig';
+import { serializeStockListValue } from '../utils/stockList';
 
 const SYSTEM_CONFIG_TEXT: Record<UiLanguage, {
   noChangesToast: string;
@@ -108,6 +109,10 @@ function isMultiValueSchema(schema: SystemConfigItem['schema'] | undefined): boo
 }
 
 function normalizeFieldValue(value: string, schema: SystemConfigItem['schema'] | undefined): string {
+  if ((schema?.key ?? '').toUpperCase() === 'STOCK_LIST') {
+    return serializeStockListValue(value);
+  }
+
   if (!isMultiValueSchema(schema)) {
     return value;
   }

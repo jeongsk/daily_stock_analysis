@@ -1121,6 +1121,16 @@
               }
             }
           },
+          "400": {
+            "description": "股票代码不能为空",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "404": {
             "description": "未找到记录",
             "content": {
@@ -4623,6 +4633,18 @@
               "title": "Cost Method"
             },
             "description": "Cost method: fifo or avg"
+          },
+          {
+            "name": "include_realtime",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Whether today's snapshot should try realtime quotes before historical close fallback",
+              "default": true,
+              "title": "Include Realtime"
+            },
+            "description": "Whether today's snapshot should try realtime quotes before historical close fallback"
           }
         ],
         "responses": {
@@ -5060,6 +5082,18 @@
               "title": "Cost Method"
             },
             "description": "Cost method: fifo or avg"
+          },
+          {
+            "name": "include_realtime",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Whether today's risk snapshot should try realtime quotes before historical close fallback",
+              "default": true,
+              "title": "Include Realtime"
+            },
+            "description": "Whether today's risk snapshot should try realtime quotes before historical close fallback"
           }
         ],
         "responses": {
@@ -6109,6 +6143,24 @@
               "title": "Market Phase"
             },
             "description": "Optional market phase filter"
+          },
+          {
+            "name": "decision_profile",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional decision profile filter: conservative/balanced/aggressive/unknown",
+              "title": "Decision Profile"
+            },
+            "description": "Optional decision profile filter: conservative/balanced/aggressive/unknown"
           },
           {
             "name": "source_type",
@@ -7294,7 +7346,7 @@
           "DecisionSignals"
         ],
         "summary": "更新决策信号状态",
-        "description": "只更新合法状态和可选 metadata；传入 metadata 时按整包替换保存。expired/invalidated/closed/archived 等 terminal 状态不能直接 PATCH 回 active。",
+        "description": "只更新合法状态和可选 metadata；省略 metadata 时保留原值，null 时清空，object 时按整包替换并保持正式 decision_profile 身份。expired/invalidated/closed/archived 等 terminal 状态不能直接 PATCH 回 active。",
         "operationId": "updateDecisionSignalStatus",
         "security": [
           {
@@ -11300,6 +11352,16 @@
             "maxLength": 64,
             "title": "Trace Id"
           },
+          "decision_profile": {
+            "type": "string",
+            "enum": [
+              "conservative",
+              "balanced",
+              "aggressive"
+            ],
+            "title": "Decision Profile",
+            "description": "Optional decision profile. Omit to use server-side default/fallback; explicit null is rejected."
+          },
           "market_phase": {
             "anyOf": [
               {
@@ -11566,7 +11628,8 @@
                 "type": "null"
               }
             ],
-            "title": "Metadata"
+            "title": "Metadata",
+            "description": "Optional metadata object. Omitted or null values are treated as absent."
           },
           "report_language": {
             "anyOf": [
@@ -11793,6 +11856,22 @@
               }
             ],
             "title": "Trace Id"
+          },
+          "decision_profile": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "conservative",
+                  "balanced",
+                  "aggressive"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision Profile"
           },
           "market_phase": {
             "anyOf": [
@@ -12972,7 +13051,8 @@
                 "type": "null"
               }
             ],
-            "title": "Metadata"
+            "title": "Metadata",
+            "description": "Optional replacement metadata. Omit to preserve the stored value; null clears it; an object replaces it while preserving the formal decision_profile identity."
           }
         },
         "type": "object",
@@ -17233,6 +17313,16 @@
             ],
             "title": "Concept Rankings",
             "description": "概念板块涨跌榜（结构 {top, bottom}）"
+          },
+          "market_structure": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Market Structure",
+            "description": "市场结构上下文（题材层 + 个股位置层）"
           }
         },
         "type": "object",
@@ -17345,7 +17435,7 @@
               }
             ],
             "title": "Model Used",
-            "description": "历史报告元数据中的模型快照，仅用于展示，不影响 Provider/Model/Base URL 运行时路由"
+            "description": "历史报告元数据中的模型快照，仅用于展示；不参与运行时模型调用路径或配置路由"
           },
           "market_phase_summary": {
             "anyOf": [
@@ -18651,7 +18741,7 @@
               }
             ],
             "title": "Model Used",
-            "description": "最新分析使用的模型快照"
+            "description": "最新分析使用的模型快照，仅用于列表展示；不改动运行时调用与配置路径"
           },
           "market_phase_summary": {
             "anyOf": [
