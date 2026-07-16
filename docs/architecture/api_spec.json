@@ -6820,8 +6820,8 @@
         "tags": [
           "DecisionSignals"
         ],
-        "summary": "预览决策风格重评估",
-        "description": "基于 source_report_id 对应的持久化历史报告快照生成 decision_profile preview；P3a 仅支持 persist=false，不写入 DecisionSignal。",
+        "summary": "重评估决策风格并可选保存",
+        "description": "基于 source_report_id 对应的持久化历史报告快照重新计算 decision_profile 信号；persist=false 返回只读 preview，persist=true 将通过 guardrail 的服务端结果写入 DecisionSignal。",
         "operationId": "reassessDecisionSignalPreview",
         "requestBody": {
           "content": {
@@ -6855,11 +6855,11 @@
             }
           },
           "400": {
-            "description": "重评估请求不支持或历史报告不适用",
+            "description": "历史报告不适用或持久化被风控阻断",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/DecisionSignalReassessErrorResponse"
                 }
               }
             }
@@ -12953,6 +12953,47 @@
         ],
         "title": "DecisionSignalPreview"
       },
+      "DecisionSignalReassessErrorResponse": {
+        "properties": {
+          "error": {
+            "type": "string",
+            "enum": [
+              "unsupported_report_type",
+              "unsupported_report_snapshot",
+              "guardrail_blocked"
+            ],
+            "title": "Error"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "blocked_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocked Reason"
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/DecisionSignalWarning"
+            },
+            "type": "array",
+            "title": "Warnings"
+          }
+        },
+        "type": "object",
+        "required": [
+          "error",
+          "message"
+        ],
+        "title": "DecisionSignalReassessErrorResponse"
+      },
       "DecisionSignalReassessRequest": {
         "properties": {
           "source_report_id": {
@@ -12986,7 +13027,14 @@
       "DecisionSignalReassessResponse": {
         "properties": {
           "preview": {
-            "$ref": "#/components/schemas/DecisionSignalPreview"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DecisionSignalPreview"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "item": {
             "anyOf": [
@@ -13002,6 +13050,22 @@
             "type": "boolean",
             "title": "Created",
             "default": false
+          },
+          "persist_status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "created",
+                  "existing",
+                  "refreshed"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Persist Status"
           },
           "warnings": {
             "items": {
@@ -13023,9 +13087,6 @@
           }
         },
         "type": "object",
-        "required": [
-          "preview"
-        ],
         "title": "DecisionSignalReassessResponse"
       },
       "DecisionSignalStatusUpdateRequest": {
