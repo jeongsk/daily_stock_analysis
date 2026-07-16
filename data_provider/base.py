@@ -2532,6 +2532,25 @@ class DataFetcherManager:
             logger.warning("[kr-flows] get_kr_market_investor_flows(%s) fail-open: %s", market, exc)
             return None
 
+    def get_kr_market_breadth(self, market: str) -> Optional[Dict[str, Any]]:
+        """KOSPI/KOSDAQ 시장 폭(상승·하락·보합 종목 수) — KR 마켓 리뷰용, fail-open.
+
+        KrMarketContextFetcher.get_market_breadth를 lazy 싱글턴으로 호출한다.
+        CN 공통 get_market_stats() 순회와는 별개 경로다(스펙 D6 — KR에 물리면
+        A주 전용 fetcher가 오염되므로 재사용하지 않는다). 실패 시 None.
+        """
+        try:
+            fetcher = getattr(self, "_kr_market_context_fetcher", None)
+            if fetcher is None:
+                from data_provider.kr_market_context_fetcher import KrMarketContextFetcher
+
+                fetcher = KrMarketContextFetcher()
+                self._kr_market_context_fetcher = fetcher
+            return fetcher.get_market_breadth(market)
+        except Exception as exc:  # noqa: BLE001 - fail-open
+            logger.warning("[kr-breadth] get_kr_market_breadth(%s) fail-open: %s", market, exc)
+            return None
+
     def get_market_stats(self, *, purpose: str = "unspecified") -> Dict[str, Any]:
         """获取市场涨跌统计（自动切换数据源）"""
         logger.info("[MarketStats] component=market_stats action=start purpose=%s", purpose)

@@ -268,6 +268,23 @@ export interface MarketReviewBreadth {
   turnoverUnit?: string;
 }
 
+// KR 전용 시장 폭 레코드(kr_market_context.breadth.{kospi,kosdaq}).
+// up/down/flat + 기준 시점만 제공 — 상·하한가/거래대금은 KR 계약에 없다.
+export interface KrMarketBreadthRecord {
+  market?: string;
+  upCount?: number;
+  downCount?: number;
+  flatCount?: number;
+  asOf?: string;
+  session?: 'intraday' | 'close' | string;
+  source?: string;
+  stale?: boolean;
+}
+
+export interface KrMarketContextPayload {
+  breadth?: Partial<Record<'kospi' | 'kosdaq', KrMarketBreadthRecord>>;
+}
+
 export interface MarketReviewPayload {
   version?: number;
   kind?: 'market_review' | string;
@@ -280,6 +297,7 @@ export interface MarketReviewPayload {
   marketScope?: string;
   marketLight?: Record<string, unknown>;
   breadth?: MarketReviewBreadth;
+  krMarketContext?: KrMarketContextPayload;
   indices?: MarketReviewIndex[];
   sectors?: SectorRankings;
   concepts?: SectorRankings;

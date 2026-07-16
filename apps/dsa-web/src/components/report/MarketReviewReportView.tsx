@@ -5,6 +5,7 @@ import { historyApi } from '../../api/history';
 import { formatUiText, UI_TEXT } from '../../i18n/uiText';
 import type {
   AnalysisReport,
+  KrMarketBreadthRecord,
   MarketReviewPayload,
   MarketReviewPayloadSection,
   ReportLanguage,
@@ -44,6 +45,9 @@ type StructuredMarketData = {
   id: string;
   title?: string;
   breadth?: MarketReviewPayload['breadth'];
+  // KR 하위 시장(KOSPI/KOSDAQ) 폭 — 존재 시 up/down/flat 3셀 변형으로 렌더하고,
+  // 지원하지 않는 상·하한가/거래대금 셀은 만들지 않는다.
+  krBreadth?: KrMarketBreadthRecord;
   indices: NonNullable<MarketReviewPayload['indices']>;
   sectors?: MarketReviewPayload['sectors'];
   concepts?: MarketReviewPayload['concepts'];
@@ -178,26 +182,48 @@ const hasRankingRows = (rankings?: MarketReviewPayload['sectors']): boolean =>
 const hasStructuredMarketData = (payload?: MarketReviewPayload | null): boolean =>
   Boolean(payload?.breadth || payload?.indices?.length || hasRankingRows(payload?.sectors) || hasRankingRows(payload?.concepts));
 
+// KR 하위 시장(kospi/kosdaq) 폭 레코드 -> 별도 구조화 엔트리로 합성.
+// 지수는 상위 KR 엔트리에서 1회만 렌더하므로 여기서는 indices를 비운다.
+const getKrSubmarketEntries = (payload: MarketReviewPayload): StructuredMarketData[] => {
+  const breadthMap = payload.krMarketContext?.breadth;
+  if (!breadthMap) {
+    return [];
+  }
+  return (['kospi', 'kosdaq'] as const)
+    .map((marketKey) => ({ marketKey, record: breadthMap[marketKey] }))
+    .filter(({ record }) => Boolean(record?.asOf))
+    .map(({ marketKey, record }) => ({
+      id: `kr-${marketKey}`,
+      title: marketKey.toUpperCase(),
+      krBreadth: record,
+      indices: [],
+    }));
+};
+
 const getStructuredMarketData = (payload?: MarketReviewPayload | null): StructuredMarketData[] => {
   if (!payload) {
     return [];
   }
 
   if (payload.markets) {
-    return Object.entries(payload.markets)
-      .filter(([, marketPayload]) => hasStructuredMarketData(marketPayload))
-      .map(([region, marketPayload]) => ({
-        id: region,
-        title: marketPayload.title || region.toUpperCase(),
-        breadth: marketPayload.breadth,
-        indices: marketPayload.indices || [],
-        sectors: marketPayload.sectors,
-        concepts: marketPayload.concepts,
-      }));
+    return Object.entries(payload.markets).flatMap(([region, marketPayload]) => {
+      const entries: StructuredMarketData[] = hasStructuredMarketData(marketPayload)
+        ? [{
+            id: region,
+            title: marketPayload.title || region.toUpperCase(),
+            breadth: marketPayload.breadth,
+            indices: marketPayload.indices || [],
+            sectors: marketPayload.sectors,
+            concepts: marketPayload.concepts,
+          }]
+        : [];
+      return [...entries, ...getKrSubmarketEntries(marketPayload)];
+    });
   }
 
+  const krEntries = getKrSubmarketEntries(payload);
   if (!hasStructuredMarketData(payload)) {
-    return [];
+    return krEntries;
   }
 
   return [{
@@ -207,7 +233,7 @@ const getStructuredMarketData = (payload?: MarketReviewPayload | null): Structur
     indices: payload.indices || [],
     sectors: payload.sectors,
     concepts: payload.concepts,
-  }];
+  }, ...krEntries];
 };
 
 const coerceFiniteNumber = (value: unknown): number | null => {
@@ -273,8 +299,12 @@ const MARKET_REVIEW_TEXT: Record<ReportLanguage, {
   noBreadthData: string;
   advancers: string;
   decliners: string;
+  flat: string;
   limitUpDown: string;
   turnover: string;
+  krSessionIntraday: string;
+  krSessionClose: string;
+  krStale: string;
   index: string;
   last: string;
   change: string;
@@ -298,8 +328,12 @@ const MARKET_REVIEW_TEXT: Record<ReportLanguage, {
     noBreadthData: '暂无数据',
     advancers: '上涨家数',
     decliners: '下跌家数',
+    flat: '平盘家数',
     limitUpDown: '涨停/跌停',
     turnover: '成交额',
+    krSessionIntraday: '盘中',
+    krSessionClose: '收盘',
+    krStale: '延迟',
     index: '指数',
     last: '最新',
     change: '涨跌幅',
@@ -323,8 +357,12 @@ const MARKET_REVIEW_TEXT: Record<ReportLanguage, {
     noBreadthData: 'No data',
     advancers: 'Advancers',
     decliners: 'Decliners',
+    flat: 'Flat',
     limitUpDown: 'Limit Up/Down',
     turnover: 'Turnover',
+    krSessionIntraday: 'Intraday',
+    krSessionClose: 'Close',
+    krStale: 'Stale',
     index: 'Index',
     last: 'Last',
     change: 'Change',
@@ -348,8 +386,12 @@ const MARKET_REVIEW_TEXT: Record<ReportLanguage, {
     noBreadthData: '데이터 없음',
     advancers: '상승 종목',
     decliners: '하락 종목',
+    flat: '보합 종목',
     limitUpDown: '상한가/하한가',
     turnover: '거래대금',
+    krSessionIntraday: '장중',
+    krSessionClose: '마감',
+    krStale: '지연',
     index: '지수',
     last: '최신',
     change: '등락률',
@@ -592,10 +634,47 @@ export const MarketReviewReportView: React.FC<MarketReviewReportViewProps> = ({
           <div className="space-y-5">
             {structuredMarketData.map((marketData) => (
               <div key={marketData.id} className="space-y-3">
-                {showStructuredMarketTitles ? (
+                {showStructuredMarketTitles || marketData.krBreadth ? (
                   <h4 className="text-sm font-semibold text-foreground">{marketData.title}</h4>
                 ) : null}
-                {marketData.breadth ? (
+                {marketData.krBreadth ? (
+                  // KR 하위 시장 폭: up/down/flat 3셀 + 기준 시점.
+                  // 상·하한가/거래대금은 KR 계약에 없으므로 '-' 셀을 만들지 않는다.
+                  <div className="space-y-1.5">
+                    <div className="grid grid-cols-3 gap-2 text-sm">
+                      <div className="rounded-lg border border-subtle p-3">
+                        <p className="label-uppercase">{marketReviewText.advancers}</p>
+                        <p className="mt-1 font-semibold text-foreground">
+                          {formatMarketCount(marketData.krBreadth.upCount)}
+                        </p>
+                      </div>
+                      <div className="rounded-lg border border-subtle p-3">
+                        <p className="label-uppercase">{marketReviewText.decliners}</p>
+                        <p className="mt-1 font-semibold text-foreground">
+                          {formatMarketCount(marketData.krBreadth.downCount)}
+                        </p>
+                      </div>
+                      <div className="rounded-lg border border-subtle p-3">
+                        <p className="label-uppercase">{marketReviewText.flat}</p>
+                        <p className="mt-1 font-semibold text-foreground">
+                          {formatMarketCount(marketData.krBreadth.flatCount)}
+                        </p>
+                      </div>
+                    </div>
+                    <p className="text-xs text-secondary-text">
+                      {[
+                        marketData.krBreadth.asOf,
+                        marketData.krBreadth.session === 'intraday'
+                          ? marketReviewText.krSessionIntraday
+                          : marketData.krBreadth.session === 'close'
+                            ? marketReviewText.krSessionClose
+                            : marketData.krBreadth.session,
+                        marketData.krBreadth.stale ? `(${marketReviewText.krStale})` : null,
+                        marketData.krBreadth.source,
+                      ].filter(Boolean).join(' · ')}
+                    </p>
+                  </div>
+                ) : marketData.breadth ? (
                   <div className="grid grid-cols-2 gap-2 text-sm md:grid-cols-4">
                     <div className="rounded-lg border border-subtle p-3">
                       <p className="label-uppercase">{marketReviewText.advancers}</p>

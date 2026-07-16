@@ -87,7 +87,7 @@ PY
 
 边界：
 
-- JP/KR 大盘复盘 v1 不提供涨跌家数、涨跌停或行业/板块排行；结构化 payload 中 `breadth` 仍只在有市场宽度数据时出现。市场整体外国人/机构资金流统计现已随 `kr` 大盘复盘提供（见上文「韩股市场大盘复盘投资者别买卖动向」小节），`jp` 大盘复盘仍不提供资金流统计。
+- **韩股大盘复盘市场宽度（시장 폭，KR-only）**：`kr` 大盘复盘现提供 KOSPI/KOSDAQ **各自独立**的上涨/下跌/平盘家数（数据源：NAVER 指数页 `sise_index.naver`，无认证公开页面，2026-07-16 实测；record 含 `as_of` 与 `intraday|close` 会话状态，最新抓取失败时仅允许**同一交易日**缓存以 `stale=true` 提供，开盘前（预估指数区间）不生成 record）。市场宽度（参与广度）与投资者动向（主体方向）为**不同维度信号**，prompt 中各自独立成节并仅做一致/背离交叉解读。数据挂载在结构化 payload 的 KR 专属可选键 `kr_market_context.breadth.{kospi,kosdaq}` 下 — 既有扁平 `breadth` 键（`has_market_stats` 市场专用）契约不变，KR 仍不提供涨跌停家数、成交额汇总或行业/板块排行。JP 大盘复盘不提供市场宽度；`jp` 亦不提供资金流统计（KR 资金流见上文「韩股市场大盘复盘投资者别买卖动向」小节）。任一来源失败均 fail-open，仅省略对应区块，不影响其余复盘内容；Market Light 及买卖评分不消费该数据。
 - 单一 JP/KR 指数拉取失败按既有 yfinance fail-open 逻辑跳过，不拖垮其它指数或其它市场。
 - 如果 `exchange-calendars` 缺少对应交易所日历，继续沿用既有交易日 fail-open/fail-closed 语义。
 

@@ -119,6 +119,10 @@ class MarketOverview:
     # KR 시장 수급(외국인/기관/개인, KRW) — {"kospi": rec, "kosdaq": rec}; 비KR은 None
     investor_flows: Optional[Dict[str, Any]] = None
 
+    # KR 시장 폭(상승·하락·보합 종목 수) — {"kospi": rec, "kosdaq": rec}; 비KR은 None.
+    # 위 up_count 등 CN 평면 필드와 별개(스펙 D12 — 기존 breadth 계약 불변).
+    kr_market_breadth: Optional[Dict[str, Any]] = None
+
 
 @dataclass
 class MarketLightReviewResult:
@@ -554,6 +558,8 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
         # 5. KR 시장 수급(외국인/기관, KRW) — kr 전용, fail-open
         if self.region == "kr":
             overview.investor_flows = self._get_kr_market_investor_flows()
+            # 6. KR 시장 폭(상승·하락·보합) — 수급과 별개 신호, fail-open
+            overview.kr_market_breadth = self._get_kr_market_breadth()
 
         return overview
 
@@ -576,6 +582,26 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
             if isinstance(rec, dict) and rec.get("days"):
                 flows[market_key] = rec
         return flows or None
+
+    def _get_kr_market_breadth(self) -> Optional[Dict[str, Any]]:
+        """KOSPI/KOSDAQ 시장 폭 레코드 수집 — kr 전용, 전면 fail-open.
+
+        {"kospi": rec, "kosdaq": rec}(유효 시장만) 반환. 둘 다 없으면 None.
+        레코드 유효성(필수 카운트+as_of)은 fetcher가 보장한다(스펙 D9).
+        """
+        breadth: Dict[str, Any] = {}
+        for market_key in ("kospi", "kosdaq"):
+            try:
+                rec = self.data_manager.get_kr_market_breadth(market_key)
+            except Exception as exc:  # noqa: BLE001 - fail-open
+                logger.warning(
+                    "[大盘] %s action=kr_market_breadth market=%s status=fail-open error=%s",
+                    self._log_context(), market_key, exc,
+                )
+                rec = None
+            if isinstance(rec, dict) and rec.get("as_of"):
+                breadth[market_key] = rec
+        return breadth or None
 
     def _get_main_indices(self) -> List[MarketIndex]:
         """获取主要指数实时行情"""
@@ -995,6 +1021,17 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
         if flows_payload:
             payload["investor_flows"] = flows_payload
 
+        # KR 전용 optional 시장 컨텍스트 — 기존 평면 breadth 계약과 별개(스펙 D12).
+        # 유효 시장(서브키)만 싣고, 비KR payload에는 키 자체가 없다(D3/D7).
+        kr_breadth_payload = {}
+        if isinstance(overview.kr_market_breadth, dict):
+            for market_key in ("kospi", "kosdaq"):
+                rec = overview.kr_market_breadth.get(market_key)
+                if isinstance(rec, dict) and rec.get("as_of"):
+                    kr_breadth_payload[market_key] = rec
+        if kr_breadth_payload:
+            payload["kr_market_context"] = {"breadth": kr_breadth_payload}
+
         return payload
 
     def _supports_market_light(self) -> bool:
@@ -1105,22 +1142,28 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
                 fallback_heading = fallback_headings[language]
                 review = f"{review.rstrip()}\n\n{fallback_heading}\n{sector_block}\n"
 
-        flows_block = self._build_kr_market_flows_block(overview)
-        if flows_block:
+        # KR 결정적 블록: 폭 먼저, 수급 다음 — 같은 `시장 요약` 섹션에 순서대로 주입.
+        # (_insert_after_section은 섹션 끝에 append하므로 호출 순서가 표시 순서다.)
+        kr_fallback_headings = {
+            "en": "### 1. Market Summary",
+            "ko": "### 1. 시장 요약",
+            "zh": "### 一、盘面总览",
+        }
+        for block in (
+            self._build_kr_market_breadth_block(overview),
+            self._build_kr_market_flows_block(overview),
+        ):
+            if not block:
+                continue
             original_review = review
             review = self._insert_after_section(
                 review,
                 patterns["market_summary"],
-                flows_block,
+                block,
             )
-            if review == original_review and flows_block not in review:
-                fallback_headings = {
-                    "en": "### 1. Market Summary",
-                    "ko": "### 1. 시장 요약",
-                    "zh": "### 一、盘面总览",
-                }
-                fallback_heading = fallback_headings[language]
-                review = f"{review.rstrip()}\n\n{fallback_heading}\n{flows_block}\n"
+            if review == original_review and block not in review:
+                fallback_heading = kr_fallback_headings[language]
+                review = f"{review.rstrip()}\n\n{fallback_heading}\n{block}\n"
 
         return review
 
@@ -1190,6 +1233,85 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
                         dates.append(str(date))
         return max(dates) if dates else ""
 
+    def _kr_market_breadth_lines(self, overview: MarketOverview, language: str) -> List[str]:
+        """KOSPI/KOSDAQ 시장 폭을 로케일 라인 리스트로. 데이터 없으면 [].
+
+        각 라인: `- KOSPI: 상승 384 / 하락 488 / 보합 40 · 07-16 마감 · NAVER`.
+        유효 시장만 렌더(스펙 D3). stale 레코드는 기준 시점 뒤에 표시를 덧붙인다.
+        """
+        records = overview.kr_market_breadth if isinstance(overview.kr_market_breadth, dict) else {}
+        if language == "en":
+            up_label, down_label, flat_label = "Adv", "Dec", "Flat"
+            session_labels = {"close": "close", "intraday": "intraday"}
+            stale_label = "stale"
+        elif language == "ko":
+            up_label, down_label, flat_label = "상승", "하락", "보합"
+            session_labels = {"close": "마감", "intraday": "장중"}
+            stale_label = "지연"
+        else:
+            up_label, down_label, flat_label = "上涨", "下跌", "平盘"
+            session_labels = {"close": "收盘", "intraday": "盘中"}
+            stale_label = "延迟"
+        lines: List[str] = []
+        for market_key, market_name in (("kospi", "KOSPI"), ("kosdaq", "KOSDAQ")):
+            rec = records.get(market_key)
+            if not isinstance(rec, dict):
+                continue
+            up = rec.get("up_count")
+            down = rec.get("down_count")
+            flat = rec.get("flat_count")
+            as_of = str(rec.get("as_of") or "").strip()
+            if up is None or down is None or flat is None or not as_of:
+                continue
+            session = session_labels.get(str(rec.get("session") or ""), "")
+            source = str(rec.get("source") or "").strip() or "N/A"
+            meta = f"{as_of[5:]} {session}".strip()
+            if rec.get("stale"):
+                meta = f"{meta} ({stale_label})"
+            lines.append(
+                f"- {market_name}: {up_label} {up} / {down_label} {down} / "
+                f"{flat_label} {flat} · {meta} · {source}"
+            )
+        return lines
+
+    def _build_kr_market_breadth_prompt_block(
+        self, overview: MarketOverview, review_language: str
+    ) -> str:
+        """KR 시장 폭 -> LLM 프롬프트 섹션(로케일). 데이터 없으면 ""."""
+        lines = self._kr_market_breadth_lines(overview, review_language)
+        if not lines:
+            return ""
+        if review_language == "en":
+            heading = "## Market Breadth (KOSPI/KOSDAQ)"
+            guide = (
+                "(Advancing/declining/flat issue counts per market — participation "
+                "range. Distinct from investor flows.)"
+            )
+        elif review_language == "ko":
+            heading = "## 시장 폭 (KOSPI/KOSDAQ)"
+            guide = (
+                "(시장별 상승/하락/보합 종목 수 — 참여 범위 신호. 투자자 수급과는 "
+                "별개 축의 지표입니다.)"
+            )
+        else:
+            heading = "## 市场宽度 (KOSPI/KOSDAQ)"
+            guide = "（各市场上涨/下跌/平盘家数 — 参与广度信号，与投资者动向是不同维度。）"
+        return "\n".join([heading, guide, ""] + lines)
+
+    def _kr_breadth_flows_cross_guide(self, review_language: str) -> str:
+        """폭·수급 동시 존재 시 교차 해석 1줄 가이드(스펙 D1)."""
+        if review_language == "en":
+            return (
+                "(Read breadth as participation range and investor flows as who is "
+                "buying — interpret them separately, then note where they agree or diverge.)"
+            )
+        if review_language == "ko":
+            return (
+                "(시장 폭은 참여 범위, 투자자 수급은 주체 방향입니다. 각각 독립적으로 "
+                "본 뒤 두 신호의 일치/엇갈림만 교차 해석하세요.)"
+            )
+        return "（市场宽度反映参与广度，投资者动向反映主体方向——先分别解读，再交叉判断二者一致或背离。）"
+
     def _build_kr_market_flows_prompt_block(
         self, overview: MarketOverview, review_language: str
     ) -> str:
@@ -1217,6 +1339,24 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
                 "不作为独立交易决策依据。）"
             )
         return "\n".join([heading, guide, ""] + lines)
+
+    def _build_kr_market_breadth_block(self, overview: MarketOverview) -> str:
+        """KR 시장 폭 결정적 블록(로케일) — 리포트 본문 주입용. 데이터 없으면 "".
+
+        `시장 요약` 섹션에 삽입되므로 별도 ### 헤딩 없이 볼드 헤더 + 시장별 라인.
+        ko는 순수 한글(중국어 거부 게이트 이후 주입 안전).
+        """
+        language = self._get_review_language()
+        lines = self._kr_market_breadth_lines(overview, language)
+        if not lines:
+            return ""
+        if language == "en":
+            head = "**Market Breadth** (advancers/decliners/flat)"
+        elif language == "ko":
+            head = "**시장 폭**(상승/하락/보합 종목 수)"
+        else:
+            head = "**市场宽度**（上涨/下跌/平盘家数）"
+        return "\n".join([head, ""] + lines)
 
     def _build_kr_market_flows_block(self, overview: MarketOverview) -> str:
         """KR 시장 수급 결정적 블록(로케일) — 리포트 본문 주입용. 데이터 없으면 "".
@@ -1827,11 +1967,14 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
         stats_block = ""
         sector_block = ""
         data_limits_block = ""
-        # KR 마켓 리뷰가 수급을 주입하면(아래 region 가드) 자금흐름이 실제로 제공되므로,
-        # en/zh 데이터 경계 문구에서 "자금흐름 없음"만 제외한다(시장 폭/거래대금/참여도는 여전히 미제공).
+        # KR 마켓 리뷰가 수급/시장 폭을 주입하면(아래 region 가드) 해당 신호가 실제로
+        # 제공되므로, en/zh 데이터 경계 문구에서 제공되는 항목만 제외한다.
         # 비KR은 region 가드로 False -> 기존 문구 유지(바이트 동일). ko는 data_limits_block 미생성.
         kr_flows_present = self.region == "kr" and bool(
             self._kr_market_flow_lines(overview, review_language)
+        )
+        kr_breadth_present = self.region == "kr" and bool(
+            self._kr_market_breadth_lines(overview, review_language)
         )
         if review_language == "en":
             if self.profile.has_market_stats:
@@ -1851,7 +1994,15 @@ Concept lagging: {bottom_concepts_text if bottom_concepts_text else "N/A"}"""
 
             data_limit_lines = []
             if not self.profile.has_market_stats:
-                if kr_flows_present:
+                if kr_breadth_present and kr_flows_present:
+                    data_limit_lines.append(
+                        "- Limit-up/limit-down counts, aggregate turnover, and participation are not available for this market."
+                    )
+                elif kr_breadth_present:
+                    data_limit_lines.append(
+                        "- Limit-up/limit-down counts, aggregate turnover, participation, and fund-flow signals are not available for this market."
+                    )
+                elif kr_flows_present:
                     data_limit_lines.append(
                         "- Market breadth, aggregate turnover, and participation are not available for this market."
                     )
@@ -1898,7 +2049,11 @@ Concept lagging: {bottom_concepts_text if bottom_concepts_text else "N/A"}"""
 
             data_limit_lines = []
             if not self.profile.has_market_stats:
-                if kr_flows_present:
+                if kr_breadth_present and kr_flows_present:
+                    data_limit_lines.append("- 该市场暂无涨跌停家数、成交额汇总或参与度。")
+                elif kr_breadth_present:
+                    data_limit_lines.append("- 该市场暂无涨跌停家数、成交额汇总、参与度或资金流信号。")
+                elif kr_flows_present:
                     data_limit_lines.append("- 该市场暂无涨跌家数、涨跌停、成交额汇总或参与度。")
                 else:
                     data_limit_lines.append("- 该市场暂无涨跌家数、涨跌停、成交额汇总、参与度或资金流信号。")
@@ -1907,12 +2062,24 @@ Concept lagging: {bottom_concepts_text if bottom_concepts_text else "N/A"}"""
             if data_limit_lines:
                 data_limits_block = "## 数据边界\n" + "\n".join(data_limit_lines)
 
-        # KR: 수급이 곧 시장 폭 신호 — "데이터 없음" stats_block을 실제 수급으로 대체.
+        # KR: 시장 폭과 수급을 각각 독립 섹션으로 구성(스펙 D1 — 폭≠수급).
+        # 폭 데이터가 있으면 "데이터 없음" stats_block을 실제 폭으로 대체하고,
+        # 수급은 별도 섹션으로 뒤에 붙인다. 둘 다 있으면 교차 해석 가이드 1줄 추가.
         # region 가드로 비KR은 미진입(바이트 동일). 데이터 없으면 기존 문구 유지.
         if self.region == "kr":
+            kr_breadth_prompt = self._build_kr_market_breadth_prompt_block(overview, review_language)
             kr_flows_prompt = self._build_kr_market_flows_prompt_block(overview, review_language)
+            kr_sections: List[str] = []
+            if kr_breadth_prompt:
+                kr_sections.append(kr_breadth_prompt)
+            elif stats_block:
+                kr_sections.append(stats_block)
             if kr_flows_prompt:
-                stats_block = kr_flows_prompt
+                kr_sections.append(kr_flows_prompt)
+            if kr_breadth_prompt and kr_flows_prompt:
+                kr_sections.append(self._kr_breadth_flows_cross_guide(review_language))
+            if kr_sections:
+                stats_block = "\n\n".join(kr_sections)
 
         data_no_indices_hint = (
             "注意：由于行情数据获取失败，请主要根据【市场新闻】进行定性分析和总结，不要编造具体的指数点位。"
