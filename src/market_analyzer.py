@@ -123,6 +123,10 @@ class MarketOverview:
     # 위 up_count 등 CN 평면 필드와 별개(스펙 D12 — 기존 breadth 계약 불변).
     kr_market_breadth: Optional[Dict[str, Any]] = None
 
+    # KR 업종 순위(등락률 상·하위) — {"kospi": rec, "kosdaq": rec}; 비KR은 None.
+    # 위 top_sectors/bottom_sectors(CN 평면)과 별개(스펙 D12). 테마/개념은 제공 안 함(D5).
+    kr_sector_rankings: Optional[Dict[str, Any]] = None
+
 
 @dataclass
 class MarketLightReviewResult:
@@ -560,6 +564,8 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
             overview.investor_flows = self._get_kr_market_investor_flows()
             # 6. KR 시장 폭(상승·하락·보합) — 수급과 별개 신호, fail-open
             overview.kr_market_breadth = self._get_kr_market_breadth()
+            # 7. KR 업종 순위(등락률 상·하위) — 시장 구조 신호, fail-open
+            overview.kr_sector_rankings = self._get_kr_sector_rankings()
 
         return overview
 
@@ -602,6 +608,31 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
             if isinstance(rec, dict) and rec.get("as_of"):
                 breadth[market_key] = rec
         return breadth or None
+
+    def _get_kr_sector_rankings(self) -> Optional[Dict[str, Any]]:
+        """KOSPI/KOSDAQ 업종 순위 레코드 수집 — kr 전용, 전면 fail-open.
+
+        {"kospi": rec, "kosdaq": rec}(유효 시장만) 반환. 둘 다 없으면 None.
+        레코드 유효성(top+bottom+as_of)은 fetcher가 보장한다(스펙 D9).
+        """
+        rankings: Dict[str, Any] = {}
+        for market_key in ("kospi", "kosdaq"):
+            try:
+                rec = self.data_manager.get_kr_sector_rankings(market_key)
+            except Exception as exc:  # noqa: BLE001 - fail-open
+                logger.warning(
+                    "[大盘] %s action=kr_sector_rankings market=%s status=fail-open error=%s",
+                    self._log_context(), market_key, exc,
+                )
+                rec = None
+            if (
+                isinstance(rec, dict)
+                and rec.get("as_of")
+                and rec.get("top")
+                and rec.get("bottom")
+            ):
+                rankings[market_key] = rec
+        return rankings or None
 
     def _get_main_indices(self) -> List[MarketIndex]:
         """获取主要指数实时行情"""
@@ -1021,8 +1052,9 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
         if flows_payload:
             payload["investor_flows"] = flows_payload
 
-        # KR 전용 optional 시장 컨텍스트 — 기존 평면 breadth 계약과 별개(스펙 D12).
-        # 유효 시장(서브키)만 싣고, 비KR payload에는 키 자체가 없다(D3/D7).
+        # KR 전용 optional 시장 컨텍스트 — 기존 평면 breadth/sectors 계약과 별개(스펙 D12).
+        # breadth/sector_rankings 각 서브키·서브시장 독립(D3/D7). 비KR payload에는 키 자체가 없다.
+        kr_context: Dict[str, Any] = {}
         kr_breadth_payload = {}
         if isinstance(overview.kr_market_breadth, dict):
             for market_key in ("kospi", "kosdaq"):
@@ -1030,7 +1062,22 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
                 if isinstance(rec, dict) and rec.get("as_of"):
                     kr_breadth_payload[market_key] = rec
         if kr_breadth_payload:
-            payload["kr_market_context"] = {"breadth": kr_breadth_payload}
+            kr_context["breadth"] = kr_breadth_payload
+        kr_sector_payload = {}
+        if isinstance(overview.kr_sector_rankings, dict):
+            for market_key in ("kospi", "kosdaq"):
+                rec = overview.kr_sector_rankings.get(market_key)
+                if (
+                    isinstance(rec, dict)
+                    and rec.get("as_of")
+                    and rec.get("top")
+                    and rec.get("bottom")
+                ):
+                    kr_sector_payload[market_key] = rec
+        if kr_sector_payload:
+            kr_context["sector_rankings"] = kr_sector_payload
+        if kr_context:
+            payload["kr_market_context"] = kr_context
 
         return payload
 
@@ -1142,7 +1189,7 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
                 fallback_heading = fallback_headings[language]
                 review = f"{review.rstrip()}\n\n{fallback_heading}\n{sector_block}\n"
 
-        # KR 결정적 블록: 폭 먼저, 수급 다음 — 같은 `시장 요약` 섹션에 순서대로 주입.
+        # KR 결정적 블록: 폭 → 업종 → 수급 순서로 같은 `시장 요약` 섹션에 주입.
         # (_insert_after_section은 섹션 끝에 append하므로 호출 순서가 표시 순서다.)
         kr_fallback_headings = {
             "en": "### 1. Market Summary",
@@ -1151,6 +1198,7 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
         }
         for block in (
             self._build_kr_market_breadth_block(overview),
+            self._build_kr_sector_rankings_block(overview),
             self._build_kr_market_flows_block(overview),
         ):
             if not block:
@@ -1356,6 +1404,109 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
             head = "**시장 폭**(상승/하락/보합 종목 수)"
         else:
             head = "**市场宽度**（上涨/下跌/平盘家数）"
+        return "\n".join([head, ""] + lines)
+
+    @staticmethod
+    def _format_sector_entry(item: Dict[str, Any]) -> str:
+        """업종 행 -> '이름 +x.xx%'(비율이 아니라 %). 결측 시 빈 문자열."""
+        name = str(item.get("name") or "").strip()
+        change_pct = item.get("change_pct")
+        if not name or change_pct is None:
+            return ""
+        try:
+            pct = float(change_pct)
+        except (TypeError, ValueError):
+            return ""
+        return f"{name} {pct:+.2f}%"
+
+    def _kr_sector_rankings_lines(self, overview: MarketOverview, language: str) -> List[str]:
+        """KOSPI/KOSDAQ 업종 순위를 로케일 라인 리스트로. 데이터 없으면 [].
+
+        각 라인: `- KOSPI: 상승 통신업 +3.39%, 음식료품 +2.10% / 하락 전기,전자 -9.43% · 07-16 마감 · DAUM`.
+        유효 시장만 렌더(스펙 D3). stale 레코드는 기준 시점 뒤에 표시를 덧붙인다.
+        """
+        records = overview.kr_sector_rankings if isinstance(overview.kr_sector_rankings, dict) else {}
+        if language == "en":
+            top_label, bottom_label = "Top", "Bottom"
+            session_labels = {"close": "close", "intraday": "intraday"}
+            stale_label = "stale"
+        elif language == "ko":
+            top_label, bottom_label = "상승", "하락"
+            session_labels = {"close": "마감", "intraday": "장중"}
+            stale_label = "지연"
+        else:
+            top_label, bottom_label = "领涨", "领跌"
+            session_labels = {"close": "收盘", "intraday": "盘中"}
+            stale_label = "延迟"
+        lines: List[str] = []
+        for market_key, market_name in (("kospi", "KOSPI"), ("kosdaq", "KOSDAQ")):
+            rec = records.get(market_key)
+            if not isinstance(rec, dict):
+                continue
+            top = rec.get("top")
+            bottom = rec.get("bottom")
+            as_of = str(rec.get("as_of") or "").strip()
+            if not (isinstance(top, list) and isinstance(bottom, list) and top and bottom and as_of):
+                continue
+            top_text = ", ".join(
+                self._format_sector_entry(s) for s in top if isinstance(s, dict)
+            )
+            bottom_text = ", ".join(
+                self._format_sector_entry(s) for s in bottom if isinstance(s, dict)
+            )
+            if not top_text or not bottom_text:
+                continue
+            session = session_labels.get(str(rec.get("session") or ""), "")
+            source = str(rec.get("source") or "").strip() or "N/A"
+            meta = f"{as_of[5:]} {session}".strip()
+            if rec.get("stale"):
+                meta = f"{meta} ({stale_label})"
+            lines.append(
+                f"- {market_name}: {top_label} {top_text} / {bottom_label} {bottom_text} "
+                f"· {meta} · {source}"
+            )
+        return lines
+
+    def _build_kr_sector_rankings_prompt_block(
+        self, overview: MarketOverview, review_language: str
+    ) -> str:
+        """KR 업종 순위 -> LLM 프롬프트 섹션(로케일). 데이터 없으면 ""."""
+        lines = self._kr_sector_rankings_lines(overview, review_language)
+        if not lines:
+            return ""
+        if review_language == "en":
+            heading = "## KR Sector Rankings (KOSPI/KOSDAQ)"
+            guide = (
+                "(Top/bottom sectors by daily change rate per market — market "
+                "structure. No theme/concept rankings for KR.)"
+            )
+        elif review_language == "ko":
+            heading = "## KR 업종 순위 (KOSPI/KOSDAQ)"
+            guide = (
+                "(시장별 일간 등락률 상·하위 업종 — 시장 구조 신호. KR은 테마/개념 "
+                "순위를 제공하지 않습니다.)"
+            )
+        else:
+            heading = "## KR 行业排名 (KOSPI/KOSDAQ)"
+            guide = "（各市场按日涨跌幅前/后列行业 — 市场结构。KR不提供主题/概念排名。）"
+        return "\n".join([heading, guide, ""] + lines)
+
+    def _build_kr_sector_rankings_block(self, overview: MarketOverview) -> str:
+        """KR 업종 순위 결정적 블록(로케일) — 리포트 본문 주입용. 데이터 없으면 "".
+
+        `시장 요약` 섹션에 삽입되므로 별도 ### 헤딩 없이 볼드 헤더 + 시장별 라인.
+        ko는 순수 한글(중국어 거부 게이트 이후 주입 안전).
+        """
+        language = self._get_review_language()
+        lines = self._kr_sector_rankings_lines(overview, language)
+        if not lines:
+            return ""
+        if language == "en":
+            head = "**KR Sector Rankings** (top/bottom by change)"
+        elif language == "ko":
+            head = "**KR 업종 순위**(등락률 상·하위)"
+        else:
+            head = "**KR 行业排名**（涨跌幅前/后列）"
         return "\n".join([head, ""] + lines)
 
     def _build_kr_market_flows_block(self, overview: MarketOverview) -> str:
@@ -1976,6 +2127,9 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
         kr_breadth_present = self.region == "kr" and bool(
             self._kr_market_breadth_lines(overview, review_language)
         )
+        kr_sectors_present = self.region == "kr" and bool(
+            self._kr_sector_rankings_lines(overview, review_language)
+        )
         if review_language == "en":
             if self.profile.has_market_stats:
                 stats_block = f"""## Market Breadth
@@ -2011,7 +2165,10 @@ Concept lagging: {bottom_concepts_text if bottom_concepts_text else "N/A"}"""
                         "- Market breadth, aggregate turnover, participation, and fund-flow signals are not available for this market."
                     )
             if not self.profile.has_sector_rankings:
-                data_limit_lines.append("- Sector/theme ranking data is not available for this market.")
+                if kr_sectors_present:
+                    data_limit_lines.append("- Theme/concept ranking data is not available for this market.")
+                else:
+                    data_limit_lines.append("- Sector/theme ranking data is not available for this market.")
             if data_limit_lines:
                 data_limits_block = "## Data Limits\n" + "\n".join(data_limit_lines)
         elif review_language == "ko":
@@ -2058,7 +2215,10 @@ Concept lagging: {bottom_concepts_text if bottom_concepts_text else "N/A"}"""
                 else:
                     data_limit_lines.append("- 该市场暂无涨跌家数、涨跌停、成交额汇总、参与度或资金流信号。")
             if not self.profile.has_sector_rankings:
-                data_limit_lines.append("- 该市场暂无行业板块/概念题材涨跌榜。")
+                if kr_sectors_present:
+                    data_limit_lines.append("- 该市场暂无概念题材涨跌榜。")
+                else:
+                    data_limit_lines.append("- 该市场暂无行业板块/概念题材涨跌榜。")
             if data_limit_lines:
                 data_limits_block = "## 数据边界\n" + "\n".join(data_limit_lines)
 
@@ -2068,12 +2228,16 @@ Concept lagging: {bottom_concepts_text if bottom_concepts_text else "N/A"}"""
         # region 가드로 비KR은 미진입(바이트 동일). 데이터 없으면 기존 문구 유지.
         if self.region == "kr":
             kr_breadth_prompt = self._build_kr_market_breadth_prompt_block(overview, review_language)
+            kr_sector_prompt = self._build_kr_sector_rankings_prompt_block(overview, review_language)
             kr_flows_prompt = self._build_kr_market_flows_prompt_block(overview, review_language)
             kr_sections: List[str] = []
             if kr_breadth_prompt:
                 kr_sections.append(kr_breadth_prompt)
             elif stats_block:
                 kr_sections.append(stats_block)
+            # 업종 순위: sector_block "데이터 없음"을 KR 업종 섹션으로 대체(데이터 있을 때)
+            if kr_sector_prompt:
+                sector_block = kr_sector_prompt
             if kr_flows_prompt:
                 kr_sections.append(kr_flows_prompt)
             if kr_breadth_prompt and kr_flows_prompt:
