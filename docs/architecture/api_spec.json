@@ -12388,6 +12388,17 @@
             "type": "string",
             "title": "Holding State"
           },
+          "dominant_attribution": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dominant Attribution"
+          },
           "created_at": {
             "anyOf": [
               {
