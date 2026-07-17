@@ -14,6 +14,7 @@ credentials + an allow-listed IP; it is not executed by CI or by
 `pytest -m "not network"`.
 """
 
+import os
 import time
 import unittest
 from types import SimpleNamespace
@@ -68,6 +69,39 @@ def _make_daily_df() -> pd.DataFrame:
 
 def _make_quote(code: str, source=RealtimeSource.TOSS) -> UnifiedRealtimeQuote:
     return UnifiedRealtimeQuote(code=code, source=source, price=100.0)
+
+
+@pytest.fixture(autouse=True)
+def _block_unmocked_network(request):
+    """Design spec §6: a global (whole-module) guard against any *unexpected*
+    real network call in this offline suite — dry-run/order-write safety
+    depends on every test here actually being offline, not merely on every
+    test author remembering to mock ``requests``. Tests that legitimately
+    mock the network patch ``requests.get``/``requests.post`` themselves,
+    which simply replaces this guard for the duration of that patch; any
+    unpatched call reaching a real socket connect() fails immediately and
+    loudly instead of hanging or reaching the real Toss API. Skipped for the
+    deliberately-network ``TestTossNetworkSmoke`` class below."""
+    if request.node.get_closest_marker("network"):
+        yield
+        return
+
+    import socket
+
+    original_connect = socket.socket.connect
+
+    def _guarded_connect(self, address, *a, **kw):
+        raise AssertionError(
+            f"Unexpected real network connection attempt to {address!r} in tests/test_toss_fetcher.py "
+            f"— this suite must run fully offline (design spec "
+            f"docs/superpowers/specs/2026-07-17-toss-order-phase3-design.md §6)"
+        )
+
+    socket.socket.connect = _guarded_connect
+    try:
+        yield
+    finally:
+        socket.socket.connect = original_connect
 
 
 class TossFetcherTestCase(unittest.TestCase):
@@ -609,6 +643,371 @@ class TestManagerTossRouting(unittest.TestCase):
         self.assertEqual(quote.fallback_from, "toss")
         toss.get_realtime_quote.assert_called_once_with("005930.KS")
         yfinance.get_realtime_quote.assert_called_once_with("005930.KS")
+
+
+class TestOrderLiveFlag(TossFetcherTestCase):
+    """``TossFetcher.is_order_live_enabled`` — the fetcher-level half of the
+    Phase 3 dual live-order gate (design spec v2 §3). ``TOSS_ORDER_LIVE`` uses
+    *strict* parsing (``src.config.parse_strict_true_env_bool``) — only the
+    exact value ``"true"`` is live; every other non-empty value is an
+    ERROR-logged misconfiguration that stays dry-run (Codex blocker 2)."""
+
+    def test_defaults_false_without_config_or_env(self):
+        with patch("src.config.get_config", side_effect=Exception("no config")):
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("TOSS_ORDER_LIVE", None)
+                self.assertFalse(TossFetcher.is_order_live_enabled())
+
+    def test_reads_env_when_config_unavailable(self):
+        with patch("src.config.get_config", side_effect=Exception("no config")):
+            with patch.dict(os.environ, {"TOSS_ORDER_LIVE": "true"}):
+                self.assertTrue(TossFetcher.is_order_live_enabled())
+
+    def test_reads_explicit_config_object(self):
+        self.assertTrue(TossFetcher.is_order_live_enabled(SimpleNamespace(toss_order_live=True)))
+        self.assertFalse(TossFetcher.is_order_live_enabled(SimpleNamespace(toss_order_live=False)))
+
+    def test_strict_parsing_table_only_exact_true_is_live(self):
+        """Design spec v2 §6 strict-parsing table: "true"/"TRUE "/"1"/"yes"/
+        "flase"/blank/unset."""
+        from src.config import parse_strict_true_env_bool
+
+        cases = [
+            ("true", True),
+            ("TRUE ", True),
+            ("  true  ", True),
+            ("1", False),
+            ("yes", False),
+            ("flase", False),
+            ("", False),
+            ("   ", False),
+            (None, False),
+        ]
+        for raw, expected in cases:
+            with self.subTest(raw=raw):
+                self.assertEqual(
+                    parse_strict_true_env_bool(raw, field_name="TOSS_ORDER_LIVE"), expected
+                )
+
+    def test_strict_parsing_logs_error_only_for_wrong_nonempty_values(self):
+        from src.config import parse_strict_true_env_bool
+
+        with patch("src.config.logger") as mock_logger:
+            parse_strict_true_env_bool("yes", field_name="TOSS_ORDER_LIVE")
+            mock_logger.error.assert_called_once()
+
+        with patch("src.config.logger") as mock_logger:
+            parse_strict_true_env_bool("", field_name="TOSS_ORDER_LIVE")
+            mock_logger.error.assert_not_called()
+
+        with patch("src.config.logger") as mock_logger:
+            parse_strict_true_env_bool(None, field_name="TOSS_ORDER_LIVE")
+            mock_logger.error.assert_not_called()
+
+        with patch("src.config.logger") as mock_logger:
+            parse_strict_true_env_bool("true", field_name="TOSS_ORDER_LIVE")
+            mock_logger.error.assert_not_called()
+
+
+class TestOrderAmountCapParsing(unittest.TestCase):
+    """``src.config.parse_env_float_finite_positive`` — NaN/Infinity/
+    non-positive amount caps must never be clamped (a clamp compares against
+    the value, and NaN compares false against everything); they must be
+    replaced wholesale with the safe default (Codex blocker 5)."""
+
+    def test_nan_infinity_and_nonpositive_force_default(self):
+        from src.config import parse_env_float_finite_positive
+
+        for raw in ("nan", "NaN", "inf", "-inf", "Infinity", "0", "-5", "not-a-number"):
+            with self.subTest(raw=raw):
+                self.assertEqual(
+                    parse_env_float_finite_positive(raw, 1_000_000.0, field_name="TOSS_ORDER_MAX_AMOUNT_KRW"),
+                    1_000_000.0,
+                )
+
+    def test_valid_positive_value_is_used_as_is(self):
+        from src.config import parse_env_float_finite_positive
+
+        self.assertEqual(
+            parse_env_float_finite_positive("2500000", 1_000_000.0, field_name="TOSS_ORDER_MAX_AMOUNT_KRW"),
+            2_500_000.0,
+        )
+
+    def test_unset_uses_default_without_error_log(self):
+        from src.config import parse_env_float_finite_positive
+
+        with patch("src.config.logger") as mock_logger:
+            value = parse_env_float_finite_positive(None, 1_000_000.0, field_name="TOSS_ORDER_MAX_AMOUNT_KRW")
+        self.assertEqual(value, 1_000_000.0)
+        mock_logger.error.assert_not_called()
+
+
+class TestOrderWrites(TossFetcherTestCase):
+    """``place_order``/``cancel_order`` — POST /orders, POST /orders/{id}/cancel.
+
+    Design spec §6 mock-level assertion: without the live flag, no HTTP call
+    is ever made by ``place_order``/``cancel_order`` (the fetcher-level half
+    of the dual gate — the service-level half is covered in
+    tests/test_portfolio_order_service.py). v2: cancel_order now shares the
+    exact same live gate as place_order (Codex major 5), and ``_request_write``
+    itself refuses any orders-family URL when live is disabled even if called
+    directly, bypassing both public methods (Codex blocker 3).
+    """
+
+    @patch("data_provider.toss_fetcher.requests.post")
+    def test_place_order_refuses_without_live_flag_and_makes_no_http_call(self, mock_post):
+        fetcher = _make_fetcher()
+        with patch.object(TossFetcher, "is_order_live_enabled", return_value=False):
+            with self.assertRaises(toss_fetcher.TossOrderNotLiveError):
+                fetcher.place_order(
+                    "555",
+                    symbol="005930",
+                    side="BUY",
+                    order_type="LIMIT",
+                    quantity="1",
+                    price="70000",
+                    client_order_id="dsa-x",
+                )
+        mock_post.assert_not_called()
+
+    def test_place_order_requires_client_order_id_argument(self):
+        """``client_order_id`` is a required keyword-only argument now (no
+        default) — a call site that forgets it fails immediately with a
+        TypeError, not by silently sending a request without one."""
+        fetcher = _make_fetcher()
+        with self.assertRaises(TypeError):
+            fetcher.place_order(  # noqa: missing client_order_id on purpose
+                "555", symbol="005930", side="BUY", order_type="LIMIT", quantity="1", price="70000"
+            )
+
+    def test_place_order_signature_has_no_confirm_high_value_order_parameter(self):
+        """``confirm_high_value_order`` must not exist at all — not merely
+        default to False — so no call site can ever construct a request that
+        auto-confirms a high-value order."""
+        import inspect
+
+        params = inspect.signature(TossFetcher.place_order).parameters
+        self.assertNotIn("confirm_high_value_order", params)
+
+    @patch("data_provider.toss_fetcher.requests.post")
+    def test_place_order_live_success_sends_expected_body_and_headers(self, mock_post):
+        mock_post.side_effect = [
+            _make_resp({"access_token": "tok-1", "expires_in": 3600}),
+            _make_resp({"result": {"orderId": "abc123", "clientOrderId": "dsa-x"}}, status_code=200),
+        ]
+        fetcher = _make_fetcher()
+        with patch.object(TossFetcher, "is_order_live_enabled", return_value=True):
+            result = fetcher.place_order(
+                "555",
+                symbol="005930",
+                side="BUY",
+                order_type="LIMIT",
+                quantity="1",
+                price="70000",
+                client_order_id="dsa-x",
+            )
+        self.assertEqual(result["orderId"], "abc123")
+        order_call = mock_post.call_args_list[1]
+        self.assertEqual(
+            order_call.kwargs["json"],
+            {"symbol": "005930", "side": "BUY", "orderType": "LIMIT", "quantity": "1", "price": "70000", "clientOrderId": "dsa-x"},
+        )
+        self.assertEqual(order_call.kwargs["headers"]["X-Tossinvest-Account"], "555")
+        self.assertNotIn("confirmHighValueOrder", order_call.kwargs["json"])
+
+    @patch("data_provider.toss_fetcher.requests.post")
+    def test_place_order_rejected_business_error_preserves_code_and_data(self, mock_post):
+        mock_post.side_effect = [
+            _make_resp({"access_token": "tok-1", "expires_in": 3600}),
+            _make_resp(
+                {
+                    "error": {
+                        "code": "insufficient-buying-power",
+                        "message": "주문 가능 금액이 부족합니다.",
+                        "requestId": "req-1",
+                    }
+                },
+                status_code=422,
+            ),
+        ]
+        fetcher = _make_fetcher()
+        with patch.object(TossFetcher, "is_order_live_enabled", return_value=True):
+            with self.assertRaises(toss_fetcher.TossOrderRejectedError) as ctx:
+                fetcher.place_order(
+                    "555",
+                    symbol="005930",
+                    side="BUY",
+                    order_type="LIMIT",
+                    quantity="1",
+                    price="70000",
+                    client_order_id="dsa-x",
+                )
+        self.assertEqual(ctx.exception.code, "insufficient-buying-power")
+        self.assertEqual(ctx.exception.status_code, 422)
+
+    @patch("data_provider.toss_fetcher.time.sleep", return_value=None)
+    @patch("data_provider.toss_fetcher.requests.post")
+    def test_place_order_429_backs_off_then_succeeds(self, mock_post, mock_sleep):
+        mock_post.side_effect = [
+            _make_resp({"access_token": "tok-1", "expires_in": 3600}),
+            _make_resp({}, status_code=429),
+            _make_resp({"result": {"orderId": "abc123"}}, status_code=200),
+        ]
+        fetcher = _make_fetcher()
+        with patch.object(TossFetcher, "is_order_live_enabled", return_value=True):
+            result = fetcher.place_order(
+                "555",
+                symbol="005930",
+                side="BUY",
+                order_type="LIMIT",
+                quantity="1",
+                price="70000",
+                client_order_id="dsa-x",
+            )
+        self.assertEqual(result["orderId"], "abc123")
+        self.assertEqual(mock_post.call_count, 3)
+
+    @patch("data_provider.toss_fetcher.requests.post")
+    def test_cancel_order_refuses_without_live_flag_and_makes_no_http_call(self, mock_post):
+        """v2 reversal (Codex major 5): cancel_order now shares place_order's
+        live gate — a dry-run process must not be able to cancel a real order
+        either."""
+        fetcher = _make_fetcher()
+        with patch.object(TossFetcher, "is_order_live_enabled", return_value=False):
+            with self.assertRaises(toss_fetcher.TossOrderNotLiveError):
+                fetcher.cancel_order("555", "abc123")
+        mock_post.assert_not_called()
+
+    @patch("data_provider.toss_fetcher.requests.post")
+    def test_cancel_order_live_success(self, mock_post):
+        mock_post.side_effect = [
+            _make_resp({"access_token": "tok-1", "expires_in": 3600}),
+            _make_resp({"result": {"orderId": "cancel-op-1"}}, status_code=200),
+        ]
+        fetcher = _make_fetcher()
+        with patch.object(TossFetcher, "is_order_live_enabled", return_value=True):
+            result = fetcher.cancel_order("555", "abc123")
+        self.assertEqual(result["orderId"], "cancel-op-1")
+
+    @patch("data_provider.toss_fetcher.requests.post")
+    def test_cancel_order_conflict_error(self, mock_post):
+        mock_post.side_effect = [
+            _make_resp({"access_token": "tok-1", "expires_in": 3600}),
+            _make_resp({"error": {"code": "already-canceled", "message": "이미 취소된 주문입니다."}}, status_code=409),
+        ]
+        fetcher = _make_fetcher()
+        with patch.object(TossFetcher, "is_order_live_enabled", return_value=True):
+            with self.assertRaises(toss_fetcher.TossOrderRejectedError) as ctx:
+                fetcher.cancel_order("555", "abc123")
+        self.assertEqual(ctx.exception.code, "already-canceled")
+
+    @patch("data_provider.toss_fetcher.requests.post")
+    def test_request_write_gates_orders_url_even_when_called_directly(self, mock_post):
+        """Codex blocker 3: the fetcher-level gate must be enforced inside
+        ``_request_write`` itself for any orders-family URL, so a caller that
+        bypasses both ``place_order`` and ``cancel_order`` (e.g. a future or
+        buggy internal call site) still cannot reach a real Toss order POST."""
+        fetcher = _make_fetcher()
+        with patch.object(TossFetcher, "is_order_live_enabled", return_value=False):
+            with self.assertRaises(toss_fetcher.TossOrderNotLiveError):
+                fetcher._request_write(
+                    toss_fetcher._ORDERS_URL, json_body={"symbol": "005930"}, account_seq="555"
+                )
+            with self.assertRaises(toss_fetcher.TossOrderNotLiveError):
+                fetcher._request_write(
+                    f"{toss_fetcher._ORDERS_URL}/abc123/cancel", json_body={}, account_seq="555"
+                )
+        mock_post.assert_not_called()
+
+    @patch("data_provider.toss_fetcher.requests.post")
+    def test_request_write_gates_orders_url_with_query_string(self, mock_post):
+        """Reviewer re-review major 3: the gate must match on the URL's
+        *path*, not do a raw string prefix/equality check — a query string
+        appended to an orders-family URL (e.g. ``.../api/v1/orders?foo=bar``)
+        must still be caught. A plain
+        ``url == _ORDERS_URL or url.startswith(f"{_ORDERS_URL}/")`` check
+        misses this: the character right after "orders" is "?", not "/", so
+        neither branch matches."""
+        fetcher = _make_fetcher()
+        with patch.object(TossFetcher, "is_order_live_enabled", return_value=False):
+            with self.assertRaises(toss_fetcher.TossOrderNotLiveError):
+                fetcher._request_write(
+                    f"{toss_fetcher._ORDERS_URL}?foo=bar", json_body={"symbol": "005930"}, account_seq="555"
+                )
+            with self.assertRaises(toss_fetcher.TossOrderNotLiveError):
+                fetcher._request_write(
+                    f"{toss_fetcher._ORDERS_URL}/abc123/cancel?foo=bar", json_body={}, account_seq="555"
+                )
+        mock_post.assert_not_called()
+
+    @patch("data_provider.toss_fetcher.requests.post")
+    def test_request_write_does_not_gate_non_orders_urls(self, mock_post):
+        """The orders-family gate must not leak onto unrelated write-style
+        URLs (none exist today, but the check is a URL-prefix match, not a
+        blanket "any POST" gate)."""
+        mock_post.side_effect = [
+            _make_resp({"access_token": "tok-1", "expires_in": 3600}),
+            _make_resp({"result": {"ok": True}}, status_code=200),
+        ]
+        fetcher = _make_fetcher()
+        with patch.object(TossFetcher, "is_order_live_enabled", return_value=False):
+            result = fetcher._request_write(
+                f"{toss_fetcher._TOSS_BASE_URL}/api/v1/not-an-order-endpoint",
+                json_body={},
+                account_seq="555",
+            )
+        self.assertEqual(result, {"ok": True})
+
+
+class TestOrderInfoReads(TossFetcherTestCase):
+    """Read-only order-info endpoints: buying-power, sellable-quantity,
+    commissions, order status."""
+
+    @patch("data_provider.toss_fetcher.requests.get")
+    @patch("data_provider.toss_fetcher.requests.post")
+    def test_get_buying_power(self, mock_post, mock_get):
+        mock_post.return_value = _make_resp({"access_token": "tok-1", "expires_in": 3600})
+        mock_get.return_value = _make_resp({"result": {"currency": "KRW", "cashBuyingPower": "5000000"}})
+        fetcher = _make_fetcher()
+        value = fetcher.get_buying_power("555", "KRW")
+        self.assertEqual(value, 5000000.0)
+        self.assertEqual(mock_get.call_args.kwargs["params"], {"currency": "KRW"})
+
+    @patch("data_provider.toss_fetcher.requests.get")
+    @patch("data_provider.toss_fetcher.requests.post")
+    def test_get_buying_power_missing_field_raises(self, mock_post, mock_get):
+        mock_post.return_value = _make_resp({"access_token": "tok-1", "expires_in": 3600})
+        mock_get.return_value = _make_resp({"result": {"currency": "KRW"}})
+        fetcher = _make_fetcher()
+        with self.assertRaises(DataFetchError):
+            fetcher.get_buying_power("555", "KRW")
+
+    @patch("data_provider.toss_fetcher.requests.get")
+    @patch("data_provider.toss_fetcher.requests.post")
+    def test_get_sellable_quantity(self, mock_post, mock_get):
+        mock_post.return_value = _make_resp({"access_token": "tok-1", "expires_in": 3600})
+        mock_get.return_value = _make_resp({"result": {"sellableQuantity": "100"}})
+        fetcher = _make_fetcher()
+        value = fetcher.get_sellable_quantity("555", "005930")
+        self.assertEqual(value, 100.0)
+
+    @patch("data_provider.toss_fetcher.requests.get")
+    @patch("data_provider.toss_fetcher.requests.post")
+    def test_get_commissions(self, mock_post, mock_get):
+        mock_post.return_value = _make_resp({"access_token": "tok-1", "expires_in": 3600})
+        mock_get.return_value = _make_resp({"result": [{"marketCountry": "KR", "commissionRate": "0.015"}]})
+        fetcher = _make_fetcher()
+        result = fetcher.get_commissions("555")
+        self.assertEqual(result[0]["marketCountry"], "KR")
+
+    @patch("data_provider.toss_fetcher.requests.get")
+    @patch("data_provider.toss_fetcher.requests.post")
+    def test_get_order(self, mock_post, mock_get):
+        mock_post.return_value = _make_resp({"access_token": "tok-1", "expires_in": 3600})
+        mock_get.return_value = _make_resp({"result": {"orderId": "abc123", "status": "FILLED"}})
+        fetcher = _make_fetcher()
+        result = fetcher.get_order("555", "abc123")
+        self.assertEqual(result["status"], "FILLED")
 
 
 class TestTossNetworkSmoke(unittest.TestCase):

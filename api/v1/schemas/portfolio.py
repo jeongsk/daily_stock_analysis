@@ -360,3 +360,90 @@ class PortfolioRiskResponse(BaseModel):
     drawdown: Dict[str, Any] = Field(default_factory=dict)
     stop_loss: Dict[str, Any] = Field(default_factory=dict)
     decision_signal_risk: PortfolioDecisionSignalRiskBlock = Field(default_factory=PortfolioDecisionSignalRiskBlock)
+
+
+# ----------------------------------------------------------------------
+# Manual-approval order proposals (Phase 3 — Toss Invest). Two-step flow:
+# create a proposal (validated, TTL'd), then a *separate* execute call with
+# confirm=true (required even in dry-run) actually places (or dry-run
+# simulates) the order. ``status`` (v2 state machine): pending -> executing ->
+# executed | failed | outcome_unknown; pending -> canceled | expired |
+# dry_run_executed. An 'executing'/'outcome_unknown' proposal must be resolved
+# via POST .../proposals/{uuid}/reconcile before it can be canceled or
+# re-executed. See
+# docs/superpowers/specs/2026-07-17-toss-order-phase3-design.md.
+# ----------------------------------------------------------------------
+
+
+class PortfolioOrderProposalCreateRequest(BaseModel):
+    symbol: str = Field(..., min_length=1, max_length=16, description="KR 6-digit code/.KS/.KQ or US ticker")
+    side: Literal["buy", "sell"]
+    order_type: Literal["LIMIT", "MARKET"] = Field(
+        "LIMIT", description="MARKET requires TOSS_ORDER_ALLOW_MARKET=true"
+    )
+    quantity: float = Field(..., gt=0)
+    price: Optional[float] = Field(None, gt=0, description="Required for LIMIT, forbidden for MARKET")
+
+
+class PortfolioOrderProposalItem(BaseModel):
+    proposal_uuid: str
+    account_id: int
+    symbol: str
+    storage_symbol: str
+    market: str
+    currency: str
+    side: str
+    order_type: str
+    price: Optional[float] = None
+    quantity: float
+    est_amount_krw: float
+    status: str
+    toss_order_id: Optional[str] = None
+    created_at: str
+    expires_at: str
+    executed_at: Optional[str] = None
+    mode: Optional[str] = Field(
+        None, description="'dry_run' or 'live' preview/outcome; absent for list/cancel responses"
+    )
+
+
+class PortfolioOrderProposalListResponse(BaseModel):
+    proposals: List[PortfolioOrderProposalItem] = Field(default_factory=list)
+
+
+class PortfolioOrderExecuteRequest(BaseModel):
+    confirm: bool = Field(..., description="Must be true — required even when the outcome will be dry-run")
+
+
+class PortfolioOrderCancelResponse(BaseModel):
+    toss_order_id: str
+    canceled: bool
+
+
+class PortfolioOrderExecutionItem(BaseModel):
+    filledQuantity: Optional[str] = None
+    averageFilledPrice: Optional[str] = None
+    filledAmount: Optional[str] = None
+    commission: Optional[str] = None
+    tax: Optional[str] = None
+    filledAt: Optional[str] = None
+    settlementDate: Optional[str] = None
+
+
+class PortfolioOrderStatusResponse(BaseModel):
+    """Passthrough of Toss's own ``Order`` schema (``GET /orders/{orderId}``) —
+    field names are kept camelCase to match the upstream payload exactly."""
+
+    orderId: str
+    symbol: str
+    side: str
+    orderType: str
+    timeInForce: Optional[str] = None
+    status: str
+    price: Optional[str] = None
+    quantity: str
+    orderAmount: Optional[str] = None
+    currency: str
+    orderedAt: str
+    canceledAt: Optional[str] = None
+    execution: Optional[PortfolioOrderExecutionItem] = None

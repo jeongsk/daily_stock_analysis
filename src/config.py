@@ -12,6 +12,7 @@ A股自选股智能分析系统 - 配置管理模块
 
 import json
 import logging
+import math
 import os
 import re
 from pathlib import Path
@@ -212,6 +213,67 @@ def parse_env_bool(value: Optional[str], default: bool = False) -> bool:
     if not normalized:
         return default
     return normalized not in _FALSEY_ENV_VALUES
+
+
+def parse_strict_true_env_bool(value: Optional[str], *, field_name: str) -> bool:
+    """Strict parser for safety-critical live/write flags (design spec
+    docs/superpowers/specs/2026-07-17-toss-order-phase3-design.md §3):
+    unlike ``parse_env_bool``'s permissive truthy/falsey table, only the
+    exact value ``"true"`` (after ``strip().lower()``) is live — every other
+    non-empty value (a typo, ``"1"``, ``"yes"``, ...) is an ERROR-logged
+    misconfiguration that falls back to disabled (fail-closed), not a
+    tolerated alias for true. Unset/blank is the ordinary disabled default
+    and is not logged as an error."""
+    if value is None:
+        return False
+    normalized = value.strip()
+    if not normalized:
+        return False
+    if normalized.lower() == "true":
+        return True
+    logger.error(
+        "%s=%r is not the exact value 'true'; refusing to enable it (fail-closed) — "
+        "this flag uses strict parsing on purpose and does not accept '1'/'yes'/other truthy aliases",
+        field_name,
+        value,
+    )
+    return False
+
+
+def parse_env_float_finite_positive(
+    value: Optional[str],
+    default: float,
+    *,
+    field_name: str,
+) -> float:
+    """Parse a float env value that must be a finite, strictly positive
+    amount cap (design spec §3): unlike ``parse_env_float``'s
+    clamp-to-minimum behavior, ``NaN``/``Infinity``/non-positive values are
+    never clamped — ``NaN`` compares false against every bound and would
+    silently defeat every downstream limit check, so any of these is an
+    ERROR-logged misconfiguration that forces the safe ``default`` instead
+    (the user's value is discarded entirely, not adjusted)."""
+    if value is None or not str(value).strip():
+        return float(default)
+    try:
+        parsed = float(str(value).strip())
+    except (TypeError, ValueError):
+        logger.error(
+            "%s=%r is not a valid number; forcing default %s",
+            field_name,
+            value,
+            default,
+        )
+        return float(default)
+    if not math.isfinite(parsed) or parsed <= 0:
+        logger.error(
+            "%s=%r must be a finite positive number; forcing default %s",
+            field_name,
+            value,
+            default,
+        )
+        return float(default)
+    return parsed
 
 
 def parse_env_int(
@@ -732,6 +794,23 @@ class Config:
     longbridge_oauth_client_id: Optional[str] = None
     toss_client_id: Optional[str] = None
     toss_client_secret: Optional[str] = None
+    # === Toss Invest manual-approval order proposals (Phase 3) ===
+    # All default to conservative/off: TOSS_ORDER_LIVE unset means every
+    # execute() call stays dry-run (no real POST /orders is ever possible —
+    # see TossFetcher.place_order's own gate). TOSS_ORDER_LIVE uses *strict*
+    # parsing (parse_strict_true_env_bool) — only the exact value "true" is
+    # live; any other non-empty value is an ERROR-logged misconfiguration
+    # that stays dry-run (fail-closed), not a tolerated truthy alias. The two
+    # KRW caps use parse_env_float_finite_positive — NaN/Infinity/non-positive
+    # values are never clamped, only replaced wholesale with the safe
+    # default, since NaN comparisons would otherwise silently defeat every
+    # downstream limit check. The two caps only take effect once an order
+    # actually goes live; MARKET orders stay disabled (LIMIT-only) until
+    # explicitly opted in.
+    toss_order_live: bool = False
+    toss_order_max_amount_krw: float = 1_000_000.0
+    toss_order_daily_max_amount_krw: float = 5_000_000.0
+    toss_order_allow_market: bool = False
     stock_index_remote_update_enabled: bool = True
 
     # === AlphaSift optional stock screening integration ===
@@ -1636,6 +1715,20 @@ class Config:
             longbridge_oauth_client_id=os.getenv('LONGBRIDGE_OAUTH_CLIENT_ID') or None,
             toss_client_id=os.getenv('TOSS_CLIENT_ID') or None,
             toss_client_secret=os.getenv('TOSS_CLIENT_SECRET') or None,
+            toss_order_live=parse_strict_true_env_bool(
+                os.getenv('TOSS_ORDER_LIVE'), field_name='TOSS_ORDER_LIVE'
+            ),
+            toss_order_max_amount_krw=parse_env_float_finite_positive(
+                os.getenv('TOSS_ORDER_MAX_AMOUNT_KRW'),
+                1_000_000.0,
+                field_name='TOSS_ORDER_MAX_AMOUNT_KRW',
+            ),
+            toss_order_daily_max_amount_krw=parse_env_float_finite_positive(
+                os.getenv('TOSS_ORDER_DAILY_MAX_AMOUNT_KRW'),
+                5_000_000.0,
+                field_name='TOSS_ORDER_DAILY_MAX_AMOUNT_KRW',
+            ),
+            toss_order_allow_market=parse_env_bool(os.getenv('TOSS_ORDER_ALLOW_MARKET'), default=False),
             stock_index_remote_update_enabled=parse_env_bool(
                 os.getenv('STOCK_INDEX_REMOTE_UPDATE_ENABLED'),
                 default=True,

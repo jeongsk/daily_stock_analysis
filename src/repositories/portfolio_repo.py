@@ -6,12 +6,13 @@ Provides DB access helpers for portfolio account/events/snapshot tables.
 
 from __future__ import annotations
 
+import json
 import logging
 from contextlib import contextmanager
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from sqlalchemy import and_, delete, desc, func, select
+from sqlalchemy import and_, delete, desc, func, or_, select
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 from src.storage import (
@@ -22,6 +23,8 @@ from src.storage import (
     PortfolioCorporateAction,
     PortfolioDailySnapshot,
     PortfolioFxRate,
+    PortfolioOrderAudit,
+    PortfolioOrderProposal,
     PortfolioPosition,
     PortfolioPositionLot,
     PortfolioTrade,
@@ -45,6 +48,49 @@ class PortfolioBusyError(Exception):
 
 class DuplicateBrokerLinkError(Exception):
     """Raised when account_id already has an active PortfolioBrokerLink row."""
+
+
+class PendingProposalCapExceededError(Exception):
+    """Raised inside the same write transaction as the pending-proposal count
+    check + insert (design spec v2 §3: "pending 10건 상한 검사도 count+insert를
+    동일 write 트랜잭션으로" — the count-then-insert TOCTOU that let concurrent
+    creates both slip past the 10-pending-proposal cap)."""
+
+
+class ClaimOutcome:
+    """Result of ``PortfolioRepository.claim_proposal_for_execution`` — the
+    atomic pending -> executing claim (design spec v3 §3 "일일 한도 원자성").
+
+    ``outcome`` is one of:
+      - ``"not_found"``: no such proposal for this account.
+      - ``"already_terminal"``: already ``executed``/``dry_run_executed`` —
+        caller should treat this as an idempotent-retry return.
+      - ``"in_progress"``: already ``executing``/``outcome_unknown`` — a
+        concurrent execute (or an unresolved prior attempt) is already in
+        flight; caller should point the client at ``.../reconcile``.
+      - ``"not_executable"``: some other terminal state (``canceled`` /
+        ``expired`` / ``failed``).
+      - ``"rejected"``: still ``pending`` but failed a cap check inside this
+        same transaction — the row is now ``failed`` and ``reason``/
+        ``limit_type`` explain why.
+      - ``"claimed"``: the row is now ``executing`` with the reservation
+        recorded — caller may proceed to POST to Toss.
+    """
+
+    __slots__ = ("outcome", "proposal", "reason", "limit_type")
+
+    def __init__(
+        self,
+        outcome: str,
+        *,
+        proposal: Optional["PortfolioOrderProposal"] = None,
+        reason: Optional[str] = None,
+        limit_type: Optional[str] = None,
+    ) -> None:
+        self.outcome = outcome
+        self.proposal = proposal
+        self.reason = reason
+        self.limit_type = limit_type
 
 
 class PortfolioRepository:
@@ -1395,3 +1441,622 @@ class PortfolioRepository:
             row.updated_at = datetime.now()
             session.commit()
             return True
+
+    # ------------------------------------------------------------------
+    # Order proposals (Toss Invest Phase 3 — two-step manual-approval orders)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _audit_row(
+        *,
+        account_id: int,
+        proposal_uuid: str,
+        symbol: str,
+        side: str,
+        order_type: str,
+        price: Optional[float],
+        quantity: float,
+        currency: str,
+        est_amount_krw: float,
+        mode: Optional[str],
+        event: str,
+        toss_order_id: Optional[str],
+        created_at: datetime,
+        error_code: Optional[str] = None,
+        detail: Optional[Dict[str, Any]] = None,
+    ) -> PortfolioOrderAudit:
+        return PortfolioOrderAudit(
+            account_id=account_id,
+            proposal_uuid=proposal_uuid,
+            symbol=symbol,
+            side=side,
+            order_type=order_type,
+            price=price,
+            quantity=quantity,
+            currency=currency,
+            est_amount_krw=est_amount_krw,
+            mode=mode,
+            event=event,
+            toss_order_id=toss_order_id,
+            error_code=error_code,
+            detail=json.dumps(detail) if detail is not None else None,
+            created_at=created_at,
+        )
+
+    def create_order_proposal_with_audit(
+        self,
+        *,
+        account_id: int,
+        proposal_uuid: str,
+        symbol: str,
+        storage_symbol: str,
+        market: str,
+        currency: str,
+        side: str,
+        order_type: str,
+        price: Optional[float],
+        quantity: float,
+        est_amount_krw: float,
+        created_at: datetime,
+        expires_at: datetime,
+        max_pending_proposals: int,
+    ) -> PortfolioOrderProposal:
+        """Atomically insert the proposal row and its ``proposed`` audit event
+        (design spec §7: status and audit trail must never drift apart).
+
+        The pending-proposal-count cap check and the insert happen inside the
+        same write transaction (design spec v2 §3 "pending 10건 상한 검사도
+        count+insert를 동일 write 트랜잭션으로") — raises
+        ``PendingProposalCapExceededError`` instead of inserting when the
+        account already has ``max_pending_proposals`` non-expired ``pending``
+        rows, closing the count-then-insert TOCTOU that let two concurrent
+        creates both slip past a separately-read count.
+        """
+        with self.portfolio_write_session() as session:
+            pending_count = int(
+                session.execute(
+                    select(func.count(PortfolioOrderProposal.id)).where(
+                        and_(
+                            PortfolioOrderProposal.account_id == account_id,
+                            PortfolioOrderProposal.status == "pending",
+                            PortfolioOrderProposal.expires_at > created_at,
+                        )
+                    )
+                ).scalar_one()
+            )
+            if pending_count >= max_pending_proposals:
+                raise PendingProposalCapExceededError(
+                    f"account_id={account_id} already has {pending_count} pending proposals "
+                    f"(max {max_pending_proposals})"
+                )
+
+            row = PortfolioOrderProposal(
+                account_id=account_id,
+                proposal_uuid=proposal_uuid,
+                symbol=symbol,
+                storage_symbol=storage_symbol,
+                market=market,
+                currency=currency,
+                side=side,
+                order_type=order_type,
+                price=price,
+                quantity=quantity,
+                est_amount_krw=est_amount_krw,
+                status="pending",
+                created_at=created_at,
+                expires_at=expires_at,
+            )
+            session.add(row)
+            session.flush()
+            session.add(
+                self._audit_row(
+                    account_id=account_id,
+                    proposal_uuid=proposal_uuid,
+                    symbol=symbol,
+                    side=side,
+                    order_type=order_type,
+                    price=price,
+                    quantity=quantity,
+                    currency=currency,
+                    est_amount_krw=est_amount_krw,
+                    mode=None,
+                    event="proposed",
+                    toss_order_id=None,
+                    created_at=created_at,
+                )
+            )
+            session.flush()
+            session.refresh(row)
+            session.expunge(row)
+            return row
+
+    def _materialize_expiry_in_session(
+        self, *, session: Any, row: PortfolioOrderProposal, now: datetime
+    ) -> None:
+        """If ``row`` is ``pending`` and past its TTL, flip it to ``expired``
+        and append the matching audit event, all inside the caller's open
+        write transaction. Idempotent: once materialized, ``row.status`` is
+        no longer ``pending`` so a repeat call is a no-op."""
+        if row.status == "pending" and row.expires_at <= now:
+            row.status = "expired"
+            row.updated_at = datetime.now()
+            session.add(
+                self._audit_row(
+                    account_id=row.account_id,
+                    proposal_uuid=row.proposal_uuid,
+                    symbol=row.symbol,
+                    side=row.side,
+                    order_type=row.order_type,
+                    price=row.price,
+                    quantity=row.quantity,
+                    currency=row.currency,
+                    est_amount_krw=row.est_amount_krw,
+                    mode=None,
+                    event="expired",
+                    toss_order_id=None,
+                    created_at=now,
+                )
+            )
+            session.flush()
+
+    def _materialize_expiry_standalone(
+        self, *, proposal_uuid: str, account_id: Optional[int], now: datetime
+    ) -> None:
+        with self.portfolio_write_session() as session:
+            conditions = [PortfolioOrderProposal.proposal_uuid == proposal_uuid]
+            if account_id is not None:
+                conditions.append(PortfolioOrderProposal.account_id == account_id)
+            row = session.execute(
+                select(PortfolioOrderProposal).where(and_(*conditions)).limit(1)
+            ).scalar_one_or_none()
+            if row is None:
+                return
+            self._materialize_expiry_in_session(session=session, row=row, now=now)
+
+    def get_order_proposal(
+        self,
+        proposal_uuid: str,
+        *,
+        account_id: Optional[int] = None,
+        now: Optional[datetime] = None,
+    ) -> Optional[PortfolioOrderProposal]:
+        """Fetch one proposal, lazily materializing TTL expiry first when
+        ``now`` is given (design spec: expiry has no background sweeper)."""
+        if now is not None:
+            self._materialize_expiry_standalone(proposal_uuid=proposal_uuid, account_id=account_id, now=now)
+        with self.db.get_session() as session:
+            conditions = [PortfolioOrderProposal.proposal_uuid == proposal_uuid]
+            if account_id is not None:
+                conditions.append(PortfolioOrderProposal.account_id == account_id)
+            row = session.execute(
+                select(PortfolioOrderProposal).where(and_(*conditions)).limit(1)
+            ).scalar_one_or_none()
+            if row is not None:
+                session.expunge(row)
+            return row
+
+    def get_order_proposal_by_toss_order_id(
+        self, toss_order_id: str, *, account_id: int
+    ) -> Optional[PortfolioOrderProposal]:
+        """Find the proposal that produced ``toss_order_id`` for one account —
+        the "was this order actually self-issued" check the cancel-a-placed-
+        order endpoint requires (design spec §3)."""
+        with self.db.get_session() as session:
+            row = session.execute(
+                select(PortfolioOrderProposal).where(
+                    and_(
+                        PortfolioOrderProposal.toss_order_id == toss_order_id,
+                        PortfolioOrderProposal.account_id == account_id,
+                    )
+                ).limit(1)
+            ).scalar_one_or_none()
+            if row is not None:
+                session.expunge(row)
+            return row
+
+    def list_order_proposals(
+        self,
+        account_id: int,
+        *,
+        status: Optional[str] = None,
+        now: Optional[datetime] = None,
+    ) -> List[PortfolioOrderProposal]:
+        """List proposals for one account, optionally filtered by status.
+        When ``now`` is given, every still-``pending``-but-overdue row is
+        materialized to ``expired`` first so a polling caller sees the true
+        status without waiting for a future ``get``/``execute`` call to
+        trigger it."""
+        if now is not None:
+            with self.db.get_session() as session:
+                overdue_uuids = session.execute(
+                    select(PortfolioOrderProposal.proposal_uuid).where(
+                        and_(
+                            PortfolioOrderProposal.account_id == account_id,
+                            PortfolioOrderProposal.status == "pending",
+                            PortfolioOrderProposal.expires_at <= now,
+                        )
+                    )
+                ).scalars().all()
+            for proposal_uuid in overdue_uuids:
+                self._materialize_expiry_standalone(proposal_uuid=proposal_uuid, account_id=account_id, now=now)
+
+        with self.db.get_session() as session:
+            conditions = [PortfolioOrderProposal.account_id == account_id]
+            if status is not None:
+                conditions.append(PortfolioOrderProposal.status == status)
+            rows = session.execute(
+                select(PortfolioOrderProposal).where(and_(*conditions)).order_by(PortfolioOrderProposal.id.desc())
+            ).scalars().all()
+            rows = list(rows)
+            for row in rows:
+                session.expunge(row)
+            return rows
+
+    def count_active_pending_proposals(self, account_id: int, *, now: datetime) -> int:
+        """Count non-expired ``pending`` proposals for the per-account cap
+        (design spec §3: max 10 pending proposals per account)."""
+        with self.db.get_session() as session:
+            return int(
+                session.execute(
+                    select(func.count(PortfolioOrderProposal.id)).where(
+                        and_(
+                            PortfolioOrderProposal.account_id == account_id,
+                            PortfolioOrderProposal.status == "pending",
+                            PortfolioOrderProposal.expires_at > now,
+                        )
+                    )
+                ).scalar_one()
+            )
+
+    @staticmethod
+    def _sum_reserved_and_live_amount_in_session(
+        session: Any, *, account_id: int, kst_date: date
+    ) -> float:
+        """The v3 daily-cap sum, evaluated against ``PortfolioOrderProposal``
+        directly (not the audit log — an audit log sum would double count a
+        proposal that emits both an ``executing`` and a later ``executed``
+        audit row for the same reservation) inside the caller's *own* open
+        write transaction, so this reflects every reservation any other
+        already-committed transaction has made — and, combined with
+        ``BEGIN IMMEDIATE`` serializing writers, every reservation any
+        transaction racing to commit *right now* will make (design spec v3
+        §3 "일일 한도 원자성").
+
+        Counts, for one KST calendar date ``kst_date``:
+          - **every** ``executing``/``outcome_unknown`` row for this account,
+            *regardless of its ``reserved_at`` date* — still non-terminal,
+            counted in full against every date's cap until reconciled
+            (design spec v3 "일일 한도 원자성"). This is deliberately
+            date-agnostic: a v2 implementation that only counted a reservation
+            on its own ``reserved_at`` date let a pre-midnight
+            ``executing``/``outcome_unknown`` reservation drop out of the very
+            next calendar day's claim-time sum, letting a concurrent claim on
+            "day 2" spend the full daily cap on top of an amount that, in
+            reality, is still an open, unresolved liability from "day 1"
+            (reviewer re-review blocker 1). Counting it on every date is a
+            deliberately conservative over-count (the design spec explicitly
+            accepts double-counting an unresolved reservation over "the cap is
+            an upper bound, not a target");
+          - every ``executed`` row whose ``reserved_at`` *or* ``executed_at``
+            falls on this specific date (a reservation straddling local
+            midnight still counts on both its reservation and confirmation
+            dates once resolved — design spec's conservative call).
+        ``dry_run_executed``/``canceled``/``expired``/``failed`` never count.
+        """
+        day_start = datetime.combine(kst_date, time.min)
+        day_end = day_start + timedelta(days=1)
+
+        def _in_day(column):
+            return and_(column >= day_start, column < day_end)
+
+        total = session.execute(
+            select(func.coalesce(func.sum(PortfolioOrderProposal.est_amount_krw), 0.0)).where(
+                and_(
+                    PortfolioOrderProposal.account_id == account_id,
+                    or_(
+                        PortfolioOrderProposal.status.in_(("executing", "outcome_unknown")),
+                        and_(
+                            PortfolioOrderProposal.status == "executed",
+                            or_(
+                                _in_day(PortfolioOrderProposal.reserved_at),
+                                _in_day(PortfolioOrderProposal.executed_at),
+                            ),
+                        ),
+                    ),
+                )
+            )
+        ).scalar_one()
+        return float(total or 0.0)
+
+    def sum_daily_reserved_and_executed_amount_krw(self, account_id: int, *, kst_date: date) -> float:
+        """Read-only (non-atomic) view of the same v3 daily-cap sum, for
+        best-effort pre-checks (``create_proposal``'s early friendly
+        rejection — the authoritative check is
+        ``claim_proposal_for_execution``'s in-transaction version above) and
+        for status/report display."""
+        with self.db.get_session() as session:
+            return self._sum_reserved_and_live_amount_in_session(session, account_id=account_id, kst_date=kst_date)
+
+    def claim_proposal_for_execution(
+        self,
+        *,
+        proposal_uuid: str,
+        account_id: int,
+        now: datetime,
+        est_amount_krw: float,
+        high_value_threshold_krw: float,
+        per_order_cap_krw: float,
+        daily_cap_krw: float,
+        eps: float = 1e-6,
+    ) -> ClaimOutcome:
+        """Atomic ``pending -> executing`` claim (design spec v2 §3): inside
+        one write transaction, materialize TTL expiry if due, then — only if
+        the row is still ``pending`` — re-validate the high-value hard
+        reject, the per-order cap, and the daily cap (via
+        ``_sum_reserved_and_live_amount_in_session`` against this same
+        session) before inserting the ``executing`` reservation. A failing
+        cap check transitions the row straight to ``failed`` in the same
+        transaction rather than leaving it ``pending`` for a caller to
+        separately fail — there is no window between "checked the caps" and
+        "recorded the reservation" for a concurrent claim to slip through.
+
+        See ``ClaimOutcome`` for the possible ``outcome`` values.
+        """
+        with self.portfolio_write_session() as session:
+            row = session.execute(
+                select(PortfolioOrderProposal).where(
+                    and_(
+                        PortfolioOrderProposal.proposal_uuid == proposal_uuid,
+                        PortfolioOrderProposal.account_id == account_id,
+                    )
+                ).limit(1)
+            ).scalar_one_or_none()
+            if row is None:
+                return ClaimOutcome("not_found")
+
+            self._materialize_expiry_in_session(session=session, row=row, now=now)
+
+            if row.status in ("executed", "dry_run_executed"):
+                session.refresh(row)
+                session.expunge(row)
+                return ClaimOutcome("already_terminal", proposal=row)
+            if row.status in ("executing", "outcome_unknown"):
+                session.refresh(row)
+                session.expunge(row)
+                return ClaimOutcome("in_progress", proposal=row)
+            if row.status != "pending":
+                session.refresh(row)
+                session.expunge(row)
+                return ClaimOutcome("not_executable", proposal=row)
+
+            def _reject(*, limit_type: str, error_code: str, reason: str) -> ClaimOutcome:
+                row.status = "failed"
+                row.updated_at = datetime.now()
+                session.add(
+                    self._audit_row(
+                        account_id=account_id,
+                        proposal_uuid=proposal_uuid,
+                        symbol=row.symbol,
+                        side=row.side,
+                        order_type=row.order_type,
+                        price=row.price,
+                        quantity=row.quantity,
+                        currency=row.currency,
+                        est_amount_krw=est_amount_krw,
+                        mode="live",
+                        event="rejected",
+                        toss_order_id=None,
+                        created_at=now,
+                        error_code=error_code,
+                        detail={"reason": reason},
+                    )
+                )
+                session.flush()
+                session.refresh(row)
+                session.expunge(row)
+                return ClaimOutcome("rejected", proposal=row, reason=reason, limit_type=limit_type)
+
+            if est_amount_krw >= high_value_threshold_krw:
+                return _reject(
+                    limit_type="high_value",
+                    error_code="high-value-hard-reject",
+                    reason=(
+                        f"Estimated order amount {est_amount_krw:,.0f} KRW is at or above the "
+                        f"{high_value_threshold_krw:,.0f} KRW hard-reject threshold"
+                    ),
+                )
+            if est_amount_krw > per_order_cap_krw + eps:
+                return _reject(
+                    limit_type="per_order",
+                    error_code="limit-exceeded",
+                    reason=(
+                        f"Estimated order amount {est_amount_krw:,.0f} KRW exceeds the per-order cap "
+                        f"{per_order_cap_krw:,.0f} KRW"
+                    ),
+                )
+            already_reserved = self._sum_reserved_and_live_amount_in_session(
+                session, account_id=account_id, kst_date=now.date()
+            )
+            if already_reserved + est_amount_krw > daily_cap_krw + eps:
+                return _reject(
+                    limit_type="daily",
+                    error_code="limit-exceeded",
+                    reason=(
+                        f"Estimated order amount {est_amount_krw:,.0f} KRW would push today's reserved+"
+                        f"executed total to {already_reserved + est_amount_krw:,.0f} KRW, exceeding the "
+                        f"daily cap {daily_cap_krw:,.0f} KRW"
+                    ),
+                )
+
+            row.status = "executing"
+            row.reserved_at = now
+            row.est_amount_krw = est_amount_krw
+            row.updated_at = datetime.now()
+            session.add(
+                self._audit_row(
+                    account_id=account_id,
+                    proposal_uuid=proposal_uuid,
+                    symbol=row.symbol,
+                    side=row.side,
+                    order_type=row.order_type,
+                    price=row.price,
+                    quantity=row.quantity,
+                    currency=row.currency,
+                    est_amount_krw=est_amount_krw,
+                    mode="live",
+                    event="executing",
+                    toss_order_id=None,
+                    created_at=now,
+                )
+            )
+            session.flush()
+            session.refresh(row)
+            session.expunge(row)
+            return ClaimOutcome("claimed", proposal=row)
+
+    def transition_proposal(
+        self,
+        *,
+        proposal_uuid: str,
+        account_id: int,
+        now: datetime,
+        from_statuses: Iterable[str],
+        to_status: str,
+        event: str,
+        mode: Optional[str] = None,
+        toss_order_id: Optional[str] = None,
+        executed_at: Optional[datetime] = None,
+        error_code: Optional[str] = None,
+        detail: Optional[Dict[str, Any]] = None,
+        est_amount_krw_override: Optional[float] = None,
+    ) -> Optional[PortfolioOrderProposal]:
+        """Atomically materialize TTL expiry if due, then — only if the row's
+        resulting status is still one of ``from_statuses`` — apply the
+        requested transition and append a matching audit row in the same DB
+        transaction (design spec §7 status/audit consistency).
+
+        Returns the proposal reflecting its *actual* final status, which may
+        differ from ``to_status`` (e.g. it had just expired, or was already
+        executed by a prior call) — callers compare ``row.status`` against
+        what they expected rather than relying on a boolean, so they can
+        react precisely: an already-``executed``/``dry_run_executed`` row is
+        an idempotent-retry return, not a fresh transition (design spec §3
+        clientOrderId idempotency). Returns ``None`` only when no such
+        proposal exists at all for this account.
+        """
+        with self.portfolio_write_session() as session:
+            row = session.execute(
+                select(PortfolioOrderProposal).where(
+                    and_(
+                        PortfolioOrderProposal.proposal_uuid == proposal_uuid,
+                        PortfolioOrderProposal.account_id == account_id,
+                    )
+                ).limit(1)
+            ).scalar_one_or_none()
+            if row is None:
+                return None
+
+            self._materialize_expiry_in_session(session=session, row=row, now=now)
+
+            if row.status not in set(from_statuses):
+                session.refresh(row)
+                session.expunge(row)
+                return row
+
+            row.status = to_status
+            row.updated_at = datetime.now()
+            if executed_at is not None:
+                row.executed_at = executed_at
+            if toss_order_id is not None:
+                row.toss_order_id = toss_order_id
+
+            est_amount = est_amount_krw_override if est_amount_krw_override is not None else row.est_amount_krw
+            session.add(
+                self._audit_row(
+                    account_id=account_id,
+                    proposal_uuid=proposal_uuid,
+                    symbol=row.symbol,
+                    side=row.side,
+                    order_type=row.order_type,
+                    price=row.price,
+                    quantity=row.quantity,
+                    currency=row.currency,
+                    est_amount_krw=est_amount,
+                    mode=mode,
+                    event=event,
+                    toss_order_id=toss_order_id,
+                    created_at=now,
+                    error_code=error_code,
+                    detail=detail,
+                )
+            )
+            session.flush()
+            session.refresh(row)
+            session.expunge(row)
+            return row
+
+    def append_standalone_order_audit(
+        self,
+        *,
+        account_id: int,
+        proposal_uuid: str,
+        symbol: str,
+        side: str,
+        order_type: str,
+        price: Optional[float],
+        quantity: float,
+        currency: str,
+        est_amount_krw: float,
+        mode: Optional[str],
+        event: str,
+        toss_order_id: Optional[str],
+        created_at: datetime,
+        error_code: Optional[str] = None,
+        detail: Optional[Dict[str, Any]] = None,
+    ) -> PortfolioOrderAudit:
+        """Append one audit row without touching ``PortfolioOrderProposal.status``
+        — used by the "cancel an already-placed order" flow, where the
+        proposal itself stays ``executed`` (it *was* executed; only the
+        resulting broker order is now canceled — a distinct fact tracked here,
+        not a proposal-state concept). Raises whatever
+        ``portfolio_write_session`` raises on a commit failure (design spec
+        §7: the caller must treat that as this action having failed, not as a
+        silently-dropped log line)."""
+        with self.portfolio_write_session() as session:
+            audit = self._audit_row(
+                account_id=account_id,
+                proposal_uuid=proposal_uuid,
+                symbol=symbol,
+                side=side,
+                order_type=order_type,
+                price=price,
+                quantity=quantity,
+                currency=currency,
+                est_amount_krw=est_amount_krw,
+                mode=mode,
+                event=event,
+                toss_order_id=toss_order_id,
+                created_at=created_at,
+                error_code=error_code,
+                detail=detail,
+            )
+            session.add(audit)
+            session.flush()
+            session.refresh(audit)
+            session.expunge(audit)
+            return audit
+
+    def list_order_audits(self, account_id: int, *, proposal_uuid: Optional[str] = None) -> List[PortfolioOrderAudit]:
+        """List audit rows for one account (optionally scoped to one
+        proposal), oldest first — used for order-status/history responses."""
+        with self.db.get_session() as session:
+            conditions = [PortfolioOrderAudit.account_id == account_id]
+            if proposal_uuid is not None:
+                conditions.append(PortfolioOrderAudit.proposal_uuid == proposal_uuid)
+            rows = session.execute(
+                select(PortfolioOrderAudit).where(and_(*conditions)).order_by(PortfolioOrderAudit.id.asc())
+            ).scalars().all()
+            rows = list(rows)
+            for row in rows:
+                session.expunge(row)
+            return rows
