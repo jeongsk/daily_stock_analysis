@@ -202,6 +202,8 @@ export interface DecisionSignalOutcomeItem {
   planQuality?: DecisionSignalPlanQuality | null;
   dataQualityLevel?: string | null;
   holdingState: 'holding' | 'empty' | 'unknown';
+  // 평가 시점 동결 지배 귀인 축(technical|news|fundamental|market|mixed) — 미귀인은 null
+  dominantAttribution?: string | null;
   createdAt?: string | null;
   updatedAt?: string | null;
 }
