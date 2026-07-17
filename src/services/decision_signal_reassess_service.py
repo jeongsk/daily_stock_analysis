@@ -20,7 +20,10 @@ from src.services.decision_profile_policy import (
 from src.services.decision_signal_data_quality import normalize_decision_signal_data_quality
 from src.services.decision_signal_service import DecisionSignalService
 from src.storage import AnalysisHistory, DatabaseManager
-from src.utils.data_processing import parse_json_field
+from src.utils.data_processing import (
+    extract_signal_attribution_for_metadata,
+    parse_json_field,
+)
 from src.utils.sniper_points import find_sniper_points, parse_sniper_value
 
 
@@ -98,6 +101,13 @@ class DecisionSignalReassessService:
             "data_quality_level": data_quality_level,
             "guardrail_result": policy.guardrail_result.as_dict(),
         }
+        # Producer parity with the extractor path: capture the report's
+        # signal attribution via the same shared helper (all-or-nothing).
+        signal_attribution = extract_signal_attribution_for_metadata(
+            _as_mapping(raw_result.get("dashboard"))
+        )
+        if signal_attribution:
+            metadata["signal_attribution"] = signal_attribution
         preview: dict[str, Any] = {
             "action": preview_candidate.action,
             "score": preview_candidate.score,

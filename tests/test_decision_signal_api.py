@@ -1727,6 +1727,93 @@ def test_reassess_persist_writes_authoritative_item_and_deduplicates(client_and_
     assert [signal["id"] for signal in timeline.json()["items"]] == [item["id"]]
 
 
+_REASSESS_ATTRIBUTION = {
+    "technical_indicators": 40,
+    "news_sentiment": 25,
+    "fundamentals": 20,
+    "market_conditions": 15,
+    "strongest_bullish_signal": "均线金叉",
+    "strongest_bearish_signal": None,
+}
+
+
+def test_reassess_persist_captures_signal_attribution_metadata(client_and_db) -> None:
+    """Producer parity: reassess-persist stores the same attribution contract
+    as the extractor path (all-or-nothing copy into metadata)."""
+    client, db = client_and_db
+    raw = _valid_reassess_raw(invalidation="跌破关键支撑")
+    raw["dashboard"]["signal_attribution"] = dict(_REASSESS_ATTRIBUTION)
+    record_id = _save_reassess_history(
+        db, raw_result=raw, context_snapshot=_valid_reassess_context()
+    )
+
+    response = client.post(
+        "/api/v1/decision-signals/reassess",
+        json={"source_report_id": record_id, "decision_profile": "aggressive", "persist": True},
+    )
+
+    assert response.status_code == 200, response.text
+    item = response.json()["item"]
+    assert item["metadata"]["signal_attribution"] == _REASSESS_ATTRIBUTION
+
+
+def test_reassess_preview_includes_signal_attribution_symmetric_with_persist(client_and_db) -> None:
+    client, db = client_and_db
+    raw = _valid_reassess_raw(invalidation="跌破关键支撑")
+    raw["dashboard"]["signal_attribution"] = dict(_REASSESS_ATTRIBUTION)
+    record_id = _save_reassess_history(
+        db, raw_result=raw, context_snapshot=_valid_reassess_context()
+    )
+
+    response = client.post(
+        "/api/v1/decision-signals/reassess",
+        json={"source_report_id": record_id, "decision_profile": "aggressive", "persist": False},
+    )
+
+    assert response.status_code == 200, response.text
+    preview = response.json()["preview"]
+    assert preview["metadata"]["signal_attribution"] == _REASSESS_ATTRIBUTION
+
+
+def test_reassess_persist_omits_attribution_when_invalid_or_missing(client_and_db) -> None:
+    client, db = client_and_db
+    raw = _valid_reassess_raw(invalidation="跌破关键支撑")
+    raw["dashboard"]["signal_attribution"] = {
+        "technical_indicators": None,  # all-or-nothing: whole key dropped
+        "news_sentiment": 25,
+        "fundamentals": 20,
+        "market_conditions": 15,
+    }
+    record_id = _save_reassess_history(
+        db, raw_result=raw, context_snapshot=_valid_reassess_context()
+    )
+
+    response = client.post(
+        "/api/v1/decision-signals/reassess",
+        json={"source_report_id": record_id, "decision_profile": "aggressive", "persist": True},
+    )
+
+    assert response.status_code == 200, response.text
+    assert "signal_attribution" not in response.json()["item"]["metadata"]
+
+
+def test_both_producers_share_capture_helper() -> None:
+    """Parity guard: both DecisionSignal producers must import the same
+    shared helper object — parallel implementations are forbidden."""
+    import src.services.decision_signal_extractor as extractor_module
+    import src.services.decision_signal_reassess_service as reassess_module
+    from src.utils import data_processing
+
+    assert (
+        extractor_module.extract_signal_attribution_for_metadata
+        is data_processing.extract_signal_attribution_for_metadata
+    )
+    assert (
+        reassess_module.extract_signal_attribution_for_metadata
+        is data_processing.extract_signal_attribution_for_metadata
+    )
+
+
 def test_reassess_persist_anchors_expired_signal_to_report_lifecycle(client_and_db) -> None:
     client, db = client_and_db
     report_created_at = utc_naive_now().replace(microsecond=0) - timedelta(days=30)
