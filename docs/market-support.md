@@ -15,7 +15,9 @@
 - 手动输入裸代码时会先检索本地/远程股票池；若 `005930`、`000660` 等裸码命中 `005930.KS`、`000660.KS` 等日韩条目，则按命中的市场提交分析；若股票池未命中，仍按既有 6 位数字代码规则默认落到 A 股语义，并保留为可追踪的跨市场歧义边界。
 - 韩股索引保留中文基础名称以兼容中文界面，同时为常用韩股补充英文/韩文名称；Web 韩文界面、分析提交与 `REPORT_LANGUAGE=ko` 报告会优先使用韩文显示名，例如 `005930.KS` 显示为 `삼성전자`。
 - 日股/韩股 suffix 识别已集中到共享市场代码工具，数据源路由、Prompt 市场识别、交易日历和股票索引裸码解析复用同一组规则，减少后续市场扩展时的规则漂移。
-- 日股/韩股日线和基础实时/近实时行情只走 `YfinanceFetcher`，不尝试 AkShare、Tushare、Efinance、Pytdx、Baostock 等 A 股专属数据源；yfinance 报价会尽量带上 `market`、`currency`、`data_quality`、`missing_fields` 等质量元数据。
+- 日股日线和基础实时/近实时行情只走 `YfinanceFetcher`，不尝试 AkShare、Tushare、Efinance、Pytdx、Baostock 等 A 股专属数据源；yfinance 报价会尽量带上 `market`、`currency`、`data_quality`、`missing_fields` 等质量元数据。
+- 韩股基础实时/近实时行情：配置 `TOSS_CLIENT_ID`/`TOSS_CLIENT_SECRET`（Toss Invest OpenAPI，需先在 Toss WTS 登记允许 IP，详见 `docs/adr/0003-toss-openapi-credential-gated-source.md`）后，`TossFetcher` 优先，失败（含未登记允许 IP 的 403）时降级 `YfinanceFetcher`；未配置 Toss 凭据时行为与此前一致，仍只走 `YfinanceFetcher`。
+- 韩股日线仍以 `YfinanceFetcher`（KRX 官方收盘价）为首选源，`TossFetcher` 仅作日线 fallback（yfinance 失败时兜底）：实测（2026-07-17）显示 Toss 日线 K 线返回的是 KRX+NXT（韩国另类交易所，交易至约 20:00）合并成交的最终价，而非 KRX 官方收盘价，例如 005930 07-15 官方收盘 279,500 vs Toss 273,500、07-14 官方收盘 263,000 vs Toss 268,000（双向偏离，最大 3.8%），会导致技术指标与国内标准图表不一致；接口未提供按盘段拆分的参数。韩股实时行情路由（Toss 优先）不受影响，因为 NXT 合并最新成交价正是实时场景希望呈现的行情（与 Toss App 展示一致）。美股日线在配置 Toss 凭据时，会在既有 Finnhub/AlphaVantage/YFinance/Longbridge 兜底链路末位追加 `TossFetcher` 作为最后兜底，不改变既有优先级。
 - 基本面复用既有 offshore yfinance 轻量路径；A 股专属资金流、龙虎榜、板块等能力按 `not_supported` 降级，offshore 基本面上下文也会标记 provider、as_of、data_quality 和缺失块。
 - **韩股个股投资者别买卖动向（수급，KR-only，不含日股）**：`KrInstitutionalFetcher`（`data_provider/kr_institutional_fetcher.py`）通过 Naver（主）/Daum（备援）**无认证**公开页面获取外国人/机构/个人逐日净买卖（单位：**股数**），基准日为最新已确认交易日。已接入分析上下文包全市场统一品质区块（`investor_flows`，权重 5，ADR 0002：非 KR 市场按 `NOT_SUPPORTED` 排除于正规化分母，评分行为中立）、LLM 分析 Prompt（辅助信号）以及报告/通知确定性摘要行（zh/en/ko：外国人/机构 5 日累计净买卖 + 最新确认日 + 来源，个人不计入摘要行）。接口失败/限流/字段缺失一律 **fail-open** 返回无数据，不中断分析；市场级（KOSPI/KOSDAQ）大盘复盘投资者别买卖动向另见下文「日本/韩国大盘复盘 v1」小节。
 - 报告 Prompt 已增加日股/韩股市场语义，避免套用 A 股涨跌停、北向资金、龙虎榜、融资融券等概念。

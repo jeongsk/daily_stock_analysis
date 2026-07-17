@@ -730,6 +730,8 @@ class Config:
     longbridge_app_secret: Optional[str] = None
     longbridge_access_token: Optional[str] = None
     longbridge_oauth_client_id: Optional[str] = None
+    toss_client_id: Optional[str] = None
+    toss_client_secret: Optional[str] = None
     stock_index_remote_update_enabled: bool = True
 
     # === AlphaSift optional stock screening integration ===
@@ -1632,6 +1634,8 @@ class Config:
             longbridge_app_secret=os.getenv('LONGBRIDGE_APP_SECRET') or None,
             longbridge_access_token=os.getenv('LONGBRIDGE_ACCESS_TOKEN') or None,
             longbridge_oauth_client_id=os.getenv('LONGBRIDGE_OAUTH_CLIENT_ID') or None,
+            toss_client_id=os.getenv('TOSS_CLIENT_ID') or None,
+            toss_client_secret=os.getenv('TOSS_CLIENT_SECRET') or None,
             stock_index_remote_update_enabled=parse_env_bool(
                 os.getenv('STOCK_INDEX_REMOTE_UPDATE_ENABLED'),
                 default=True,
