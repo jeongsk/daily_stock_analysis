@@ -896,6 +896,46 @@ describe('SettingsPage', () => {
     expect(screen.getByText('首次启动配置检查')).toBeInTheDocument();
   });
 
+  it('joins multiple missing setup items in Korean UI mode without Chinese punctuation', async () => {
+    localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'ko');
+    getSetupStatus.mockResolvedValue({
+      isComplete: false,
+      readyForSmoke: false,
+      requiredMissingKeys: ['LLM_CHANNELS', 'STOCK_LIST'],
+      nextStepKey: 'LLM_CHANNELS',
+      checks: [
+        {
+          key: 'llm_primary',
+          title: 'LLM 主渠道',
+          category: 'ai_model',
+          required: true,
+          status: 'needs_action',
+          message: '还没有配置模型渠道。',
+          nextStep: '请先配置模型渠道。',
+        },
+        {
+          key: 'stock_list',
+          title: '自选股',
+          category: 'base',
+          required: true,
+          status: 'needs_action',
+          message: '当前 STOCK_LIST 为空。',
+          nextStep: '请至少添加 1 只股票用于首次试跑。',
+        },
+      ],
+    });
+    useSystemConfigMock.mockReturnValue(buildSystemConfigState({ activeCategory: 'base' }));
+
+    render(
+      <UiLanguageProvider>
+        <SettingsPage />
+      </UiLanguageProvider>,
+    );
+
+    expect(await screen.findByText('2개 항목이 누락되었습니다: LLM 주 채널, 관심 종목')).toBeInTheDocument();
+    expect(screen.queryByText(/、/)).not.toBeInTheDocument();
+  });
+
   it('renders web build info in system settings', async () => {
     render(<SettingsPage />);
 

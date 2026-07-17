@@ -387,6 +387,23 @@ describe('PortfolioPage FX refresh', () => {
     expect(screen.getByText(/汇率与成本基础为部分口径/)).toBeInTheDocument();
   });
 
+  it('joins Korean partial valuation limitations without Chinese punctuation', async () => {
+    getSnapshot.mockResolvedValueOnce(makeSnapshot({
+      dataQuality: 'partial',
+      limitations: ['realtime_quote_best_effort', 'fx_and_cost_basis_partial'],
+    }));
+
+    renderKoreanPage();
+
+    await waitForInitialLoad();
+
+    expect(await screen.findByText('포트폴리오 평가 제한')).toBeInTheDocument();
+    expect(
+      screen.getByText('실시간 시세는 최선 노력 기반; 환율과 원가 기준은 부분적'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/；/)).not.toBeInTheDocument();
+  });
+
   it('renders portfolio risk drawdown labels in English UI mode', async () => {
     renderEnglishPage();
 

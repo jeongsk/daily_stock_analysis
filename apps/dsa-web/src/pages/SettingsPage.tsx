@@ -1692,7 +1692,7 @@ const SettingsPage: React.FC = () => {
                 onRefresh={refreshSetupStatus}
                 onSelectCategory={setActiveCategory}
                 onRunSmoke={handleRunSetupSmoke}
-                listSeparator={uiLanguage === 'en' ? ', ' : '、'}
+                listSeparator={uiLanguage === 'zh' ? '、' : ', '}
                 t={t}
                 language={uiLanguage}
               />
