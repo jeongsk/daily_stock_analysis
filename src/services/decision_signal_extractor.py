@@ -20,6 +20,7 @@ from src.schemas.decision_scale import (
 )
 from src.services.decision_signal_service import DecisionSignalService
 from src.services.portfolio_service import VALID_MARKETS
+from src.utils.data_processing import extract_signal_attribution_for_metadata
 from src.utils.sniper_points import extract_sniper_points
 
 
@@ -141,6 +142,10 @@ def build_decision_signal_payload_from_report(
     if market_structure_summary:
         metadata.update(market_structure_summary)
     metadata["holding_state"] = _extract_holding_state(portfolio_context)
+
+    signal_attribution = extract_signal_attribution_for_metadata(dashboard)
+    if signal_attribution:
+        metadata["signal_attribution"] = signal_attribution
 
     payload: Dict[str, Any] = {
         "stock_code": raw_code,
