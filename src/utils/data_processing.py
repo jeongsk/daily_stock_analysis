@@ -5,7 +5,7 @@ Shared data parsing and normalization helpers.
 
 import json
 import math
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 
 _MODEL_PLACEHOLDER_VALUES = {"unknown", "error", "none", "null", "n/a"}
@@ -19,6 +19,58 @@ SIGNAL_ATTRIBUTION_SIGNAL_KEYS: Tuple[str, ...] = (
     "strongest_bullish_signal",
     "strongest_bearish_signal",
 )
+
+
+def _coerce_attribution_weight(raw: Any) -> Optional[float]:
+    """Coerce a single attribution weight to a finite float; None if non-numeric."""
+    if isinstance(raw, bool):
+        # bool is a subclass of int — treat as non-numeric for attribution weights
+        return None
+    if isinstance(raw, (int, float)):
+        value = float(raw)
+        return value if math.isfinite(value) else None
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return None
+        try:
+            value = float(text)
+        except ValueError:
+            return None
+        return value if math.isfinite(value) else None
+    return None
+
+
+def extract_signal_attribution_for_metadata(
+    dashboard: Optional[Mapping[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Extract storage-ready signal_attribution (6 fields) from a dashboard dict.
+
+    The input is expected to already be normalized via
+    ``normalize_report_signal_attribution``. This helper only copies the values
+    (with defensive float coercion of weights) and never renormalizes.
+
+    All-or-nothing: if any of the four contribution weights is missing or not a
+    finite number, the whole key is omitted (returns ``None``). The two
+    signal-text fields default to ``None`` when absent and are passed through
+    unchanged when present as strings.
+    """
+    if not isinstance(dashboard, dict):
+        return None
+    signal_attr = dashboard.get("signal_attribution")
+    if not isinstance(signal_attr, dict):
+        return None
+    weights: Dict[str, float] = {}
+    for key in SIGNAL_ATTRIBUTION_WEIGHT_KEYS:
+        coerced = _coerce_attribution_weight(signal_attr.get(key))
+        if coerced is None:
+            return None
+        weights[key] = coerced
+    result: Dict[str, Any] = dict(weights)
+    for key in SIGNAL_ATTRIBUTION_SIGNAL_KEYS:
+        value = signal_attr.get(key)
+        result[key] = value if isinstance(value, str) else None
+    return result
 
 
 def normalize_model_used(value: Any) -> Optional[str]:

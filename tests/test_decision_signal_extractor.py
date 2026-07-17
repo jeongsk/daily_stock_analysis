@@ -378,6 +378,80 @@ def test_build_payload_records_empty_holding_state_from_explicit_portfolio_conte
     assert payload["metadata"]["holding_state"] == "empty"
 
 
+def test_build_payload_captures_signal_attribution_into_metadata() -> None:
+    """Valid dashboard.signal_attribution is copied verbatim into signal metadata."""
+    result = _result()
+    dashboard = result.dashboard or {}
+    dashboard["signal_attribution"] = {
+        "technical_indicators": 40,
+        "news_sentiment": 25,
+        "fundamentals": 20,
+        "market_conditions": 15,
+        "strongest_bullish_signal": "MA golden cross",
+        "strongest_bearish_signal": None,
+    }
+    result.dashboard = dashboard
+
+    payload = build_decision_signal_payload_from_report(
+        result,
+        portfolio_context={"quantity": "100"},
+        source_report_id=77,
+        trace_id="trace-attribution",
+        query_source="api",
+        report_type="full",
+        profile_source=BUILD_PROFILE_SOURCE,
+    )
+
+    assert payload is not None
+    assert payload["metadata"]["signal_attribution"] == {
+        "technical_indicators": 40,
+        "news_sentiment": 25,
+        "fundamentals": 20,
+        "market_conditions": 15,
+        "strongest_bullish_signal": "MA golden cross",
+        "strongest_bearish_signal": None,
+    }
+    # existing metadata keys remain intact alongside the new attribution
+    assert payload["metadata"]["decision_profile"] == "balanced"
+    assert payload["metadata"]["holding_state"] == "holding"
+    assert payload["metadata"]["profile_source"] == BUILD_PROFILE_SOURCE
+
+
+def test_build_payload_omits_signal_attribution_when_invalid_or_missing() -> None:
+    """All-or-nothing capture: invalid/missing attribution keeps the key absent."""
+    payload_missing = build_decision_signal_payload_from_report(
+        _result(),
+        trace_id="trace-no-attribution",
+        query_source="api",
+        report_type="simple",
+        profile_source=BUILD_PROFILE_SOURCE,
+    )
+    assert payload_missing is not None
+    assert "signal_attribution" not in payload_missing["metadata"]
+
+    # invalid weight (None) drops the whole key per all-or-nothing contract
+    result = _result()
+    dashboard = result.dashboard or {}
+    dashboard["signal_attribution"] = {
+        "technical_indicators": None,
+        "news_sentiment": 25,
+        "fundamentals": 20,
+        "market_conditions": 15,
+    }
+    result.dashboard = dashboard
+
+    payload_invalid = build_decision_signal_payload_from_report(
+        result,
+        trace_id="trace-invalid-attribution",
+        query_source="api",
+        report_type="simple",
+        profile_source=BUILD_PROFILE_SOURCE,
+    )
+
+    assert payload_invalid is not None
+    assert "signal_attribution" not in payload_invalid["metadata"]
+
+
 def test_runtime_decision_signal_summary_is_not_serialized_by_analysis_result_to_dict() -> None:
     result = _result()
     setattr(result, "decision_signal_summary", {"action": "sell", "reason": "risk"})
