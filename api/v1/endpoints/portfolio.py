@@ -18,6 +18,11 @@ from api.v1.schemas.portfolio import (
     PortfolioAccountItem,
     PortfolioAccountListResponse,
     PortfolioAccountUpdateRequest,
+    PortfolioBrokerLinkCreatedResponse,
+    PortfolioBrokerLinkItem,
+    PortfolioBrokerLinkListResponse,
+    PortfolioBrokerLinkTossRequest,
+    PortfolioBrokerSyncResponse,
     PortfolioCashLedgerListResponse,
     PortfolioCashLedgerCreateRequest,
     PortfolioCorporateActionListResponse,
@@ -36,6 +41,14 @@ from api.v1.schemas.portfolio import (
     PortfolioTradeCreateRequest,
 )
 from src.services.task_queue import get_task_queue
+from src.services.portfolio_broker_sync_service import (
+    AmbiguousBrokerAccountError,
+    BrokerLinkConflictError,
+    BrokerLinkNotFoundError,
+    PortfolioBrokerSyncService,
+    TossNotConfiguredError,
+    TossUpstreamError,
+)
 from src.services.portfolio_import_service import PortfolioImportService
 from src.services.portfolio_risk_service import PortfolioRiskService
 from src.services.portfolio_service import (
@@ -675,3 +688,116 @@ def get_risk_report(
         raise _bad_request(exc)
     except Exception as exc:
         raise _internal_error("Get risk report failed", exc)
+
+
+# ----------------------------------------------------------------------
+# Broker link (Phase 2 hybrid sync — Toss Invest). Read-only against Toss:
+# only GET /api/v1/accounts, /holdings, /orders are ever called; order
+# create/modify/cancel endpoints are intentionally never used here.
+# ----------------------------------------------------------------------
+
+
+@router.post(
+    "/links/toss",
+    response_model=PortfolioBrokerLinkCreatedResponse,
+    responses={
+        400: {"model": ErrorResponse},
+        409: {"model": ErrorResponse},
+        502: {"model": ErrorResponse},
+        500: {"model": ErrorResponse},
+    },
+    summary="Link a Toss Invest brokerage account as a portfolio account",
+)
+def link_toss_account(request: PortfolioBrokerLinkTossRequest) -> PortfolioBrokerLinkCreatedResponse:
+    service = PortfolioBrokerSyncService()
+    try:
+        data = service.link_toss_account(
+            name=request.name,
+            account_seq=request.account_seq,
+            owner_id=request.owner_id,
+        )
+        return PortfolioBrokerLinkCreatedResponse(**data)
+    except TossNotConfiguredError as exc:
+        raise api_error(400, "toss-not-configured", str(exc))
+    except AmbiguousBrokerAccountError as exc:
+        raise api_error(
+            400,
+            "toss_account_ambiguous",
+            str(exc),
+            detail={"accounts": exc.accounts},
+        )
+    except BrokerLinkConflictError as exc:
+        raise _conflict_error(error="broker_link_conflict", message=str(exc))
+    except TossUpstreamError as exc:
+        raise api_error(502, "toss-upstream-error", str(exc))
+    except PortfolioBusyError as exc:
+        raise _conflict_error(error="portfolio_busy", message=str(exc))
+    except ValueError as exc:
+        raise _bad_request(exc)
+    except Exception as exc:
+        raise _internal_error("Link Toss account failed", exc)
+
+
+@router.post(
+    "/links/{account_id}/sync",
+    response_model=PortfolioBrokerSyncResponse,
+    responses={
+        400: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+        409: {"model": ErrorResponse},
+        502: {"model": ErrorResponse},
+        500: {"model": ErrorResponse},
+    },
+    summary="Sync a linked broker account: import new filled orders and reconcile drift",
+)
+def sync_broker_link(account_id: int) -> PortfolioBrokerSyncResponse:
+    service = PortfolioBrokerSyncService()
+    try:
+        data = service.sync_linked_account(account_id)
+        return PortfolioBrokerSyncResponse(**data)
+    except TossNotConfiguredError as exc:
+        raise api_error(400, "toss-not-configured", str(exc))
+    except BrokerLinkNotFoundError as exc:
+        raise api_error(404, "not_found", str(exc))
+    except TossUpstreamError as exc:
+        raise api_error(502, "toss-upstream-error", str(exc))
+    except PortfolioBusyError as exc:
+        raise _conflict_error(error="portfolio_busy", message=str(exc))
+    except ValueError as exc:
+        raise _bad_request(exc)
+    except Exception as exc:
+        raise _internal_error("Sync broker link failed", exc)
+
+
+@router.get(
+    "/links",
+    response_model=PortfolioBrokerLinkListResponse,
+    responses={500: {"model": ErrorResponse}},
+    summary="List linked broker accounts",
+)
+def list_broker_links() -> PortfolioBrokerLinkListResponse:
+    service = PortfolioBrokerSyncService()
+    try:
+        rows = service.list_links()
+        return PortfolioBrokerLinkListResponse(links=[PortfolioBrokerLinkItem(**item) for item in rows])
+    except Exception as exc:
+        raise _internal_error("List broker links failed", exc)
+
+
+@router.delete(
+    "/links/{account_id}",
+    response_model=PortfolioDeleteResponse,
+    responses={404: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+    summary="Unlink a broker account (keeps the portfolio account and its ledger)",
+)
+def delete_broker_link(account_id: int) -> PortfolioDeleteResponse:
+    service = PortfolioBrokerSyncService()
+    try:
+        ok = service.unlink(account_id)
+        if not ok:
+            raise api_error(404, "not_found", f"Broker link not found for account_id={account_id}")
+        return PortfolioDeleteResponse(deleted=1)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _internal_error("Unlink broker account failed", exc)

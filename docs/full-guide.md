@@ -1786,8 +1786,12 @@ worker 会把 `triggered`、`skipped`、`degraded`、`failed` 写入 `alert_trig
 | `/api/v1/portfolio/trades/{trade_id}` | DELETE | 删除交易记录 |
 | `/api/v1/portfolio/cash-ledger/{entry_id}` | DELETE | 删除现金流水 |
 | `/api/v1/portfolio/corporate-actions/{action_id}` | DELETE | 删除公司行动 |
+| `/api/v1/portfolio/links/toss` | POST | 连动托斯证券账户（Phase 2 混合同步）：请求体仅 `name?`/`account_seq?`，自动创建 `market='kr'`/`base_currency='KRW'` 账户并把当前持仓写成合成 opening trade |
+| `/api/v1/portfolio/links/{account_id}/sync` | POST | 同步该连动账户自链接边界之后的已成交订单（幂等）并返回对账结果 `{imported, skipped_duplicates, failed[], drift[]}` |
+| `/api/v1/portfolio/links` | GET | 查询当前生效（`active=true`）的连动账户列表 |
+| `/api/v1/portfolio/links/{account_id}` | DELETE | 解除连动（仅停用链接行，保留账户、流水与同步游标，便于日后用同一托斯账户重新连动） |
 
-> 查询类接口统一支持 `account_id`、`date_from`、`date_to`、`page`、`page_size` 等常见筛选参数；事件列表会返回统一的 `items`、`total`、`page`、`page_size` 结构。
+> 查询类接口统一支持 `account_id`、`date_from`、`date_to`、`page`、`page_size` 等常见筛选参数；事件列表会返回统一的 `items`、`total`、`page`、`page_size` 结构。托斯连动只调用只读的账户/持仓/订单查询接口，从不调用下单、改单、撤单接口；未配置 `TOSS_CLIENT_ID`/`TOSS_CLIENT_SECRET` 时链接/同步接口返回明确的 `400 toss-not-configured`。链接时刻（获取持仓请求前后）存在极短的成交时间盲区：期间成交若未反映进持仓响应，可能被基准时间线之前排除，随后对账会以持仓数量不一致的形式呈现；建议在收盘后执行链接以避免该窗口。
 
 ### 使用行为说明
 

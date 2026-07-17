@@ -376,6 +376,115 @@ class TestDailyDataPaginationAndNormalization(TossFetcherTestCase):
         self.assertEqual(list(result.columns), STANDARD_COLUMNS)
 
 
+class TestGetClosedOrdersEnvelope(TossFetcherTestCase):
+    """Strict envelope validation for GET /api/v1/orders (design spec §3
+    "envelope 엄격 검증", Codex major 1). The confirmed real shape is
+    ``{"result": {"orders": [...], "nextCursor": str | None, "hasNext": bool}}``
+    — any deviation (missing key, wrong type, hasNext=true with an empty
+    nextCursor, or exhausting the page-count safety cap while hasNext is
+    still true) must raise DataFetchError instead of silently returning an
+    empty/partial order list, which would look identical to "the sync found
+    zero new orders" to a caller and silently drop real fills."""
+
+    @staticmethod
+    def _token_resp():
+        return _make_resp({"access_token": "tok", "expires_in": 3600})
+
+    @patch("data_provider.toss_fetcher.requests.get")
+    @patch("data_provider.toss_fetcher.requests.post")
+    def test_multi_page_real_envelope_paginates_to_completion(self, mock_post, mock_get):
+        mock_post.return_value = self._token_resp()
+        page1 = _make_resp(
+            {
+                "result": {
+                    "orders": [{"orderId": "1"}, {"orderId": "2"}],
+                    "nextCursor": "cursor-2",
+                    "hasNext": True,
+                }
+            }
+        )
+        page2 = _make_resp(
+            {
+                "result": {
+                    "orders": [{"orderId": "3"}],
+                    "nextCursor": None,
+                    "hasNext": False,
+                }
+            }
+        )
+        mock_get.side_effect = [page1, page2]
+        fetcher = _make_fetcher()
+
+        orders = fetcher.get_closed_orders(555, from_date=None)
+
+        self.assertEqual([o["orderId"] for o in orders], ["1", "2", "3"])
+        self.assertEqual(mock_get.call_count, 2)
+        second_call_params = mock_get.call_args_list[1].kwargs["params"]
+        self.assertEqual(second_call_params.get("cursor"), "cursor-2")
+
+    @patch("data_provider.toss_fetcher.requests.get")
+    @patch("data_provider.toss_fetcher.requests.post")
+    def test_has_next_true_without_cursor_raises(self, mock_post, mock_get):
+        mock_post.return_value = self._token_resp()
+        mock_get.return_value = _make_resp(
+            {"result": {"orders": [], "nextCursor": None, "hasNext": True}}
+        )
+        fetcher = _make_fetcher()
+        with self.assertRaises(DataFetchError):
+            fetcher.get_closed_orders(555)
+
+    @patch("data_provider.toss_fetcher.requests.get")
+    @patch("data_provider.toss_fetcher.requests.post")
+    def test_missing_orders_key_raises(self, mock_post, mock_get):
+        mock_post.return_value = self._token_resp()
+        mock_get.return_value = _make_resp({"result": {"hasNext": False, "nextCursor": None}})
+        fetcher = _make_fetcher()
+        with self.assertRaises(DataFetchError):
+            fetcher.get_closed_orders(555)
+
+    @patch("data_provider.toss_fetcher.requests.get")
+    @patch("data_provider.toss_fetcher.requests.post")
+    def test_missing_has_next_key_raises(self, mock_post, mock_get):
+        mock_post.return_value = self._token_resp()
+        mock_get.return_value = _make_resp({"result": {"orders": [], "nextCursor": None}})
+        fetcher = _make_fetcher()
+        with self.assertRaises(DataFetchError):
+            fetcher.get_closed_orders(555)
+
+    @patch("data_provider.toss_fetcher.requests.get")
+    @patch("data_provider.toss_fetcher.requests.post")
+    def test_missing_next_cursor_key_raises(self, mock_post, mock_get):
+        mock_post.return_value = self._token_resp()
+        mock_get.return_value = _make_resp({"result": {"orders": [], "hasNext": False}})
+        fetcher = _make_fetcher()
+        with self.assertRaises(DataFetchError):
+            fetcher.get_closed_orders(555)
+
+    @patch("data_provider.toss_fetcher.requests.get")
+    @patch("data_provider.toss_fetcher.requests.post")
+    def test_missing_result_object_raises(self, mock_post, mock_get):
+        mock_post.return_value = self._token_resp()
+        mock_get.return_value = _make_resp({"orders": []})
+        fetcher = _make_fetcher()
+        with self.assertRaises(DataFetchError):
+            fetcher.get_closed_orders(555)
+
+    @patch("data_provider.toss_fetcher._ORDERS_MAX_PAGES", 2)
+    @patch("data_provider.toss_fetcher.requests.post")
+    @patch("data_provider.toss_fetcher.requests.get")
+    @patch("data_provider.toss_fetcher.time.sleep", return_value=None)
+    def test_page_cap_reached_with_has_next_true_raises_not_partial(self, mock_sleep, mock_get, mock_post):
+        mock_post.return_value = self._token_resp()
+        mock_get.return_value = _make_resp(
+            {"result": {"orders": [{"orderId": "x"}], "nextCursor": "next", "hasNext": True}}
+        )
+        fetcher = _make_fetcher()
+        with self.assertRaises(DataFetchError):
+            fetcher.get_closed_orders(555)
+        # Capped at _ORDERS_MAX_PAGES calls, not returned as a partial result.
+        self.assertEqual(mock_get.call_count, 2)
+
+
 class TestCredentialGatedRegistration(unittest.TestCase):
     def test_has_configured_credentials_false_when_blank(self):
         # _load_credentials falls back to os.getenv() when the config value is blank
