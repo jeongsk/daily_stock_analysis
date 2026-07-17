@@ -152,6 +152,7 @@ class DecisionSignalOutcomeItem(BaseModel):
     plan_quality: Optional[str] = None
     data_quality_level: Optional[str] = None
     holding_state: str
+    dominant_attribution: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 

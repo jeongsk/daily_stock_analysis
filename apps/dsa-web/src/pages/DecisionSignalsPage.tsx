@@ -1389,6 +1389,32 @@ const DecisionSignalsPage: React.FC = () => {
                 <p className="text-xs text-secondary-text">{t('decisionSignals.outcome.unable')}</p>
                 <p className="mt-1 text-2xl font-semibold text-warning">{outcomeStats.unable}</p>
               </div>
+              {(outcomeStats.breakdowns?.dominant_attribution?.length ?? 0) > 0 ? (
+                <div className="rounded-xl border border-border/60 bg-elevated/40 px-3 py-3 sm:col-span-2 xl:col-span-5">
+                  <p className="text-xs text-secondary-text">{t('decisionSignals.attributionBreakdownTitle')}</p>
+                  <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1.5">
+                    {outcomeStats.breakdowns.dominant_attribution.map((bucket) => {
+                      const attributionLabelKeys = {
+                        technical: 'decisionSignals.attribution.technical',
+                        news: 'decisionSignals.attribution.news',
+                        fundamental: 'decisionSignals.attribution.fundamental',
+                        market: 'decisionSignals.attribution.market',
+                        mixed: 'decisionSignals.attribution.mixed',
+                      } as const;
+                      const labelKey =
+                        attributionLabelKeys[bucket.value as keyof typeof attributionLabelKeys]
+                        ?? ('decisionSignals.attribution.unattributed' as const);
+                      return (
+                        <span key={bucket.value} className="text-sm text-foreground">
+                          {t(labelKey)}{' '}
+                          <span className="font-semibold text-success">{formatStatPercent(bucket.hitRatePct)}</span>
+                          <span className="ml-1 text-xs text-secondary-text">({bucket.total})</span>
+                        </span>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
             </div>
           ) : (
             <EmptyState

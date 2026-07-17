@@ -42,7 +42,14 @@ def _add_signal(
     horizon: str = "3d",
     session_date: str = "2024-01-02",
     status: str = "active",
+    signal_attribution: dict | None = None,
 ) -> int:
+    metadata: dict = {
+        "market_phase_summary": {"session_date": session_date},
+        "holding_state": "holding",
+    }
+    if signal_attribution is not None:
+        metadata["signal_attribution"] = signal_attribution
     with db.session_scope() as session:
         row = DecisionSignalRecord(
             stock_code=code,
@@ -58,10 +65,7 @@ def _add_signal(
             horizon=horizon,
             reason="unit test",
             data_quality_summary_json=json.dumps({"level": "good"}),
-            metadata_json=json.dumps({
-                "market_phase_summary": {"session_date": session_date},
-                "holding_state": "holding",
-            }),
+            metadata_json=json.dumps(metadata),
             plan_quality="complete",
             status=status,
         )
@@ -132,6 +136,91 @@ def test_run_outcomes_evaluates_supported_horizons_and_stats(isolated_db) -> Non
     assert stats["hit"] == 4
     assert stats["breakdowns"]["action"][0]["value"] == "buy"
     assert stats["breakdowns"]["holding_state"][0]["value"] == "holding"
+
+
+_ATTRIBUTION = {
+    "technical_indicators": 40,
+    "news_sentiment": 25,
+    "fundamentals": 20,
+    "market_conditions": 15,
+    "strongest_bullish_signal": "MA golden cross",
+    "strongest_bearish_signal": None,
+}
+
+
+def test_dominant_attribution_axis_snapshot_and_stats(isolated_db) -> None:
+    signal_id = _add_signal(isolated_db, horizon="3d", signal_attribution=dict(_ATTRIBUTION))
+    _seed_bars(isolated_db, closes=[103, 104, 105])
+    service = DecisionSignalOutcomeService(db_manager=isolated_db)
+
+    result = service.run_outcomes(signal_id=signal_id, horizons=["1d", "3d"])
+
+    assert all(item["dominant_attribution"] == "technical" for item in result["items"])
+    stats = service.get_stats(horizons=["1d", "3d"])
+    buckets = {b["value"]: b for b in stats["breakdowns"]["dominant_attribution"]}
+    assert buckets["technical"]["total"] == 2
+
+
+def test_dominant_attribution_rules(isolated_db) -> None:
+    service = DecisionSignalOutcomeService(db_manager=isolated_db)
+
+    def _dominant(attr):
+        signal_id = _add_signal(
+            isolated_db,
+            session_date=f"2024-01-{2 + _dominant.counter:02d}",
+            signal_attribution=attr,
+        )
+        _dominant.counter += 1
+        with isolated_db.session_scope() as session:
+            signal = session.get(DecisionSignalRecord, signal_id)
+            return service._dominant_attribution(signal)
+
+    _dominant.counter = 0
+    assert _dominant({"technical_indicators": 10, "news_sentiment": 50,
+                      "fundamentals": 20, "market_conditions": 20}) == "news"
+    assert _dominant({"technical_indicators": 0, "news_sentiment": 0,
+                      "fundamentals": 70, "market_conditions": 30}) == "fundamental"
+    assert _dominant({"technical_indicators": 0, "news_sentiment": 0,
+                      "fundamentals": 0, "market_conditions": 100}) == "market"
+    # tie -> mixed
+    assert _dominant({"technical_indicators": 50, "news_sentiment": 50,
+                      "fundamentals": 0, "market_conditions": 0}) == "mixed"
+    # all-zero ("no effective signal") -> None
+    assert _dominant({k: 0 for k in (
+        "technical_indicators", "news_sentiment", "fundamentals", "market_conditions")}) is None
+    # invalid weight -> None
+    assert _dominant({"technical_indicators": "abc", "news_sentiment": 25,
+                      "fundamentals": 20, "market_conditions": 15}) is None
+    # string numbers accepted
+    assert _dominant({"technical_indicators": "40", "news_sentiment": "25",
+                      "fundamentals": "20", "market_conditions": "15"}) == "technical"
+    # missing key entirely -> None
+    assert _dominant(None) is None
+
+
+def test_dominant_attribution_snapshot_on_unable_path(isolated_db) -> None:
+    # unsupported horizon -> unable row must still freeze the attribution axis
+    signal_id = _add_signal(isolated_db, horizon="swing", signal_attribution=dict(_ATTRIBUTION))
+    service = DecisionSignalOutcomeService(db_manager=isolated_db)
+
+    result = service.run_outcomes(signal_id=signal_id, horizons=["swing"])
+
+    assert result["items"][0]["eval_status"] == "unable"
+    assert result["items"][0]["dominant_attribution"] == "technical"
+
+
+def test_signals_without_attribution_snapshot_none(isolated_db) -> None:
+    signal_id = _add_signal(isolated_db, horizon="3d")
+    _seed_bars(isolated_db, closes=[103, 104, 105])
+    service = DecisionSignalOutcomeService(db_manager=isolated_db)
+
+    result = service.run_outcomes(signal_id=signal_id, horizons=["3d"])
+
+    item = result["items"][0]
+    assert item["dominant_attribution"] is None
+    # 기존 8축 값은 종전과 동일(회귀 없음)
+    assert item["holding_state"] == "holding"
+    assert item["data_quality_level"] == "good"
 
 
 def test_stats_default_statuses_exclude_archived(isolated_db) -> None:

@@ -197,7 +197,16 @@ P5 通过 sidecar 表保存用户反馈和后验结果，不扩展 `decision_sig
 - `decision_signal_outcomes` 按 `(signal_id, horizon, engine_version)` 幂等保存后验评估结果。
 - 当前 `engine_version=decision-signal-v1`。
 - 后验评估只支持日线可验证的 `1d/3d/5d/10d`；`intraday/swing/long`、非方向动作、缺价和 forward bars 不足会写入 `eval_status=unable` 与明确 `unable_reason`。
-- 评估时冻结 action、market、market_phase、source_type、source_agent、plan_quality、data_quality_level、holding_state 等统计维度，历史统计不依赖后续 live join。
+- 评估时冻结 action、market、market_phase、source_type、source_agent、plan_quality、data_quality_level、holding_state、dominant_attribution 等统计维度，历史统计不依赖后续 live join。
+
+### 信号归因后验（dominant_attribution）
+
+信号生成时，两条 producer 路径（常规报告提取 `decision_signal_extractor.py` 与 reassess-persist `decision_signal_reassess_service.py`）通过**同一个共享 helper**（`src/utils/data_processing.py: extract_signal_attribution_for_metadata`）把报告 `dashboard.signal_attribution`（4 项贡献度权重 + 最强看多/看空信号文本）原样存入 `metadata_json.signal_attribution`：
+
+- **All-or-nothing**：4 项权重任一缺失或非数值时整个 key 省略，不做部分存储，也不重新归一化（归一化唯一入口仍是 `normalize_report_signal_attribution`）。
+- 归因仅用于后验统计展示，不参与买卖评分、guardrail 或 prompt。
+
+后验评估时按规则派生 `dominant_attribution` 快照标签：唯一最大权重 → `technical|news|fundamental|market`；并列最大 → `mixed`；全 0（无有效信号）/缺失/无法解析 → `NULL`（未归因）。`GET /outcomes/stats` 的 breakdowns 含 `dominant_attribution` 维度；outcome item 含同名字段。存量信号（capture 之前生成）保持 `NULL`，如需补齐可对相关信号 `force=true` 重新评估（前提是其 metadata 已含归因）。
 
 ## 脱敏与低敏边界
 
@@ -222,6 +231,7 @@ P7 的全局验收是确认信号池、通知摘要和 Web 展示不泄露 token
 - Migration 会幂等创建 profile-aware indexes，并 row-by-row 防御解析 `metadata_json`：仅合法 `metadata.decision_profile` 回填到正式字段；invalid JSON、非 object 或非法 profile 保持 `NULL`。启动日志会记录 backfilled、invalid JSON、non-object、invalid profile 和 skipped existing profile 统计，这些统计只用于诊断，不阻断启动。
 - 旧历史报告不会批量回填。只有显式调用信号列表接口或在 Web AI 建议页按来源报告 ID 触发精确查询 `source_type=analysis + source_report_id` 且无命中时，才会 best-effort 懒回填。
 - 已存在的 `decision_signals`、feedback 和 outcome 数据保持兼容。
+- 信号归因后验对 SQLite 追加非破坏 migration：`decision_signal_outcomes` 缺列时 `ALTER TABLE ADD COLUMN dominant_attribution`（nullable）并幂等创建 `ix_decision_signal_outcome_stats_attribution`；不回填存量 outcome（保持 `NULL`），评估语义与 `engine_version` 不变。回滚 revert 代码即可，残留 nullable 列无害。
 
 回滚说明：
 

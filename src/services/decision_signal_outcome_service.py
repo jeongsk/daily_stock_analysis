@@ -45,6 +45,13 @@ EVAL_STATUSES = frozenset({"completed", "unable"})
 FEEDBACK_VALUES = frozenset({"useful", "not_useful"})
 FEEDBACK_SOURCES = frozenset({"web", "api"})
 HOLDING_STATES = frozenset({"holding", "empty", "unknown"})
+# metadata signal_attribution weight keys -> dominant_attribution snapshot labels (spec D4)
+ATTRIBUTION_WEIGHT_LABELS = {
+    "technical_indicators": "technical",
+    "news_sentiment": "news",
+    "fundamentals": "fundamental",
+    "market_conditions": "market",
+}
 RETRYABLE_UNABLE_REASONS = frozenset({
     "missing_anchor_price",
     "invalid_anchor_price",
@@ -324,6 +331,7 @@ class DecisionSignalOutcomeService:
             "plan_quality",
             "data_quality_level",
             "holding_state",
+            "dominant_attribution",
         )
         breakdowns = {
             dimension: self._breakdown(rows, dimension)
@@ -463,6 +471,7 @@ class DecisionSignalOutcomeService:
             "plan_quality": signal.plan_quality,
             "data_quality_level": data_quality_level,
             "holding_state": holding_state,
+            "dominant_attribution": self._dominant_attribution(signal),
         }
 
     @staticmethod
@@ -522,6 +531,33 @@ class DecisionSignalOutcomeService:
             if value in HOLDING_STATES:
                 return value
         return "unknown"
+
+    def _dominant_attribution(self, signal: DecisionSignalRecord) -> Optional[str]:
+        """Derive the dominant attribution label from captured signal metadata.
+
+        Rules (spec D4): unique max weight -> its label; tie -> "mixed";
+        all-zero / missing / unparsable -> None (unattributed, fail-open).
+        """
+        metadata = self._json_loads(signal.metadata_json)
+        if not isinstance(metadata, dict):
+            return None
+        attribution = metadata.get("signal_attribution")
+        if not isinstance(attribution, dict):
+            return None
+        weights: Dict[str, float] = {}
+        for key, label in ATTRIBUTION_WEIGHT_LABELS.items():
+            try:
+                value = float(attribution.get(key))
+            except (TypeError, ValueError):
+                return None
+            if not math.isfinite(value) or value < 0:
+                return None
+            weights[label] = value
+        max_weight = max(weights.values())
+        if max_weight <= 0:
+            return None  # all-zero = "no effective signal"
+        leaders = [label for label, value in weights.items() if value == max_weight]
+        return leaders[0] if len(leaders) == 1 else "mixed"
 
     @staticmethod
     def _short_label(value: Any) -> str:
@@ -654,6 +690,7 @@ class DecisionSignalOutcomeService:
             "plan_quality": row.plan_quality,
             "data_quality_level": row.data_quality_level,
             "holding_state": row.holding_state,
+            "dominant_attribution": row.dominant_attribution,
             "created_at": row.created_at.isoformat() if row.created_at else None,
             "updated_at": row.updated_at.isoformat() if row.updated_at else None,
         }

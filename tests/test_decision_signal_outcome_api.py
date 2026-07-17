@@ -113,7 +113,14 @@ def _seed_bars(db: DatabaseManager, *, code: str = "600519") -> None:
 
 def test_outcome_run_list_stats_signal_outcomes_and_feedback(client_and_db) -> None:
     client, db = client_and_db
-    created_resp = client.post("/api/v1/decision-signals", json=_payload())
+    payload = _payload()
+    payload["metadata"]["signal_attribution"] = {
+        "technical_indicators": 40,
+        "news_sentiment": 25,
+        "fundamentals": 20,
+        "market_conditions": 15,
+    }
+    created_resp = client.post("/api/v1/decision-signals", json=payload)
     assert created_resp.status_code == 200, created_resp.text
     signal_id = created_resp.json()["item"]["id"]
     _seed_bars(db)
@@ -129,6 +136,7 @@ def test_outcome_run_list_stats_signal_outcomes_and_feedback(client_and_db) -> N
     assert run_data["items"][0]["outcome"] == "hit"
     assert run_data["items"][0]["stock_return_pct"] == 5.0
     assert run_data["items"][0]["holding_state"] == "holding"
+    assert run_data["items"][0]["dominant_attribution"] == "technical"
 
     second_run_resp = client.post(
         "/api/v1/decision-signals/outcomes/run",
@@ -151,6 +159,7 @@ def test_outcome_run_list_stats_signal_outcomes_and_feedback(client_and_db) -> N
     assert stats["total"] == 1
     assert stats["hit"] == 1
     assert stats["breakdowns"]["action"][0]["value"] == "buy"
+    assert stats["breakdowns"]["dominant_attribution"][0]["value"] == "technical"
 
     signal_outcomes_resp = client.get(f"/api/v1/decision-signals/{signal_id}/outcomes")
     assert signal_outcomes_resp.status_code == 200, signal_outcomes_resp.text
