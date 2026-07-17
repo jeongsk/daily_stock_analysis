@@ -106,6 +106,8 @@ class TestFetcherSourceOptimization(unittest.TestCase):
             longbridge_app_secret="",
             longbridge_access_token="",
             longbridge_oauth_client_id="",
+            toss_client_id="",
+            toss_client_secret="",
         )
 
         with patch.dict(
@@ -115,6 +117,8 @@ class TestFetcherSourceOptimization(unittest.TestCase):
                 "LONGBRIDGE_APP_KEY": "",
                 "LONGBRIDGE_APP_SECRET": "",
                 "LONGBRIDGE_ACCESS_TOKEN": "",
+                "TOSS_CLIENT_ID": "",
+                "TOSS_CLIENT_SECRET": "",
             },
         ), patch("data_provider.efinance_fetcher.EfinanceFetcher", return_value=_StubFetcher("EfinanceFetcher", 0)), patch(
             "data_provider.tencent_fetcher.TencentFetcher",
@@ -137,8 +141,12 @@ class TestFetcherSourceOptimization(unittest.TestCase):
         ) as mock_tushare, patch(
             "data_provider.longbridge_fetcher.LongbridgeFetcher",
             return_value=_StubFetcher("LongbridgeFetcher", 5),
-        ) as mock_longbridge:
+        ) as mock_longbridge, patch(
+            "data_provider.toss_fetcher.TossFetcher",
+            return_value=_StubFetcher("TossFetcher", 6),
+        ) as mock_toss:
             mock_longbridge.has_configured_credentials.return_value = False
+            mock_toss.has_configured_credentials.return_value = False
             manager = DataFetcherManager()
 
         self.assertEqual(
@@ -154,6 +162,7 @@ class TestFetcherSourceOptimization(unittest.TestCase):
         )
         mock_tushare.assert_not_called()
         mock_longbridge.assert_not_called()
+        mock_toss.assert_not_called()
 
     @patch("src.config.get_config")
     def test_manager_enables_longbridge_with_oauth_client_id(self, mock_get_config):

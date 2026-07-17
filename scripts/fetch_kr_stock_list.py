@@ -121,6 +121,75 @@ def _fetch_from_fdr() -> List[Dict[str, str]]:
     return collect_kr_rows(listing)
 
 
+def _kr_symbol_from_ts_code(ts_code: str) -> str:
+    """'005930.KS' -> '005930' (Toss's bare KR symbol representation)."""
+    return ts_code.split(".", 1)[0]
+
+
+def enrich_with_toss(rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """Verify/enrich FDR-fetched KR rows with Toss Invest OpenAPI stock master data.
+
+    Fail-open by design: with no TOSS_CLIENT_ID/TOSS_CLIENT_SECRET configured, or on
+    any request error (including the allow-listed-IP 403 case), this returns `rows`
+    unchanged so the build never fails or blocks on Toss availability. Reuses
+    TossFetcher's token/retry/403-visibility logic (data_provider/toss_fetcher.py)
+    instead of a script-local duplicate.
+
+    Only rows not later overridden by curated seeds are affected in practice —
+    merge_rows() always lets a seed win over a fetched row with the same ts_code,
+    so seed-curated names/entries are unaffected regardless of what happens here.
+
+    - Korean name: adopts Toss's `name` when it differs from the FDR-sourced name.
+    - Delisting: drops rows whose Toss `status` is present and not "ACTIVE".
+    """
+    try:
+        from data_provider.toss_fetcher import TossFetcher
+    except Exception as exc:  # noqa: BLE001 - fail-open, keep FDR data
+        print(f"[fetch_kr_stock_list] Toss enrichment skipped (import failed): {exc}", file=sys.stderr)
+        return rows
+
+    if not TossFetcher.has_configured_credentials():
+        return rows
+
+    try:
+        fetcher = TossFetcher()
+        symbols = [_kr_symbol_from_ts_code(row["ts_code"]) for row in rows]
+        master = fetcher.get_stocks_master(symbols)
+    except Exception as exc:  # noqa: BLE001 - fail-open, keep FDR data
+        print(f"[fetch_kr_stock_list] Toss enrichment skipped (request failed): {exc}", file=sys.stderr)
+        return rows
+
+    if not master:
+        print("[fetch_kr_stock_list] Toss enrichment: no matches returned, keeping FDR data as-is")
+        return rows
+
+    enriched: List[Dict[str, str]] = []
+    updated = 0
+    dropped = 0
+    for row in rows:
+        info = master.get(_kr_symbol_from_ts_code(row["ts_code"]))
+        if info is None:
+            enriched.append(row)
+            continue
+
+        status = str(info.get("status") or "").strip().upper()
+        if status and status != "ACTIVE":
+            dropped += 1
+            continue
+
+        toss_name = str(info.get("name") or "").strip()
+        if toss_name and toss_name != row["name"]:
+            row = {**row, "name": toss_name, "name_ko": toss_name}
+            updated += 1
+        enriched.append(row)
+
+    print(
+        f"[fetch_kr_stock_list] Toss enrichment: matched={len(master)} "
+        f"name_updated={updated} delisted_dropped={dropped}"
+    )
+    return enriched
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Fetch full KOSPI/KOSDAQ list via FinanceDataReader")
     parser.add_argument("--output", default=str(OUTPUT_PATH))
@@ -138,6 +207,8 @@ def main(argv=None) -> int:
     except Exception as exc:  # noqa: BLE001 - fail-open at build time
         print(f"[fetch_kr_stock_list] ERROR: KR listing fetch failed: {exc}", file=sys.stderr)
         return 1
+
+    fetched = enrich_with_toss(fetched)
 
     if len(fetched) < MIN_EXPECTED_KR_STOCKS:
         print(

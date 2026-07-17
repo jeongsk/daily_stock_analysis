@@ -624,6 +624,7 @@ class DataFetcherManager:
         "LongbridgeFetcher": {"hk", "us"},
         "FinnhubFetcher": {"us"},
         "AlphaVantageFetcher": {"us"},
+        "TossFetcher": {"kr", "us"},
     }
     _daily_source_health = CircuitBreaker(failure_threshold=3, cooldown_seconds=300.0)
     _CONCEPT_RANKINGS_CACHE_TTL_SECONDS = 300.0
@@ -1161,6 +1162,7 @@ class DataFetcherManager:
         from .baostock_fetcher import BaostockFetcher
         from .yfinance_fetcher import YfinanceFetcher
         from .longbridge_fetcher import LongbridgeFetcher
+        from .toss_fetcher import TossFetcher
         config = get_config()
         # 创建所有数据源实例（优先级在各 Fetcher 的 __init__ 中确定）
         efinance = EfinanceFetcher()
@@ -1209,6 +1211,11 @@ class DataFetcherManager:
             optional_fetchers.append(AlphaVantageFetcher())
         else:
             logger.debug("[数据源初始化] 跳过未配置的 AlphaVantageFetcher")
+
+        if TossFetcher.has_configured_credentials(config):
+            optional_fetchers.append(TossFetcher())  # 토스증권 OpenAPI（KR 实时首选/日线兜底，US 兜底，需允许 IP）
+        else:
+            logger.debug("[数据源初始化] 跳过未配置的 TossFetcher")
 
         # 初始化数据源列表
         self._ensure_concurrency_guards()
@@ -1291,6 +1298,14 @@ class DataFetcherManager:
         if market != "cn":
             fetchers = self._filter_daily_fetchers_for_market(fetchers, market)
         fetchers = self._filter_fetchers_by_capability(fetchers, capability="daily_data")
+
+        # 韩股日线：不做单独路由重排。YfinanceFetcher（Priority 4）优先于 TossFetcher
+        # （Priority 6），沿用下方通用数据源循环的既有优先级排序即可。原因：Toss 日线
+        # K 线返回的是 KRX+NXT（韩国另类交易所，交易至约 20:00）合并成交的最终价，
+        # 而非 KRX 官方收盘价；接口未提供按盘段拆分的参数。实测最大偏离达 3.8%，会导致
+        # 技术指标与国内标准图表不一致，因此日线仍以 yfinance（KRX 官方收盘价）为准，
+        # Toss 仅作为 yfinance 失败时的兜底。韩股实时行情路由（Toss 优先）不受影响，
+        # 因为 NXT 合并最新成交价正是实时场景希望呈现的行情（与 Toss App 展示一致）。
         total_fetchers = len(fetchers)
 
         if total_fetchers == 0:
@@ -1300,17 +1315,19 @@ class DataFetcherManager:
             raise DataFetchError(error_summary)
 
         # 美股（含美股指数）使用专用路由；港股走下方通用数据源循环
-        # Failover chain: Finnhub(P2) -> AlphaVantage(P3) -> Yfinance(P4) -> Longbridge(P5)
-        # When Longbridge preferred: Longbridge -> Finnhub -> AlphaVantage -> Yfinance
+        # Failover chain: Finnhub(P2) -> AlphaVantage(P3) -> Yfinance(P4) -> Longbridge(P5) -> Toss(最后兜底)
+        # When Longbridge preferred: Longbridge -> Finnhub -> AlphaVantage -> Yfinance -> Toss
+        # Toss（配置 TOSS_CLIENT_ID/TOSS_CLIENT_SECRET 时）始终排在美股链路末位，不改变既有优先级；
+        # 美股指数不含 Toss（Toss 无指数 K 线接口，同 Longbridge）
         if is_us:
             prefer_lb = self._longbridge_preferred(capability="daily_data") and not is_us_index
             if is_us_index:
-                # 指数始终 YFinance 首选（Longbridge 不提供指数K线）
+                # 指数始终 YFinance 首选（Longbridge/Toss 均不提供指数K线）
                 source_order = ["YfinanceFetcher", "FinnhubFetcher"]
             elif prefer_lb:
-                source_order = ["LongbridgeFetcher", "FinnhubFetcher", "AlphaVantageFetcher", "YfinanceFetcher"]
+                source_order = ["LongbridgeFetcher", "FinnhubFetcher", "AlphaVantageFetcher", "YfinanceFetcher", "TossFetcher"]
             else:
-                source_order = ["FinnhubFetcher", "AlphaVantageFetcher", "YfinanceFetcher", "LongbridgeFetcher"]
+                source_order = ["FinnhubFetcher", "AlphaVantageFetcher", "YfinanceFetcher", "LongbridgeFetcher", "TossFetcher"]
             market_label = "美股指数" if is_us_index else "美股"
 
             for order_index, src_name in enumerate(source_order):
@@ -1682,6 +1699,7 @@ class DataFetcherManager:
             "AlphaVantageFetcher": "alphavantage",
             "EfinanceFetcher": "efinance",
             "TushareFetcher": "tushare",
+            "TossFetcher": "toss",
         }
         return mapping.get(fetcher_name, fetcher_name.replace("Fetcher", "").lower())
 
@@ -1766,8 +1784,8 @@ class DataFetcherManager:
         is_kr = (not is_us) and (not is_hk) and _is_kr_market(stock_code)
         is_tw = (not is_us) and (not is_hk) and _is_tw_market(stock_code)
 
-        if is_jp or is_kr or is_tw:
-            market_label = "日股" if is_jp else "韩股" if is_kr else "台股"
+        if is_jp or is_tw:
+            market_label = "日股" if is_jp else "台股"
             quote = self._try_fetcher_quote(stock_code, "YfinanceFetcher")
             if quote is not None:
                 logger.info(f"[实时行情] {market_label} {stock_code} 成功获取 (来源: YfinanceFetcher)")
@@ -1777,6 +1795,29 @@ class DataFetcherManager:
                 )
             if log_final_failure:
                 logger.info(f"[实时行情] {market_label} {stock_code} 无可用数据源")
+            return None
+
+        # 韩股: 配置 TOSS_CLIENT_ID/TOSS_CLIENT_SECRET 时 Toss 优先——返回 KRX+NXT（韩国
+        # 另类交易所）合并最新成交价，与 Toss App 展示一致，属预期行为；
+        # 未配置或 Toss 失败（含 403 未登记允许 IP）时降级 YFinance。
+        if is_kr:
+            toss_token = self._realtime_fetcher_token("TossFetcher")
+            quote = self._try_fetcher_quote(stock_code, "TossFetcher")
+            fallback_from = toss_token if quote is None else None
+            if quote is not None:
+                logger.info(f"[实时行情] 韩股 {stock_code} 成功获取 (来源: TossFetcher)")
+            else:
+                quote = self._try_fetcher_quote(stock_code, "YfinanceFetcher")
+                if quote is not None:
+                    logger.info(f"[实时行情] 韩股 {stock_code} 成功获取 (来源: YfinanceFetcher)")
+            if quote is not None:
+                return self._enrich_realtime_quote(
+                    quote,
+                    fallback_from=fallback_from,
+                    realtime_cache_ttl=getattr(config, "realtime_cache_ttl", None),
+                )
+            if log_final_failure:
+                logger.info(f"[实时行情] 韩股 {stock_code} 无可用数据源")
             return None
 
         if is_us or is_hk:
