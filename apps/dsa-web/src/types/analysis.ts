@@ -281,8 +281,21 @@ export interface KrMarketBreadthRecord {
   stale?: boolean;
 }
 
+// KR 전용 업종 순위 레코드(kr_market_context.sectorRankings.{kospi,kosdaq}).
+// top/bottom(등락률 상·하위) + 기준 시점만 제공 — 테마/개념은 KR 계약에 없다(D5).
+export interface KrSectorRankingRecord {
+  market?: string;
+  top?: SectorRankingItem[];
+  bottom?: SectorRankingItem[];
+  asOf?: string;
+  session?: 'intraday' | 'close' | string;
+  source?: string;
+  stale?: boolean;
+}
+
 export interface KrMarketContextPayload {
   breadth?: Partial<Record<'kospi' | 'kosdaq', KrMarketBreadthRecord>>;
+  sectorRankings?: Partial<Record<'kospi' | 'kosdaq', KrSectorRankingRecord>>;
 }
 
 export interface MarketReviewPayload {

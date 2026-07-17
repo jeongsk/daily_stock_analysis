@@ -182,22 +182,44 @@ const hasRankingRows = (rankings?: MarketReviewPayload['sectors']): boolean =>
 const hasStructuredMarketData = (payload?: MarketReviewPayload | null): boolean =>
   Boolean(payload?.breadth || payload?.indices?.length || hasRankingRows(payload?.sectors) || hasRankingRows(payload?.concepts));
 
-// KR 하위 시장(kospi/kosdaq) 폭 레코드 -> 별도 구조화 엔트리로 합성.
+// KR 하위 시장(kospi/kosdaq) 폭·업종 레코드 -> 별도 구조화 엔트리로 합성.
 // 지수는 상위 KR 엔트리에서 1회만 렌더하므로 여기서는 indices를 비운다.
+// 폭 또는 업종 중 하나라도 유효하면 엔트리를 만든다(독립 optional — 스펙 D7).
+// 업종은 기존 sectors(top/bottom {name, changePct}) 패널로 매핑한다(concept 패널 생성 안 함, D5).
 const getKrSubmarketEntries = (payload: MarketReviewPayload): StructuredMarketData[] => {
-  const breadthMap = payload.krMarketContext?.breadth;
-  if (!breadthMap) {
+  const ctx = payload.krMarketContext;
+  if (!ctx) {
     return [];
   }
+  const breadthMap = ctx.breadth || {};
+  const sectorMap = ctx.sectorRankings || {};
   return (['kospi', 'kosdaq'] as const)
-    .map((marketKey) => ({ marketKey, record: breadthMap[marketKey] }))
-    .filter(({ record }) => Boolean(record?.asOf))
-    .map(({ marketKey, record }) => ({
-      id: `kr-${marketKey}`,
-      title: marketKey.toUpperCase(),
-      krBreadth: record,
-      indices: [],
-    }));
+    .map((marketKey) => ({
+      marketKey,
+      breadthRec: breadthMap[marketKey],
+      sectorRec: sectorMap[marketKey],
+    }))
+    .filter(({ breadthRec, sectorRec }) => Boolean(breadthRec?.asOf) || Boolean(sectorRec?.asOf))
+    .map(({ marketKey, breadthRec, sectorRec }) => {
+      const entry: StructuredMarketData = {
+        id: `kr-${marketKey}`,
+        title: marketKey.toUpperCase(),
+        indices: [],
+      };
+      if (breadthRec?.asOf) {
+        entry.krBreadth = breadthRec;
+      }
+      if (
+        sectorRec?.asOf &&
+        ((sectorRec.top && sectorRec.top.length > 0) || (sectorRec.bottom && sectorRec.bottom.length > 0))
+      ) {
+        entry.sectors = {
+          top: sectorRec.top || [],
+          bottom: sectorRec.bottom || [],
+        };
+      }
+      return entry;
+    });
 };
 
 const getStructuredMarketData = (payload?: MarketReviewPayload | null): StructuredMarketData[] => {
