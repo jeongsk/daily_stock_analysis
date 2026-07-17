@@ -1534,6 +1534,19 @@ A: Check if Actions is enabled, and if cron expression is correct (note it's UTC
 
 ## Portfolio Web Notes
 
+### Toss Invest broker-link hybrid sync (Phase 2)
+
+Four read-only-against-Toss endpoints link a Toss Invest brokerage account as a portfolio account and keep it in sync (design: `docs/superpowers/specs/2026-07-17-toss-portfolio-sync-design.md`). Only the account/holdings/order-history GET endpoints are ever called — order create/modify/cancel endpoints are never used.
+
+| Endpoint | Method | Description |
+|------|------|------|
+| `/api/v1/portfolio/links/toss` | POST | Link a Toss brokerage account. Request body accepts only `name?`/`account_seq?` (no `account_id` reuse parameter — see below). Creates a `market='kr'`/`base_currency='KRW'` account and snapshots current holdings as synthetic opening trades, atomically with the link row. |
+| `/api/v1/portfolio/links/{account_id}/sync` | POST | Import filled orders since the link's snapshot boundary (idempotent via `trade_uid`) and return `{imported, skipped_duplicates, failed[], drift[]}`. |
+| `/api/v1/portfolio/links` | GET | List currently active (`active=true`) broker links. |
+| `/api/v1/portfolio/links/{account_id}` | DELETE | Unlink = deactivate the link row only (`active=false`); the account, ledger, and sync cursor are preserved so relinking the same Toss account later resumes from where it left off instead of re-snapshotting. |
+
+Notes: the link/sync endpoints return an explicit `400 toss-not-configured` when `TOSS_CLIENT_ID`/`TOSS_CLIENT_SECRET` are not set; every other portfolio endpoint is unaffected. The API intentionally has no `account_id` field to re-target an existing account — the match key for "already linked?" is the resolved Toss account, which keeps a KRW opening snapshot from ever landing on an unrelated non-KR/KRW account. Linking briefly straddles the holdings request/response — a fill that lands in that window and is not yet reflected in the holdings response can be excluded from the opening snapshot's cutover boundary; a later sync's reconciliation would then surface it as a quantity mismatch. Linking after market close avoids this window.
+
 ### Portfolio account archive on `/portfolio`
 
 - The `/portfolio` account toolbar can delete a selected single account through the existing `DELETE /api/v1/portfolio/accounts/{account_id}` endpoint.

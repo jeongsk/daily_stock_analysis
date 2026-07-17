@@ -270,6 +270,71 @@ class PortfolioFxRefreshResponse(BaseModel):
     error_count: int
 
 
+class PortfolioBrokerLinkTossRequest(BaseModel):
+    name: Optional[str] = Field(None, max_length=64, description="Optional new-account display name")
+    account_seq: Optional[str] = Field(
+        None,
+        max_length=32,
+        description="Toss accountSeq; required only when the credential has more than one brokerage account",
+    )
+    owner_id: Optional[str] = Field(None, max_length=64)
+
+
+class PortfolioBrokerLinkCreatedResponse(BaseModel):
+    account_id: int
+    account_name: str
+    provider: str
+    external_account_seq: str
+    external_account_no: Optional[str] = None
+    snapshot_at: str
+    imported: int
+    skipped_duplicates: int
+    reactivated: bool = False
+
+
+class PortfolioBrokerLinkItem(BaseModel):
+    account_id: int
+    account_name: Optional[str] = None
+    provider: str
+    external_account_seq: str
+    external_account_no: Optional[str] = None
+    linked_at: Optional[str] = None
+    last_synced_at: Optional[str] = None
+    last_reconciled_at: Optional[str] = None
+
+
+class PortfolioBrokerLinkListResponse(BaseModel):
+    links: List[PortfolioBrokerLinkItem] = Field(default_factory=list)
+
+
+class PortfolioBrokerDriftItem(BaseModel):
+    type: Literal["quantity_mismatch"] = "quantity_mismatch"
+    symbol: str
+    ledger_qty: float
+    broker_qty: float
+    diff: float
+
+
+class PortfolioBrokerFailedItem(BaseModel):
+    type: Literal["missing_average_price", "oversell", "malformed_order"]
+    symbol: Optional[str] = None
+    order_id: Optional[str] = None
+    filled_at: Optional[str] = None
+    requested_quantity: Optional[float] = None
+    available_quantity: Optional[float] = None
+    reason: Optional[str] = None
+
+
+class PortfolioBrokerSyncResponse(BaseModel):
+    account_id: int
+    imported: int
+    skipped_duplicates: int
+    failed: List[PortfolioBrokerFailedItem] = Field(default_factory=list)
+    drift: List[PortfolioBrokerDriftItem] = Field(default_factory=list)
+    last_synced_at: str
+    last_reconciled_at: str
+
+
 class PortfolioDecisionSignalRiskItem(BaseModel):
     account_id: Optional[int] = None
     symbol: str

@@ -17,6 +17,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from src.storage import (
     DatabaseManager,
     PortfolioAccount,
+    PortfolioBrokerLink,
     PortfolioCashLedger,
     PortfolioCorporateAction,
     PortfolioDailySnapshot,
@@ -40,6 +41,10 @@ class DuplicateTradeDedupHashError(Exception):
 
 class PortfolioBusyError(Exception):
     """Raised when SQLite write serialization cannot acquire the ledger lock."""
+
+
+class DuplicateBrokerLinkError(Exception):
+    """Raised when account_id already has an active PortfolioBrokerLink row."""
 
 
 class PortfolioRepository:
@@ -1150,3 +1155,243 @@ class PortfolioRepository:
                 existing.updated_at = datetime.now()
 
             session.commit()
+
+    # ------------------------------------------------------------------
+    # Broker link (Phase 2 hybrid sync)
+    # ------------------------------------------------------------------
+    def create_broker_link(
+        self,
+        *,
+        account_id: int,
+        provider: str,
+        external_account_seq: str,
+        external_account_no: Optional[str],
+        linked_at: datetime,
+        snapshot_boundary_at: datetime,
+        last_synced_at: datetime,
+        active: bool = True,
+    ) -> PortfolioBrokerLink:
+        """Insert a standalone broker-link row (no account/trade creation).
+
+        Used directly by tests that pre-seed a link without going through
+        ``link_toss_account``'s atomic new-account flow. Production link
+        creation for a brand-new account goes through
+        ``create_broker_link_with_opening_trades`` instead, which wraps the
+        account row, its opening trades, and this link row in one transaction
+        (design spec §3 link atomicity).
+        """
+        with self.db.get_session() as session:
+            row = PortfolioBrokerLink(
+                account_id=account_id,
+                provider=provider,
+                external_account_seq=str(external_account_seq),
+                external_account_no=external_account_no,
+                linked_at=linked_at,
+                snapshot_boundary_at=snapshot_boundary_at,
+                last_synced_at=last_synced_at,
+                active=active,
+            )
+            session.add(row)
+            try:
+                session.commit()
+            except IntegrityError as exc:
+                session.rollback()
+                raise DuplicateBrokerLinkError(
+                    f"account_id={account_id} is already linked to a broker account"
+                ) from exc
+            session.refresh(row)
+            session.expunge(row)
+            return row
+
+    def create_broker_link_with_opening_trades(
+        self,
+        *,
+        account_name: str,
+        broker: Optional[str],
+        market: str,
+        base_currency: str,
+        owner_id: Optional[str],
+        provider: str,
+        external_account_seq: str,
+        external_account_no: Optional[str],
+        linked_at: datetime,
+        snapshot_boundary_at: datetime,
+        last_synced_at: datetime,
+        opening_trades: Iterable[Dict[str, Any]],
+    ) -> Tuple[PortfolioAccount, PortfolioBrokerLink, int]:
+        """Atomically create a portfolio account, its opening trades, and the
+        broker link row in a single DB transaction.
+
+        Design spec §3 "링크 원자성": a mid-way failure (e.g. a duplicate
+        opening ``trade_uid``) rolls back the account creation too, so this
+        never leaves an orphan portfolio account or a partially-populated
+        ledger behind. Each ``opening_trades`` item is a dict with keys
+        ``symbol``, ``market``, ``currency``, ``trade_date``, ``quantity``,
+        ``price``, ``trade_uid``, and optional ``note``.
+        """
+        with self.portfolio_write_session() as session:
+            account = PortfolioAccount(
+                owner_id=owner_id,
+                name=account_name,
+                broker=broker,
+                market=market,
+                base_currency=base_currency,
+                is_active=True,
+            )
+            session.add(account)
+            session.flush()  # populate account.id for the trades/link below
+
+            imported = 0
+            for item in opening_trades:
+                self.add_trade_in_session(
+                    session=session,
+                    account_id=int(account.id),
+                    trade_uid=item["trade_uid"],
+                    symbol=item["symbol"],
+                    market=item["market"],
+                    currency=item["currency"],
+                    trade_date=item["trade_date"],
+                    side="buy",
+                    quantity=float(item["quantity"]),
+                    price=float(item["price"]),
+                    fee=0.0,
+                    tax=0.0,
+                    note=item.get("note"),
+                )
+                imported += 1
+
+            link = PortfolioBrokerLink(
+                account_id=account.id,
+                provider=provider,
+                external_account_seq=str(external_account_seq),
+                external_account_no=external_account_no,
+                linked_at=linked_at,
+                snapshot_boundary_at=snapshot_boundary_at,
+                last_synced_at=last_synced_at,
+                active=True,
+            )
+            session.add(link)
+            session.flush()
+            session.refresh(account)
+            session.refresh(link)
+            session.expunge(account)
+            session.expunge(link)
+            return account, link, imported
+
+    def get_broker_link_by_account(
+        self,
+        account_id: int,
+        *,
+        active_only: bool = False,
+    ) -> Optional[PortfolioBrokerLink]:
+        with self.db.get_session() as session:
+            conditions = [PortfolioBrokerLink.account_id == account_id]
+            if active_only:
+                conditions.append(PortfolioBrokerLink.active.is_(True))
+            row = session.execute(
+                select(PortfolioBrokerLink).where(and_(*conditions)).limit(1)
+            ).scalar_one_or_none()
+            if row is not None:
+                session.expunge(row)
+            return row
+
+    def get_broker_link_by_external(
+        self,
+        *,
+        provider: str,
+        external_account_seq: str,
+    ) -> Optional[PortfolioBrokerLink]:
+        """Find any link row (active or inactive) for one broker account —
+        used to detect an active-link conflict (409) or an inactive link
+        eligible for relink reactivation (design spec §3/§5)."""
+        with self.db.get_session() as session:
+            row = session.execute(
+                select(PortfolioBrokerLink)
+                .where(
+                    and_(
+                        PortfolioBrokerLink.provider == provider,
+                        PortfolioBrokerLink.external_account_seq == str(external_account_seq),
+                    )
+                )
+                .order_by(PortfolioBrokerLink.id.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+            if row is not None:
+                session.expunge(row)
+            return row
+
+    def reactivate_broker_link(self, *, link_id: int) -> Optional[PortfolioBrokerLink]:
+        """Flip ``active=True`` on an existing (inactive) link row, preserving
+        its ``snapshot_boundary_at``/``last_synced_at``/``last_reconciled_at``
+        cursor — no opening trades are recreated (design spec §3 unlink/relink)."""
+        with self.db.get_session() as session:
+            row = session.execute(
+                select(PortfolioBrokerLink).where(PortfolioBrokerLink.id == link_id).limit(1)
+            ).scalar_one_or_none()
+            if row is None:
+                return None
+            row.active = True
+            row.updated_at = datetime.now()
+            session.commit()
+            session.refresh(row)
+            session.expunge(row)
+            return row
+
+    def list_broker_links(self, *, include_inactive: bool = False) -> List[PortfolioBrokerLink]:
+        with self.db.get_session() as session:
+            query = select(PortfolioBrokerLink)
+            if not include_inactive:
+                query = query.where(PortfolioBrokerLink.active.is_(True))
+            rows = session.execute(
+                query.order_by(PortfolioBrokerLink.id.asc())
+            ).scalars().all()
+            rows = list(rows)
+            for row in rows:
+                session.expunge(row)
+            return rows
+
+    def update_broker_link_sync(
+        self,
+        *,
+        account_id: int,
+        candidate_last_synced_at: datetime,
+        last_reconciled_at: Optional[datetime],
+    ) -> Optional[PortfolioBrokerLink]:
+        """Advance the sync cursor monotonically: ``last_synced_at`` only moves
+        forward (design spec §3 cursor redesign (c)) — a candidate that is not
+        strictly greater than the currently-stored value is silently dropped,
+        which is what keeps a slow/delayed concurrent sync call from regressing
+        a cursor a faster concurrent call already advanced past it.
+        ``last_reconciled_at`` always updates unconditionally (reconciliation
+        is always computed fresh against current holdings).
+        """
+        with self.db.get_session() as session:
+            row = session.execute(
+                select(PortfolioBrokerLink).where(PortfolioBrokerLink.account_id == account_id).limit(1)
+            ).scalar_one_or_none()
+            if row is None:
+                return None
+            if candidate_last_synced_at > row.last_synced_at:
+                row.last_synced_at = candidate_last_synced_at
+            if last_reconciled_at is not None:
+                row.last_reconciled_at = last_reconciled_at
+            row.updated_at = datetime.now()
+            session.commit()
+            session.refresh(row)
+            session.expunge(row)
+            return row
+
+    def deactivate_broker_link(self, account_id: int) -> bool:
+        """Unlink = deactivate, never delete: the row (and its cursor) is kept
+        so a future relink to the same external account can resume from it
+        (design spec §3 unlink/relink)."""
+        with self.db.get_session() as session:
+            row = session.execute(
+                select(PortfolioBrokerLink).where(PortfolioBrokerLink.account_id == account_id).limit(1)
+            ).scalar_one_or_none()
+            if row is None:
+                return False
+            row.active = False
+            row.updated_at = datetime.now()
+            session.commit()
+            return True

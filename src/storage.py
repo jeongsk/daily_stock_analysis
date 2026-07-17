@@ -685,6 +685,78 @@ class PortfolioFxRate(Base):
     )
 
 
+class PortfolioBrokerLink(Base):
+    """Links one portfolio account to an external broker account for hybrid sync
+    (Toss Invest Phase 2: holdings-snapshot opening + incremental order sync +
+    read-only reconciliation). Additive table — existing portfolio_accounts /
+    portfolio_trades schema is unchanged. No deployment has ever shipped this
+    table (2026-07-17 design revision), so its column set was edited in place
+    rather than migrated.
+
+    ``provider`` is a free-form string (``'toss'`` today) rather than an enum so a
+    future second broker needs no migration. ``account_id`` is unique: at most one
+    link row per portfolio account, ever (unlink never deletes the row — see
+    ``active`` below). ``external_account_seq`` is the broker's user-context id
+    (Toss ``accountSeq``, used as the ``X-Tossinvest-Account`` header value);
+    ``external_account_no`` is the human-readable account number kept for display
+    only.
+
+    ``snapshot_boundary_at`` is the permanent cutover timestamp (``T1``, captured
+    right after the link-time holdings response is received): incremental sync
+    only ever considers orders with ``execution.filledAt > snapshot_boundary_at``,
+    which is the sole thing preventing the opening snapshot and the order-sync
+    replay from double-counting the same position. It is written once at link
+    time and never advances afterward — ``last_synced_at`` is the one that moves.
+
+    ``last_synced_at`` is a *query-range optimization cursor*, not a dedup
+    boundary: each sync re-scans from
+    ``max(snapshot_boundary_at, last_synced_at - 3 days)`` (overlap re-scan) and
+    relies on ``portfolio_trades.trade_uid`` uniqueness to collapse duplicates.
+    It only ever moves forward (monotonic write) and is held back to just before
+    the earliest failed order's fill time when a sync leaves failures behind, so
+    the next sync retries them instead of silently skipping past them forever.
+
+    ``active`` represents unlink/relink: ``DELETE /portfolio/links/{account_id}``
+    sets ``active=False`` instead of deleting the row, preserving
+    ``snapshot_boundary_at``/``last_synced_at``. Relinking the same
+    ``external_account_seq`` reactivates the existing (inactive) row and resumes
+    from its preserved cursor instead of creating new opening trades — orders
+    filled during the unlinked gap are recovered by the next sync's overlap
+    re-scan.
+
+    ``linked_at`` / ``snapshot_boundary_at`` / ``last_synced_at`` /
+    ``last_reconciled_at`` intentionally store naive KST wall-clock time (not
+    UTC, unlike most other timestamp columns in this module) — the sync cursor
+    is compared directly against Toss ``execution.filledAt``, which the API
+    actually returns as ISO 8601 timestamps carrying an explicit ``+09:00``
+    offset (confirmed against the live API, not offset-less KST-local as an
+    earlier draft of this docstring assumed). This module normalizes any
+    ``filledAt`` value to a naive KST wall-clock ``datetime`` immediately before
+    storage/comparison (see ``_parse_kst_datetime`` in
+    ``src/services/portfolio_broker_sync_service.py``); storing UTC instead would
+    only add a needless round-trip through that same normalization.
+    """
+
+    __tablename__ = 'portfolio_broker_links'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, ForeignKey('portfolio_accounts.id'), nullable=False, unique=True, index=True)
+    provider = Column(String(16), nullable=False, default='toss', index=True)
+    external_account_seq = Column(String(32), nullable=False)
+    external_account_no = Column(String(32))
+    linked_at = Column(DateTime, nullable=False)
+    snapshot_boundary_at = Column(DateTime, nullable=False)
+    last_synced_at = Column(DateTime, nullable=False)
+    last_reconciled_at = Column(DateTime)
+    active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=datetime.now, index=True)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    __table_args__ = (
+        Index('ix_portfolio_broker_link_provider_account', 'provider', 'external_account_seq'),
+    )
+
+
 class ConversationMessage(Base):
     """
     Agent 对话历史记录表

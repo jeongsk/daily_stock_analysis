@@ -65,6 +65,9 @@ _TOKEN_URL = f"{_TOSS_BASE_URL}/oauth2/token"
 _PRICES_URL = f"{_TOSS_BASE_URL}/api/v1/prices"
 _CANDLES_URL = f"{_TOSS_BASE_URL}/api/v1/candles"
 _STOCKS_URL = f"{_TOSS_BASE_URL}/api/v1/stocks"
+_ACCOUNTS_URL = f"{_TOSS_BASE_URL}/api/v1/accounts"
+_HOLDINGS_URL = f"{_TOSS_BASE_URL}/api/v1/holdings"
+_ORDERS_URL = f"{_TOSS_BASE_URL}/api/v1/orders"
 
 _TOKEN_EXPIRY_MARGIN_SECONDS = 60  # refresh 60s before actual expiry
 _MAX_CANDLES_PER_CALL = 200
@@ -74,6 +77,12 @@ _STOCKS_BATCH_SLEEP_SECONDS = 0.25  # STOCK rate-limit group is 5 TPS
 _RETRY_LIMIT = 2  # 429 retry cap before giving up to the manager's fallback
 _IP_LOOKUP_URL = "https://api.ipify.org"
 _IP_LOOKUP_TIMEOUT_SECONDS = 5
+
+_ACCOUNT_HEADER = "X-Tossinvest-Account"
+_ORDERS_STATUS_CLOSED = "CLOSED"
+_ORDERS_PAGE_LIMIT = 100
+_ORDERS_PAGE_SLEEP_SECONDS = 0.25  # ORDER_HISTORY rate-limit group is 5 TPS
+_ORDERS_MAX_PAGES = 500  # sane runaway guard for user-triggered single-call sync
 
 # Process-wide 403 visibility guard: warn once with actionable detail, then skip
 # further Toss calls for the rest of this process (avoids log spam / needless
@@ -289,7 +298,18 @@ class TossFetcher(BaseFetcher):
         except (TypeError, ValueError):
             return None
 
-    def _request(self, url: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def _request(
+        self,
+        url: str,
+        params: Optional[Dict[str, Any]] = None,
+        account_seq: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        """GET helper shared by every Toss endpoint.
+
+        ``account_seq``, when given, is sent as the ``X-Tossinvest-Account`` header
+        required by user-context (account/asset/order-history) endpoints — the
+        market-data endpoints (prices/candles/stocks) never pass it.
+        """
         if not self._is_configured():
             raise DataFetchError("[Toss] TOSS_CLIENT_ID/TOSS_CLIENT_SECRET not configured")
         if is_toss_forbidden():
@@ -299,11 +319,14 @@ class TossFetcher(BaseFetcher):
         attempt = 0
         while True:
             token = self._get_access_token()
+            headers = {"Authorization": f"Bearer {token}"}
+            if account_seq is not None:
+                headers[_ACCOUNT_HEADER] = str(account_seq)
             try:
                 resp = requests.get(
                     url,
                     params=params,
-                    headers={"Authorization": f"Bearer {token}"},
+                    headers=headers,
                     timeout=15,
                 )
             except requests.RequestException as e:
@@ -605,3 +628,134 @@ class TossFetcher(BaseFetcher):
                 if symbol:
                     out[symbol] = item
         return out
+
+    # ------------------------------------------------------------------
+    # Portfolio broker-link support (Phase 2) — read-only account/asset/order
+    # endpoints only. This fetcher never calls order create/modify/cancel APIs.
+    # ------------------------------------------------------------------
+
+    def get_accounts(self) -> List[Dict[str, Any]]:
+        """List the caller's brokerage accounts via ``GET /api/v1/accounts``
+        (``ACCOUNT`` rate-limit group, 1 TPS).
+
+        Unlike the passive quote-fetching methods above, this raises
+        ``DataFetchError`` on any failure (not configured, 403 IP not allow-listed,
+        network, non-2xx) instead of failing open to an empty result — an explicit
+        broker-link/sync action must surface the real reason rather than look like
+        "the user has zero accounts".
+        """
+        payload = self._request(_ACCOUNTS_URL)
+        return list(payload.get("result") or [])
+
+    def get_holdings(self, account_seq: Any) -> Dict[str, Any]:
+        """Fetch current holdings for one account via ``GET /api/v1/holdings``
+        (``ASSET`` rate-limit group, 5 TPS). Requires the account-context header.
+
+        Raises ``DataFetchError`` on failure (see ``get_accounts``).
+        """
+        payload = self._request(_HOLDINGS_URL, account_seq=account_seq)
+        return payload.get("result") or {}
+
+    def get_closed_orders(
+        self,
+        account_seq: Any,
+        *,
+        from_date: Optional[date] = None,
+        to_date: Optional[date] = None,
+    ) -> List[Dict[str, Any]]:
+        """Fetch every ``CLOSED`` order for one account via ``GET /api/v1/orders``
+        (``ORDER_HISTORY`` rate-limit group, 5 TPS), paginating with the cursor
+        until exhausted.
+
+        ``CLOSED`` is a terminal order status, not "filled" — a fully-canceled
+        order with zero fills can still be ``CLOSED``. This method returns every
+        such order as-is; filtering to orders with an actual fill
+        (``execution.filledQuantity > 0``) is the caller's responsibility
+        (``portfolio_broker_sync_service``), matching the design spec's "reflect
+        every CLOSED order with a nonzero fill, including partial fills followed
+        by cancel/replace" contract.
+
+        Envelope shape is the one confirmed against the live API:
+        ``{"result": {"orders": [...], "nextCursor": str | None, "hasNext": bool}}``.
+        This is validated *strictly* (design spec §3 "envelope 엄격 검증"): a
+        missing ``result``/``orders``/``hasNext``/``nextCursor`` key, a wrong
+        type for any of them, ``hasNext=true`` with an empty ``nextCursor``, or
+        exhausting the ``_ORDERS_MAX_PAGES`` safety cap while ``hasNext`` is
+        still ``true`` all raise ``DataFetchError`` instead of returning a
+        partial/empty result — a schema surprise must never look like "the sync
+        found zero new orders" to the caller, which would silently look like a
+        clean, up-to-date sync and advance the cursor past real fills. There is
+        no defensive alternate-key guessing (``items``/``data``/``cursor``/
+        ``next_cursor``): a real envelope shift must fail loudly, not degrade
+        silently into a wrong pagination decision.
+        """
+        orders: List[Dict[str, Any]] = []
+        cursor: Optional[str] = None
+        params_base: Dict[str, Any] = {
+            "status": _ORDERS_STATUS_CLOSED,
+            "limit": _ORDERS_PAGE_LIMIT,
+        }
+        if from_date is not None:
+            params_base["from"] = from_date.isoformat()
+        if to_date is not None:
+            params_base["to"] = to_date.isoformat()
+
+        for page in range(_ORDERS_MAX_PAGES):
+            params = dict(params_base)
+            if cursor:
+                params["cursor"] = cursor
+            if page > 0:
+                time.sleep(_ORDERS_PAGE_SLEEP_SECONDS)
+
+            payload = self._request(_ORDERS_URL, params=params, account_seq=account_seq)
+            result = payload.get("result")
+            if not isinstance(result, dict):
+                raise DataFetchError(
+                    f"[Toss] orders envelope missing object 'result' for account_seq={account_seq}: {payload!r}"
+                )
+
+            page_orders = result.get("orders")
+            if not isinstance(page_orders, list):
+                raise DataFetchError(
+                    f"[Toss] orders envelope missing/invalid 'result.orders' list for "
+                    f"account_seq={account_seq}: {result!r}"
+                )
+
+            if "hasNext" not in result or not isinstance(result.get("hasNext"), bool):
+                raise DataFetchError(
+                    f"[Toss] orders envelope missing/invalid 'result.hasNext' bool for "
+                    f"account_seq={account_seq}: {result!r}"
+                )
+            has_next = result["hasNext"]
+
+            if "nextCursor" not in result:
+                raise DataFetchError(
+                    f"[Toss] orders envelope missing 'result.nextCursor' key for "
+                    f"account_seq={account_seq}: {result!r}"
+                )
+            next_cursor = result["nextCursor"]
+            if next_cursor is not None and not isinstance(next_cursor, str):
+                raise DataFetchError(
+                    f"[Toss] orders envelope 'result.nextCursor' must be str or null for "
+                    f"account_seq={account_seq}: {next_cursor!r}"
+                )
+
+            if has_next and not next_cursor:
+                raise DataFetchError(
+                    f"[Toss] orders envelope hasNext=true but nextCursor is empty for "
+                    f"account_seq={account_seq}"
+                )
+
+            orders.extend(page_orders)
+
+            if not has_next:
+                break
+            cursor = next_cursor
+        else:
+            raise DataFetchError(
+                f"[Toss] get_closed_orders hit the {_ORDERS_MAX_PAGES}-page safety cap "
+                f"for account_seq={account_seq} with hasNext still true; refusing to "
+                f"return a partial result"
+            )
+
+        return orders
