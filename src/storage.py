@@ -1105,6 +1105,9 @@ class DecisionSignalOutcomeRecord(Base):
     plan_quality = Column(String(16), index=True)
     data_quality_level = Column(String(24), index=True)
     holding_state = Column(String(16), nullable=False, default='unknown', index=True)
+    # Dominant signal-attribution label frozen at evaluation time
+    # (technical|news|fundamental|market|mixed, NULL when unattributed).
+    dominant_attribution = Column(String(16), index=True)
 
     created_at = Column(DateTime, default=utc_naive_now, index=True)
     updated_at = Column(DateTime, default=utc_naive_now, onupdate=utc_naive_now, index=True)
@@ -1113,6 +1116,7 @@ class DecisionSignalOutcomeRecord(Base):
         UniqueConstraint('signal_id', 'horizon', 'engine_version', name='uix_decision_signal_outcome_key'),
         Index('ix_decision_signal_outcome_stats_action', 'engine_version', 'action', 'horizon'),
         Index('ix_decision_signal_outcome_stats_market', 'engine_version', 'market', 'horizon'),
+        Index('ix_decision_signal_outcome_stats_attribution', 'engine_version', 'dominant_attribution', 'horizon'),
     )
 
 
@@ -1213,6 +1217,7 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             Base.metadata.create_all(self._engine)
             self._ensure_llm_usage_telemetry_columns()
             self._ensure_decision_signal_profile_schema()
+            self._ensure_decision_signal_outcome_attribution_schema()
             self._ensure_intelligence_item_scope_values()
             self._ensure_schema_migration_record()
             self._ensure_intelligence_items_unique_index()
@@ -1295,6 +1300,50 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
 
         self._ensure_decision_signal_profile_indexes()
         self._backfill_decision_signal_profile_from_metadata()
+
+    def _ensure_decision_signal_outcome_attribution_schema(self) -> None:
+        """Add nullable dominant_attribution to decision_signal_outcomes on SQLite.
+
+        Snapshot-axis extension only (no evaluation-semantics change, no
+        engine_version bump); no backfill — existing outcomes keep NULL until
+        re-evaluated with force=true.
+        """
+
+        if not self._is_sqlite_engine:
+            return
+        inspector = inspect(self._engine)
+        table_name = DecisionSignalOutcomeRecord.__tablename__
+        if not inspector.has_table(table_name):
+            return
+
+        try:
+            existing = {
+                column["name"] for column in inspector.get_columns(table_name)
+            }
+        except Exception as exc:
+            logger.error(
+                "[DecisionSignal] failed to inspect dominant_attribution column; "
+                "attribution migration cannot continue safely: %s",
+                exc,
+            )
+            raise
+
+        if "dominant_attribution" not in existing:
+            try:
+                with self._engine.begin() as connection:
+                    connection.exec_driver_sql(
+                        f"ALTER TABLE {table_name} "
+                        "ADD COLUMN dominant_attribution VARCHAR(16)"
+                    )
+            except OperationalError as exc:
+                if not self._is_sqlite_duplicate_column_error(exc, "dominant_attribution"):
+                    raise
+
+        with self._engine.begin() as connection:
+            connection.exec_driver_sql(
+                "CREATE INDEX IF NOT EXISTS ix_decision_signal_outcome_stats_attribution "
+                f"ON {table_name} (engine_version, dominant_attribution, horizon)"
+            )
 
     def _ensure_decision_signal_profile_indexes(self) -> None:
         """Create profile-aware indexes without dropping legacy indexes."""
