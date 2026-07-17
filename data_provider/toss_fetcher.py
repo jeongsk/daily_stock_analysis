@@ -49,6 +49,7 @@ import threading
 import time
 from datetime import datetime, date
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 import pandas as pd
 import requests
@@ -68,6 +69,13 @@ _STOCKS_URL = f"{_TOSS_BASE_URL}/api/v1/stocks"
 _ACCOUNTS_URL = f"{_TOSS_BASE_URL}/api/v1/accounts"
 _HOLDINGS_URL = f"{_TOSS_BASE_URL}/api/v1/holdings"
 _ORDERS_URL = f"{_TOSS_BASE_URL}/api/v1/orders"
+# Path-only form of _ORDERS_URL used by _request_write's live-order gate so a
+# query string (e.g. "?foo=bar") on an orders-family URL can never make the
+# gate's string match miss (reviewer re-review major 3 — see _request_write).
+_ORDERS_URL_PATH = urlparse(_ORDERS_URL).path
+_BUYING_POWER_URL = f"{_TOSS_BASE_URL}/api/v1/buying-power"
+_SELLABLE_QUANTITY_URL = f"{_TOSS_BASE_URL}/api/v1/sellable-quantity"
+_COMMISSIONS_URL = f"{_TOSS_BASE_URL}/api/v1/commissions"
 
 _TOKEN_EXPIRY_MARGIN_SECONDS = 60  # refresh 60s before actual expiry
 _MAX_CANDLES_PER_CALL = 200
@@ -131,6 +139,30 @@ def _mark_forbidden_and_warn(context: str) -> None:
         context,
         public_ip,
     )
+
+
+class TossOrderNotLiveError(DataFetchError):
+    """Raised by ``TossFetcher.place_order`` when ``TOSS_ORDER_LIVE`` is not
+    enabled — the fetcher-level half of the Phase 3 dual live-order gate
+    (design spec docs/superpowers/specs/2026-07-17-toss-order-phase3-design.md
+    §3): even a caller that bypasses the service layer's own dry-run branch
+    cannot reach a real Toss order POST through this method."""
+
+
+class TossOrderRejectedError(DataFetchError):
+    """Raised when Toss responds to an order create/cancel call with a
+    structured business error (``{"error": {"code", "message", "data"}}``) —
+    insufficient buying power, price out of range, an idempotency conflict, a
+    cancel-state conflict, etc. Carries the parsed fields so the service layer
+    can map each code precisely instead of collapsing every failure into one
+    generic message (design spec §2: "코드별로 명확한 4xx로 전달 — 뭉개기 금지")."""
+
+    def __init__(self, *, status_code: int, code: str, message: str, data: Optional[Dict[str, Any]] = None):
+        super().__init__(f"[Toss] order request rejected ({status_code} {code}): {message}")
+        self.status_code = status_code
+        self.code = code
+        self.message = message
+        self.data = data or {}
 
 
 def _clean(value: Any) -> Optional[str]:
@@ -219,6 +251,33 @@ class TossFetcher(BaseFetcher):
         """Return True when runtime config/env can attempt Toss auth."""
         client_id, client_secret = TossFetcher._load_credentials(config)
         return bool(client_id and client_secret)
+
+    @staticmethod
+    def is_order_live_enabled(config: Any = None) -> bool:
+        """Whether ``TOSS_ORDER_LIVE`` is enabled — defaults to ``False``
+        (dry-run) so real order POSTs are strictly opt-in (design spec §3).
+        This is one of the two independent live-order gates: the service
+        layer checks this to decide whether to call ``place_order`` at all,
+        and every order-write call (``place_order``, ``cancel_order``, and
+        ``_request_write`` itself for any orders-family URL) checks it again
+        before making any HTTP call, so a direct/bypassing caller still
+        cannot place or cancel a real order.
+
+        Uses ``parse_strict_true_env_bool`` (not ``parse_env_bool``) when
+        falling back to the raw env var — this flag's parsing must be
+        strict (design spec §3: only the exact value ``"true"`` is live;
+        anything else is an ERROR-logged misconfiguration that stays
+        dry-run), unlike ordinary tolerant boolean env flags elsewhere."""
+        if config is None:
+            try:
+                from src.config import get_config
+                config = get_config()
+            except Exception:
+                config = None
+        if config is not None and hasattr(config, "toss_order_live"):
+            return bool(getattr(config, "toss_order_live"))
+        from src.config import parse_strict_true_env_bool
+        return parse_strict_true_env_bool(os.getenv("TOSS_ORDER_LIVE"), field_name="TOSS_ORDER_LIVE")
 
     def _is_configured(self) -> bool:
         return bool(self._client_id and self._client_secret)
@@ -759,3 +818,237 @@ class TossFetcher(BaseFetcher):
             )
 
         return orders
+
+    # ------------------------------------------------------------------
+    # Order info (Phase 3) — read-only. GET /buying-power, /sellable-quantity,
+    # /commissions, /orders/{orderId}. Used by PortfolioOrderService to
+    # validate a proposal both at creation and again at execute time.
+    # ------------------------------------------------------------------
+
+    def get_buying_power(self, account_seq: Any, currency: str) -> float:
+        """Cash-only buying power for one currency (``GET /buying-power``,
+        ``ORDER_INFO`` rate-limit group). Raises ``DataFetchError`` on any
+        failure (not configured, 403, network, malformed response) instead of
+        failing open — an order-validation caller must see the real reason,
+        not silently proceed as if funds were unlimited."""
+        payload = self._request(_BUYING_POWER_URL, params={"currency": currency}, account_seq=account_seq)
+        result = payload.get("result") or {}
+        value = safe_float(result.get("cashBuyingPower"))
+        if value is None:
+            raise DataFetchError(f"[Toss] buying-power response missing cashBuyingPower: {result!r}")
+        return value
+
+    def get_sellable_quantity(self, account_seq: Any, symbol: str) -> float:
+        """Sellable quantity for one symbol (``GET /sellable-quantity``,
+        ``ORDER_INFO`` rate-limit group). Raises ``DataFetchError`` on
+        failure (see ``get_buying_power``)."""
+        payload = self._request(_SELLABLE_QUANTITY_URL, params={"symbol": symbol}, account_seq=account_seq)
+        result = payload.get("result") or {}
+        value = safe_float(result.get("sellableQuantity"))
+        if value is None:
+            raise DataFetchError(f"[Toss] sellable-quantity response missing sellableQuantity: {result!r}")
+        return value
+
+    def get_commissions(self, account_seq: Any) -> List[Dict[str, Any]]:
+        """Per-market commission rates for the account (``GET /commissions``,
+        ``ORDER_INFO`` rate-limit group)."""
+        payload = self._request(_COMMISSIONS_URL, account_seq=account_seq)
+        return list(payload.get("result") or [])
+
+    def get_order(self, account_seq: Any, order_id: str) -> Dict[str, Any]:
+        """Full status of one order, any state (``GET /orders/{orderId}``,
+        ``ORDER_HISTORY`` rate-limit group)."""
+        payload = self._request(f"{_ORDERS_URL}/{order_id}", account_seq=account_seq)
+        return payload.get("result") or {}
+
+    # ------------------------------------------------------------------
+    # Order writes (Phase 3) — POST /orders, POST /orders/{orderId}/cancel.
+    # This is the only place in the whole codebase that ever POSTs an order
+    # to Toss. ``place_order`` carries its own live-order gate (design spec §3
+    # dual gate — the service layer, ``PortfolioOrderService``, carries the
+    # other half by never calling this method at all in dry-run mode).
+    # ------------------------------------------------------------------
+
+    def _request_write(
+        self,
+        url: str,
+        *,
+        json_body: Dict[str, Any],
+        account_seq: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        """POST helper for order write endpoints, mirroring ``_request``'s
+        auth/403/401/429 handling but issuing ``requests.post`` with a JSON
+        body instead of ``requests.get`` — kept as a separate method (rather
+        than a ``method=`` parameter threaded through ``_request``) so every
+        existing read-only call site above — and the tests that patch
+        ``requests.get`` directly — are untouched, byte-for-byte, by this
+        Phase 3 change.
+
+        Unlike ``_request`` (which raises ``DataFetchError`` on any non-2xx
+        via ``raise_for_status()``), a non-2xx response here is parsed as
+        Toss's structured ``{"error": {"code", "message", "data"}}`` envelope
+        and raised as ``TossOrderRejectedError`` — order errors need their
+        code preserved for the service layer to map precisely (design spec §2:
+        "코드별로 명확한 4xx로 전달 — 뭉개기 금지"), not a generic HTTP error string.
+
+        SAFETY GATE (design spec §3, "이중 게이트"): any URL under
+        ``_ORDERS_URL`` — order create *and* order cancel alike — is
+        unconditionally refused unless ``TOSS_ORDER_LIVE`` is enabled, checked
+        again right here regardless of what ``place_order``/``cancel_order``
+        already checked. This is deliberately redundant: a future internal
+        caller that reaches ``_request_write`` directly (bypassing those two
+        methods) must still not be able to issue a real order write.
+
+        The gate matches on the URL's *path* only (via ``urllib.parse``),
+        never on the raw string — a plain ``url == _ORDERS_URL or
+        url.startswith(f"{_ORDERS_URL}/")`` check misses
+        ``".../api/v1/orders?foo=bar"`` entirely (the character right after
+        ``orders`` is ``?``, not ``/``, so neither branch matches), which
+        would let a query-string-bearing orders-family URL slip past this
+        gate undetected (reviewer re-review major 3). Comparing paths instead
+        ignores query/fragment the same way the rest of this gate's callers
+        already implicitly expect.
+        """
+        request_path = urlparse(url).path
+        if request_path == _ORDERS_URL_PATH or request_path.startswith(f"{_ORDERS_URL_PATH}/"):
+            if not self.is_order_live_enabled():
+                raise TossOrderNotLiveError(
+                    "TOSS_ORDER_LIVE is not enabled; refusing to POST an orders-family "
+                    f"write request ({url}) — fetcher-level gate, design spec §3 dual gate"
+                )
+        if not self._is_configured():
+            raise DataFetchError("[Toss] TOSS_CLIENT_ID/TOSS_CLIENT_SECRET not configured")
+        if is_toss_forbidden():
+            raise DataFetchError("[Toss] previously blocked by IP allow-list (403); skipped for this process")
+
+        retried_auth = False
+        attempt = 0
+        while True:
+            token = self._get_access_token()
+            headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+            if account_seq is not None:
+                headers[_ACCOUNT_HEADER] = str(account_seq)
+            try:
+                resp = requests.post(url, json=json_body, headers=headers, timeout=15)
+            except requests.RequestException as e:
+                raise DataFetchError(f"[Toss] HTTP request failed: {e}") from e
+
+            if resp.status_code == 403:
+                _mark_forbidden_and_warn(f"POST {url} status=403")
+                raise DataFetchError(f"[Toss] 403 Forbidden (IP not allow-listed): {url}")
+
+            if resp.status_code == 401 and not retried_auth:
+                retried_auth = True
+                logger.debug(f"[Toss] 401 received for {url}, refreshing token once and retrying")
+                self._get_access_token(force_refresh=True)
+                continue
+
+            if resp.status_code == 429:
+                attempt += 1
+                if attempt > _RETRY_LIMIT:
+                    raise DataFetchError(f"[Toss] rate limited after {_RETRY_LIMIT} retries: {url}")
+                retry_after = self._parse_retry_after(resp)
+                backoff = retry_after if retry_after is not None else min(2 ** attempt, 8)
+                backoff += random.uniform(0, 0.5)
+                logger.info(
+                    f"[Toss] 429 rate limited on {url}, backing off {backoff:.1f}s "
+                    f"(attempt {attempt}/{_RETRY_LIMIT})"
+                )
+                time.sleep(backoff)
+                continue
+
+            try:
+                payload = resp.json()
+            except ValueError as e:
+                raise DataFetchError(f"[Toss] invalid JSON response from {url}: {e}") from e
+
+            if 200 <= resp.status_code < 300:
+                return payload.get("result") or {}
+
+            error = payload.get("error") if isinstance(payload, dict) else None
+            if isinstance(error, dict):
+                raw_data = error.get("data")
+                raise TossOrderRejectedError(
+                    status_code=resp.status_code,
+                    code=str(error.get("code") or "unknown"),
+                    message=str(error.get("message") or ""),
+                    data=raw_data if isinstance(raw_data, dict) else None,
+                )
+            raise DataFetchError(f"[Toss] HTTP {resp.status_code} for {url}: {payload!r}")
+
+    def place_order(
+        self,
+        account_seq: Any,
+        *,
+        symbol: str,
+        side: str,
+        order_type: str,
+        quantity: Any,
+        client_order_id: str,
+        price: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        """Create an order (``POST /orders``, ``ORDER`` rate-limit group,
+        6 TPS / 3 TPS during 09:00-09:10 KST).
+
+        SAFETY GATE: refuses — without making any HTTP call — unless
+        ``TOSS_ORDER_LIVE`` is enabled (design spec §3 dual-gate decision).
+        This is deliberately checked again here even though
+        ``PortfolioOrderService.execute_proposal`` already checks it and never
+        calls this method at all in dry-run mode, *and* ``_request_write``
+        checks it a third time right before the HTTP call — a future direct
+        or buggy call site must not be able to place a real order just
+        because Toss credentials happen to be configured.
+
+        ``client_order_id`` is a required keyword argument (not optional) —
+        every real order this system places must carry
+        ``"dsa-{proposal_uuid}"`` for Toss-side idempotency (design spec §3);
+        there is deliberately no code path that can omit it. There is also no
+        ``confirm_high_value_order`` parameter at all (removed, not merely
+        defaulted off) — the service layer hard-rejects any order estimated
+        at or above 100,000,000 KRW long before this call would ever be
+        reached, so this system must never be able to construct a request
+        that auto-confirms a high-value order.
+        """
+        if not self.is_order_live_enabled():
+            raise TossOrderNotLiveError(
+                "TOSS_ORDER_LIVE is not enabled; refusing to place a live order "
+                "(fetcher-level gate — design spec §3 dual gate)"
+            )
+        if not self._is_configured():
+            raise DataFetchError("[Toss] TOSS_CLIENT_ID/TOSS_CLIENT_SECRET not configured")
+        if is_toss_forbidden():
+            raise DataFetchError("[Toss] previously blocked by IP allow-list (403); skipped for this process")
+
+        body: Dict[str, Any] = {
+            "symbol": symbol,
+            "side": side,
+            "orderType": order_type,
+            "quantity": str(quantity),
+            "clientOrderId": client_order_id,
+        }
+        if price is not None:
+            body["price"] = str(price)
+
+        return self._request_write(_ORDERS_URL, json_body=body, account_seq=account_seq)
+
+    def cancel_order(self, account_seq: Any, order_id: str) -> Dict[str, Any]:
+        """Cancel an existing order (``POST /orders/{orderId}/cancel``,
+        ``ORDER`` rate-limit group).
+
+        SAFETY GATE (design spec v2 §3): cancellation now shares the exact
+        same ``TOSS_ORDER_LIVE`` gate as ``place_order`` — a live order can
+        only ever exist while live mode is/was enabled, and a real Toss POST
+        (even a cancel) must not be reachable in dry-run mode, full stop.
+        ``PortfolioOrderService.cancel_order`` only ever calls this for an
+        order this system's own audit log shows it placed, never an
+        arbitrary Toss order id."""
+        if not self.is_order_live_enabled():
+            raise TossOrderNotLiveError(
+                "TOSS_ORDER_LIVE is not enabled; refusing to cancel a live order "
+                "(fetcher-level gate — design spec §3 dual gate applies to cancel too)"
+            )
+        if not self._is_configured():
+            raise DataFetchError("[Toss] TOSS_CLIENT_ID/TOSS_CLIENT_SECRET not configured")
+        if is_toss_forbidden():
+            raise DataFetchError("[Toss] previously blocked by IP allow-list (403); skipped for this process")
+        return self._request_write(f"{_ORDERS_URL}/{order_id}/cancel", json_body={}, account_seq=account_seq)

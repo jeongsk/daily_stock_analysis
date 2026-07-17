@@ -19,6 +19,7 @@ from src.repositories.portfolio_repo import (
     PortfolioBusyError as RepoPortfolioBusyError,
     PortfolioRepository,
 )
+from src.storage import PortfolioFxRate
 
 logger = logging.getLogger(__name__)
 
@@ -1514,6 +1515,34 @@ class PortfolioService:
             to_currency=to_currency,
             as_of_date=as_of_date,
         )
+
+    def get_fx_rate_record(
+        self,
+        *,
+        from_currency: str,
+        to_currency: str,
+        as_of_date: date,
+    ) -> Optional[PortfolioFxRate]:
+        """Additive lookup (design spec v2 §3 FX fail-closed, reviewer
+        re-review major 1): returns the same direct-or-inverse
+        ``PortfolioFxRate`` row ``_convert_amount``/``convert_amount`` would
+        have used for this pair as of this date (``None`` if neither exists),
+        so a caller can also inspect that row's own ``updated_at`` wall-clock
+        timestamp. ``is_stale``/``fallback_1_to_1`` (what ``convert_amount``
+        already reports) only flag *data-quality* problems the FX refresh job
+        already knows about — they say nothing about how long ago the row was
+        actually written, which is the separate risk this method exists to
+        let a caller close. Deliberately does not change ``convert_amount``'s
+        existing signature or return shape (additive-only)."""
+        from_norm = self._normalize_currency(from_currency)
+        to_norm = self._normalize_currency(to_currency)
+        direct = self.repo.get_latest_fx_rate(from_currency=from_norm, to_currency=to_norm, as_of=as_of_date)
+        if direct is not None and direct.rate > 0:
+            return direct
+        inverse = self.repo.get_latest_fx_rate(from_currency=to_norm, to_currency=from_norm, as_of=as_of_date)
+        if inverse is not None and inverse.rate > 0:
+            return inverse
+        return None
 
     def _list_account_refresh_fx_currencies(
         self,

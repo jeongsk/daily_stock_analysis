@@ -757,6 +757,170 @@ class PortfolioBrokerLink(Base):
     )
 
 
+class PortfolioOrderProposal(Base):
+    """Two-step manual-approval order proposal (Toss Invest Phase 3 semi-automatic
+    orders). Additive table — no existing portfolio schema is touched.
+
+    Lifecycle v2 (design spec
+    docs/superpowers/specs/2026-07-17-toss-order-phase3-design.md §3/§4 — v2
+    redesign after a BLOCK-verdict review of the v1 lifecycle, which had no
+    state to represent "a live POST is in flight"):
+
+    ``pending`` -> ``executing`` -> ``executed`` | ``failed`` | ``outcome_unknown``;
+    ``pending`` -> ``canceled`` | ``expired`` | ``dry_run_executed``.
+
+    Only ``pending`` and ``outcome_unknown`` are non-terminal (``executing`` is
+    also non-terminal but is expected to resolve within one request — see
+    below); ``outcome_unknown`` resolves via ``POST .../reconcile``, which
+    re-POSTs the same idempotent ``clientOrderId`` to Toss until it converges
+    on ``executed`` or ``failed``. No transition is ever accepted out of a
+    terminal state. ``dry_run_executed`` never passes through ``executing`` —
+    dry-run never contacts Toss, so there is nothing to reserve against.
+
+    ``executing`` is entered by an atomic claim (single write transaction:
+    verify still ``pending`` + re-validate every cap + insert the reservation
+    in one go — design spec's "일일 한도 원자성" fix for a TOCTOU that let two
+    concurrent executes both pass the daily-cap check). The *actual* Toss
+    ``POST`` only happens after that reservation is durably committed — "로그
+    없으면 주문 없음": if the reservation commit fails, the POST is never
+    attempted. After the POST: an explicit Toss success or 4xx resolves
+    directly to ``executed``/``failed``; anything ambiguous (lost response,
+    timeout, a success response missing ``orderId``, a DB write failure right
+    after a successful POST, or Toss's own 409 ``request-in-progress``)
+    resolves to ``outcome_unknown`` instead of guessing — a wrong guess in
+    either direction (assuming success when it failed, or vice versa) is worse
+    than an explicit "go find out" state.
+
+    A proposal never writes to ``portfolio_trades`` directly — a filled order
+    is only reflected in the ledger later by the Phase 2 broker-link sync,
+    matching the design decision that an *unfilled* order is not yet a
+    holdings change.
+
+    ``symbol`` is the bare Toss-facing symbol (KR: 6-digit code, US: ticker) used
+    for every Toss API call; ``storage_symbol`` is the repository-canonical form
+    (e.g. ``"005930.KS"``) kept only for display/audit readability — it is never
+    sent to Toss.
+
+    ``est_amount_krw`` is the KRW-converted estimated order amount, recomputed
+    (not trusted from a stale read) at every checkpoint — proposal creation,
+    the atomic executing-claim, and every daily-cap sum — via the existing
+    portfolio FX conversion path (fail-closed: see
+    ``PortfolioOrderService.FxRateUnavailableError``). Once the row reaches
+    ``executing``, this column holds the *reserved* amount for the daily cap,
+    overwriting the proposal-time estimate.
+
+    ``reserved_at`` is set exactly once, the moment the row enters
+    ``executing`` — it is the anchor date for "does this reservation count
+    against today's daily cap" (design spec: while non-terminal, a
+    reservation counts against the KST date it was *reserved* on, indefinitely,
+    until reconciled). ``executed_at`` is set separately when the row resolves
+    to ``executed`` — if that happens to fall on a different KST calendar date
+    than ``reserved_at`` (a reservation straddling local midnight), the design
+    spec requires the daily-cap sum to count the amount on *both* dates,
+    conservatively (see ``PortfolioRepository`` daily-cap query).
+
+    ``expires_at`` implements the 10-minute proposal TTL, checked only while
+    still ``pending``. Expiry is lazily materialized (transitioned to
+    ``expired`` + an audit ``expired`` event) the next time the row is
+    read/listed/executed/canceled, rather than via a background sweeper —
+    there is no user-visible difference since ``execute``/``cancel`` against
+    an expired proposal must fail regardless.
+
+    ``toss_order_id`` is populated once Toss is known (or was, at the moment
+    of an ambiguous failure) to have accepted the order — normally at
+    ``status='executed'``, but also when an ``outcome_unknown`` transition
+    happens to already have Toss's ``orderId`` in hand (a successful POST
+    whose *result-persisting* DB write is what failed). It is the key used by
+    the separate "cancel a placed order" endpoint
+    (``POST .../orders/{toss_order_id}/cancel``) to prove an order was
+    self-issued (an audit trail must exist) before allowing cancellation —
+    distinct from ``status='canceled'``, which means the *proposal itself*
+    was withdrawn before ever reaching Toss. Per design spec, cancellation of
+    an ``executing``/``outcome_unknown`` proposal is refused outright
+    (``.../reconcile`` first) even if a ``toss_order_id`` happens to be known.
+    """
+
+    __tablename__ = 'portfolio_order_proposals'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, ForeignKey('portfolio_accounts.id'), nullable=False, index=True)
+    proposal_uuid = Column(String(36), nullable=False, unique=True, index=True)
+    symbol = Column(String(16), nullable=False)
+    storage_symbol = Column(String(16), nullable=False)
+    market = Column(String(8), nullable=False)  # kr/us
+    currency = Column(String(8), nullable=False)  # KRW/USD
+    side = Column(String(8), nullable=False)  # buy/sell
+    order_type = Column(String(8), nullable=False, default='LIMIT')  # LIMIT/MARKET
+    price = Column(Float)  # null for MARKET
+    quantity = Column(Float, nullable=False)
+    est_amount_krw = Column(Float, nullable=False)
+    status = Column(String(24), nullable=False, default='pending', index=True)
+    toss_order_id = Column(String(128), index=True)
+    created_at = Column(DateTime, nullable=False, index=True)
+    expires_at = Column(DateTime, nullable=False, index=True)
+    reserved_at = Column(DateTime, index=True)  # set once, on entering 'executing'
+    executed_at = Column(DateTime)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    __table_args__ = (
+        Index('ix_portfolio_order_proposal_account_status', 'account_id', 'status'),
+    )
+
+
+class PortfolioOrderAudit(Base):
+    """Append-only audit trail for every Toss order proposal/claim/execute/
+    cancel/reconcile event (Toss Invest Phase 3). Additive table.
+
+    There is intentionally no update/delete *API* for this table, and as of
+    the v2 design that is now also enforced at the SQLite level: a
+    ``BEFORE UPDATE``/``BEFORE DELETE`` trigger on this table raises
+    ``RAISE(ABORT, ...)`` for every row, so append-only is a database
+    invariant, not merely an application convention that a future bug (or a
+    manual `UPDATE`) could quietly violate (design spec §7 / Codex review
+    major finding: append-only was previously API-only). See
+    ``DatabaseManager._ensure_portfolio_order_audit_append_only_triggers``.
+
+    This table backs the daily KRW order-amount cap — though the *live*
+    cap query sums ``PortfolioOrderProposal.est_amount_krw`` directly (see
+    that model's docstring for why: a reservation must count once per
+    proposal, not once per audit event) — and is the "was this order actually
+    self-issued" check that gates the cancel-a-placed-order endpoint. Design
+    spec §7 risk note: if an audit insert cannot be durably written, the
+    triggering action itself must be treated as failed (loudly surfaced, not
+    silently swallowed) — a missing log entry must never let the daily cap be
+    silently bypassed.
+
+    ``created_at`` intentionally stores naive KST wall-clock time (not UTC),
+    matching ``PortfolioBrokerLink`` (see its docstring above) — the daily cap
+    is defined in KST calendar-date terms, so storing anything else would only
+    add a needless conversion at every cap computation.
+    """
+
+    __tablename__ = 'portfolio_order_audits'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, ForeignKey('portfolio_accounts.id'), nullable=False, index=True)
+    proposal_uuid = Column(String(36), nullable=False, index=True)
+    symbol = Column(String(16), nullable=False)
+    side = Column(String(8), nullable=False)
+    order_type = Column(String(8), nullable=False)
+    price = Column(Float)
+    quantity = Column(Float, nullable=False)
+    currency = Column(String(8), nullable=False)
+    est_amount_krw = Column(Float, nullable=False)
+    mode = Column(String(16))  # dry_run/live, null for proposal-stage events
+    # proposed/executing/executed/rejected/canceled/expired/failed/outcome_unknown/reconciled
+    event = Column(String(24), nullable=False)
+    toss_order_id = Column(String(128), index=True)
+    error_code = Column(String(64))
+    detail = Column(Text)  # JSON-encoded extra context
+    created_at = Column(DateTime, nullable=False, index=True)
+
+    __table_args__ = (
+        Index('ix_portfolio_order_audit_account_created', 'account_id', 'created_at'),
+    )
+
+
 class ConversationMessage(Base):
     """
     Agent 对话历史记录表
@@ -1293,6 +1457,7 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             self._ensure_intelligence_item_scope_values()
             self._ensure_schema_migration_record()
             self._ensure_intelligence_items_unique_index()
+            self._ensure_portfolio_order_audit_append_only_triggers()
 
             self._initialized = True
             logger.info(f"数据库初始化完成: {db_url}")
@@ -1592,6 +1757,40 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             return
 
         self._rebuild_intelligence_items_table()
+
+    def _ensure_portfolio_order_audit_append_only_triggers(self) -> None:
+        """Enforce ``portfolio_order_audits`` append-only at the SQLite level
+        (design spec v2 §7 / Codex review major finding: append-only had been
+        an application-layer convention only, with no DB-level backstop).
+
+        ``CREATE TRIGGER IF NOT EXISTS`` makes this idempotent across every
+        process start; ``RAISE(ABORT, ...)`` inside the trigger body aborts
+        the offending statement (and only that statement) with a SQLite
+        error, leaving every other write in the same transaction intact."""
+        if not self._is_sqlite_engine:
+            return
+        if not inspect(self._engine).has_table(PortfolioOrderAudit.__tablename__):
+            return
+
+        with self._engine.begin() as connection:
+            connection.execute(
+                text(
+                    "CREATE TRIGGER IF NOT EXISTS trg_portfolio_order_audits_no_update "
+                    "BEFORE UPDATE ON portfolio_order_audits "
+                    "BEGIN "
+                    "SELECT RAISE(ABORT, 'portfolio_order_audits is append-only: UPDATE is not permitted'); "
+                    "END"
+                )
+            )
+            connection.execute(
+                text(
+                    "CREATE TRIGGER IF NOT EXISTS trg_portfolio_order_audits_no_delete "
+                    "BEFORE DELETE ON portfolio_order_audits "
+                    "BEGIN "
+                    "SELECT RAISE(ABORT, 'portfolio_order_audits is append-only: DELETE is not permitted'); "
+                    "END"
+                )
+            )
 
     def _rebuild_intelligence_items_table(self) -> None:
         temporary_table = f"intelligence_items_recreate_tmp_{int(time.time() * 1_000_000_000)}"

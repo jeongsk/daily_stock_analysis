@@ -1790,8 +1790,17 @@ worker 会把 `triggered`、`skipped`、`degraded`、`failed` 写入 `alert_trig
 | `/api/v1/portfolio/links/{account_id}/sync` | POST | 同步该连动账户自链接边界之后的已成交订单（幂等）并返回对账结果 `{imported, skipped_duplicates, failed[], drift[]}` |
 | `/api/v1/portfolio/links` | GET | 查询当前生效（`active=true`）的连动账户列表 |
 | `/api/v1/portfolio/links/{account_id}` | DELETE | 解除连动（仅停用链接行，保留账户、流水与同步游标，便于日后用同一托斯账户重新连动） |
+| `/api/v1/portfolio/links/{account_id}/orders/proposals` | POST | 创建手动确认下单提案（Phase 3）：校验限额/买卖力/可卖数量后落库为 `pending`（10 分钟 TTL），尚未发送给 Toss |
+| `/api/v1/portfolio/links/{account_id}/orders/proposals` | GET | 按 `status` 查询该连动账户的下单提案列表 |
+| `/api/v1/portfolio/links/{account_id}/orders/proposals/{proposal_uuid}/execute` | POST | 执行提案（body 需 `confirm: true`，dry-run 下同样要求）：`TOSS_ORDER_LIVE` 未开启时为 dry-run（不会调用 Toss 下单接口），开启后才会真实下单 |
+| `/api/v1/portfolio/links/{account_id}/orders/proposals/{proposal_uuid}` | DELETE | 撤销一个仍处于 `pending` 的提案（尚未到达 Toss，与下面撤销已下单订单是两个不同的动作） |
+| `/api/v1/portfolio/links/{account_id}/orders/proposals/{proposal_uuid}/reconcile` | POST | 将处于 `executing`/`outcome_unknown`（结果不确定）的提案通过重新提交同一幂等 `clientOrderId` 收敛为最终结果 |
+| `/api/v1/portfolio/links/{account_id}/orders/{toss_order_id}/cancel` | POST | 撤销一笔已经下单成功的实盘订单，仅允许撤销本系统自己下的单（凭审计日志校验），`executing`/`outcome_unknown` 状态的提案需先 reconcile |
+| `/api/v1/portfolio/links/{account_id}/orders/{toss_order_id}` | GET | 只读查询一笔自建订单的当前状态（原样转发 Toss `Order` 结构） |
 
 > 查询类接口统一支持 `account_id`、`date_from`、`date_to`、`page`、`page_size` 等常见筛选参数；事件列表会返回统一的 `items`、`total`、`page`、`page_size` 结构。托斯连动只调用只读的账户/持仓/订单查询接口，从不调用下单、改单、撤单接口；未配置 `TOSS_CLIENT_ID`/`TOSS_CLIENT_SECRET` 时链接/同步接口返回明确的 `400 toss-not-configured`。链接时刻（获取持仓请求前后）存在极短的成交时间盲区：期间成交若未反映进持仓响应，可能被基准时间线之前排除，随后对账会以持仓数量不一致的形式呈现；建议在收盘后执行链接以避免该窗口。
+>
+> 手动确认下单（Phase 3，v3）默认 dry-run：只有设置 `TOSS_ORDER_LIVE=true`（严格解析，去除首尾空白并转小写后必须**恰好等于** `"true"`，其他任何非空取值都会记录 ERROR 日志并强制 dry-run）且执行请求 body 携带 `confirm: true` 才会真实下单；下单相关全部写接口（提案创建/执行/取消、订单取消、reconcile，含 dry-run）都要求 `ADMIN_AUTH_ENABLED=true` 且请求带已验证会话，否则 403 `order-auth-required`——本系统为单一管理员共享认证，通过认证的会话可管理全部账户，不存在按账户 `owner_id` 核对调用方身份的请求头机制（未经校验的请求头不构成访问控制）。状态机为 `pending → executing（原子 claim：单一写事务内重新校验+限额复核+登记 reservation）→ executed/failed/outcome_unknown`，`pending → canceled/expired/dry_run_executed`；只有 reservation 落库成功后才会真正调用 Toss 下单接口，响应丢失/超时/`orderId` 缺失/下单后落库失败/`request-in-progress` 均归入 `outcome_unknown`（非终态），需调用 `.../reconcile` 用同一 `clientOrderId` 重新提交收敛（`idempotency-key-conflict` 会作为缺陷单独报出；reconcile 重新 POST 成功但仍缺失 `orderId` 时同样保持 `outcome_unknown` 并记录审计事件，同时返回明确错误，而非静默吞掉）。默认仅支持限价单（`TOSS_ORDER_ALLOW_MARKET=true` 才允许市价单），单笔/当日累计金额上限分别由 `TOSS_ORDER_MAX_AMOUNT_KRW`（默认 100 万韩元）与 `TOSS_ORDER_DAILY_MAX_AMOUNT_KRW`（默认 500 万韩元，按 KST 日期计算，dry-run 不计入）控制；`executing`/`outcome_unknown` 的 reservation 在确认前**不区分日期、全额**计入任一日期的当日累计（v3：即便跨零点，前一天尚未确认的 reservation 也会计入次日的额度判定，防止经此漏洞绕过日限额），两者取值须为有限正数，否则强制回退默认值；1 亿韩元以上订单无论如何设置都会被直接拒绝。非 KRW 币种订单在汇率缺失/stale（`is_stale=True`）/1:1 fallback 时会直接拒绝（fail-closed）；此外即便 `is_stale=False`，只要该汇率记录自身的更新时间超过 24 小时也会被拒绝（v3：`is_stale` 只反映刷新任务自身的判断，不代表数据实际写入时间）。提案生成与执行时均会重新校验限额与买卖力/可卖数量；`clientOrderId` 保证同一提案重复执行/reconcile 时的幂等性。订单执行本身不写入持仓账本——体现在持仓上的仍是 Phase 2 同步。
 
 ### 使用行为说明
 
