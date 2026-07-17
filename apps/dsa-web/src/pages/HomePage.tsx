@@ -504,7 +504,7 @@ const HomePage: React.FC = () => {
     const requiredNeedsAction = setupStatus.checks
       .filter((check) => check.required && check.status === 'needs_action')
       .map((check) => check.title);
-    return requiredNeedsAction.slice(0, 3).join(uiLanguage === 'en' ? ', ' : '、');
+    return requiredNeedsAction.slice(0, 3).join(uiLanguage === 'zh' ? '、' : ', ');
   }, [setupStatus, uiLanguage]);
 
   const handleTaskFailed = useCallback(
