@@ -98,12 +98,32 @@ class NewsIntelItem(BaseModel):
     title: str = Field(..., description="新闻标题")
     snippet: str = Field("", description="新闻摘要（最多200字）")
     url: str = Field(..., description="新闻链接")
+    # Additive (B1/B2). Optional so old clients keep working unchanged.
+    original_title: Optional[str] = Field(None, description="原文标题（仅翻译成功时存在）")
+    original_snippet: Optional[str] = Field(None, description="原文摘要（仅翻译成功时存在）")
+    translation_status: Optional[str] = Field(
+        None,
+        description="translated|unavailable|original|skipped",
+    )
+    source_language: Optional[str] = Field(
+        None,
+        description="zh|en|ko|mixed|unknown（逐条语言检测结果）",
+    )
+    provenance: Optional[str] = Field(
+        None,
+        description="direct|pool（直接检索新闻 vs intelligence 资讯池）",
+    )
+    source: Optional[str] = Field(None, description="新闻来源 / feed 名称")
+    source_type: Optional[str] = Field(None, description="rss|newsnow|search")
+    published_at: Optional[str] = Field(None, description="发布时间（ISO，仅展示）")
 
     model_config = ConfigDict(json_schema_extra={
         "example": {
             "title": "公司发布业绩快报，营收同比增长 20%",
             "snippet": "公司公告显示，季度营收同比增长 20%...",
-            "url": "https://example.com/news/123"
+            "url": "https://example.com/news/123",
+            "provenance": "direct",
+            "source_type": "search",
         }
     })
 

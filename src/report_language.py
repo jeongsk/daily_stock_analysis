@@ -785,6 +785,31 @@ def has_disallowed_report_script(requested_language: str, text: str) -> bool:
     )
 
 
+def detect_text_language(text: Any, *, ko_threshold: float = 0.15) -> str:
+    """Classify a short news title/snippet as ko/zh/en/mixed/unknown.
+
+    Reuses the same Unicode ranges as :func:`detect_report_script_mismatch`
+    (Hangul U+AC00–U+D7A3, Hanzi U+4E00–U+9FFF) but with a lower Korean
+    threshold so a mixed Korean/English headline is still treated as Korean
+    (avoiding redundant translation of already-Korean items). Used by the
+    news-card translation flow (single source of truth for per-item language).
+    """
+    raw = str(text or "")
+    stripped = raw.strip()
+    if not stripped:
+        return "unknown"
+    non_ws = len(stripped)
+    hangul = sum(1 for c in raw if 0xAC00 <= ord(c) <= 0xD7A3)
+    hanzi = sum(1 for c in raw if 0x4E00 <= ord(c) <= 0x9FFF)
+    if hangul / non_ws >= ko_threshold:
+        return "ko"
+    if hanzi > 0 and hanzi >= hangul:
+        return "zh"
+    if hangul == 0 and hanzi == 0:
+        return "en"
+    return "mixed"
+
+
 def format_net_krw_localized(value: Any, language: Optional[str]) -> str:
     """부호 붙은 순매수 금액(원)을 로케일 단위로 포맷(+ = 순매수).
 

@@ -197,6 +197,44 @@ class IntelligenceRepository:
         normalized = str(value or "").strip()
         return normalized or INTELLIGENCE_ITEM_NULL_SCOPE_VALUE
 
+    def list_items_for_report(
+        self,
+        *,
+        scope_type: str,
+        scope_value: Optional[str] = None,
+        market: Optional[str] = None,
+        start_at: datetime,
+        end_at: datetime,
+        limit: int = 50,
+    ) -> List[IntelligenceItem]:
+        """Time-bounded pool query anchored to a historical report timestamp.
+
+        Unlike :meth:`list_items` (which anchors ``days``/``published_days`` to
+        ``datetime.now()``), this helper takes explicit ``start_at``/``end_at``
+        bounds so a historical report can be reproduced against the pool as it
+        existed around ``record.created_at``. ``published_at`` is coalesced to
+        ``fetched_at`` when missing. No ``now()`` reference is used.
+        """
+        conditions = [IntelligenceItem.scope_type == scope_type]
+        if scope_value:
+            conditions.append(
+                IntelligenceItem.scope_value == self._normalize_scope_value(scope_value)
+            )
+        if market:
+            conditions.append(IntelligenceItem.market == market)
+        effective_time = func.coalesce(IntelligenceItem.published_at, IntelligenceItem.fetched_at)
+        conditions.append(effective_time >= start_at)
+        conditions.append(effective_time <= end_at)
+        safe_limit = max(1, min(int(limit), 100))
+        with self.db.get_session() as session:
+            rows = session.execute(
+                select(IntelligenceItem)
+                .where(and_(*conditions))
+                .order_by(desc(effective_time), desc(IntelligenceItem.id))
+                .limit(safe_limit)
+            ).scalars().all()
+            return list(rows)
+
     def apply_retention(self, retention_days: int) -> int:
         cutoff = datetime.now() - timedelta(days=max(1, int(retention_days)))
         with self.db.get_session() as session:

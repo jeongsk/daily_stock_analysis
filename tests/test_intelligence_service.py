@@ -310,6 +310,41 @@ class IntelligenceServiceTestCase(unittest.TestCase):
         self.assertEqual(result["saved_count"], 1)
         self.assertEqual(result["sample_items"][0]["url"], "https://news.example.com/good")
 
+
+    def test_rss_encoded_html_description_is_decoded_and_stripped(self) -> None:
+        fixture = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<rss version="2.0"><channel><item>'
+            '<title>경제상황 평가(2026.7월)</title>'
+            '<link>https://www.bok.or.kr/portal/bbs/P0000559/view.do?nttId=1</link>'
+            '<description>&amp;lt;p style=&amp;quot;font-family:Malgun Gothic&amp;quot;&amp;gt;'
+            '한국은행은 최근 국내외 경제상황을 평가하였다.&amp;lt;/p&amp;gt;</description>'
+            '<pubDate>Fri, 17 Jul 2026 01:00:00 GMT</pubDate>'
+            '</item></channel></rss>'
+        ).encode("utf-8")
+
+        entries = self.service._parse_feed(fixture, source_name="Bank of Korea Press Releases", limit=5)
+
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0].title, "경제상황 평가(2026.7월)")
+        self.assertEqual(entries[0].summary, "한국은행은 최근 국내외 경제상황을 평가하였다.")
+        self.assertNotIn("&lt;", entries[0].summary)
+        self.assertNotIn("style=", entries[0].summary)
+
+    def test_clean_plain_rss_description_is_unchanged(self) -> None:
+        fixture = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<rss version="2.0"><channel><item>'
+            '<title>Plain item</title>'
+            '<link>https://news.example.com/plain</link>'
+            '<description>한국은행 기준금리 동결 및 전망 유지</description>'
+            '</item></channel></rss>'
+        ).encode("utf-8")
+
+        entries = self.service._parse_feed(fixture, source_name="Plain Feed", limit=5)
+
+        self.assertEqual(entries[0].summary, "한국은행 기준금리 동결 및 전망 유지")
+
     def test_source_templates_can_create_disabled_source(self) -> None:
         templates = self.service.list_source_templates(market="hk")
         self.assertGreaterEqual(templates["total"], 1)
@@ -317,6 +352,62 @@ class IntelligenceServiceTestCase(unittest.TestCase):
         self.assertEqual(created["name"], "hkex-template-copy")
         self.assertEqual(created["market"], "hk")
         self.assertFalse(created["enabled"])
+
+    def test_source_templates_include_kr_and_us_multilingual_feeds(self) -> None:
+        kr_templates = self.service.list_source_templates(market="kr")
+        kr_ids = {item["template_id"] for item in kr_templates["items"]}
+        self.assertIn("kr-yna-economy", kr_ids)
+        self.assertIn("kr-bok-press", kr_ids)
+
+        us_templates = self.service.list_source_templates(market="us")
+        us_ids = {item["template_id"] for item in us_templates["items"]}
+        self.assertIn("us-fed-press", us_ids)
+        self.assertIn("us-nasdaq-stocks", us_ids)
+        # Existing SEC template is preserved on the us market.
+        self.assertIn("sec-company-news", us_ids)
+
+        for item in kr_templates["items"] + us_templates["items"]:
+            if item["template_id"].startswith(("kr-", "us-fed-", "us-nasdaq-")):
+                self.assertEqual(item["source_type"], "rss")
+                self.assertEqual(item["scope_type"], "market")
+
+    def test_create_source_from_kr_yonhap_template(self) -> None:
+        created = self.service.create_source_from_template(
+            "kr-yna-economy",
+            {"enabled": False, "name": "yna-template-copy"},
+        )
+        self.assertEqual(created["name"], "yna-template-copy")
+        self.assertEqual(created["market"], "kr")
+        self.assertEqual(created["source_type"], "rss")
+        self.assertEqual(created["url"], "https://www.yna.co.kr/rss/economy.xml")
+        self.assertFalse(created["enabled"])
+
+    def test_create_default_sources_includes_multilingual_feeds(self) -> None:
+        first = self.service.create_default_sources({"enabled": False})
+        second = self.service.create_default_sources({"enabled": False})
+
+        # 3 original RSS + 4 multilingual RSS + 5 NewsNow = 12 built-in templates.
+        self.assertEqual(first["total"], 12)
+        self.assertEqual(first["created_count"], 12)
+        self.assertEqual(second["created_count"], 0)
+
+        all_sources = self.service.list_sources(page_size=100)
+        names = {item["name"] for item in all_sources["items"]}
+        self.assertIn("Yonhap Economy (\uc5f0\ud569\ub274\uc2a4 \uacbd\uc81c)", names)
+        self.assertIn("Federal Reserve All Press Releases", names)
+
+    def test_multilingual_rss_urls_pass_ssrf_guard(self) -> None:
+        # Public hosts must pass the existing SSRF validation (no private/loopback).
+        for url in [
+            "https://www.yna.co.kr/rss/economy.xml",
+            "https://www.bok.or.kr/portal/bbs/B0000552/news.rss?menuNo=200690",
+            "https://www.federalreserve.gov/feeds/press_all.xml",
+            "https://www.nasdaq.com/feed/rssoutbound?category=Stocks",
+        ]:
+            self.service._validate_url(url)  # must not raise
+        # Private/loopback hosts are still rejected (guard unchanged).
+        with self.assertRaises(IntelligenceServiceError):
+            self.service._validate_url("http://127.0.0.1/rss.xml")
 
     def test_newsnow_source_fetches_json_items(self) -> None:
         source = self.service.create_source({

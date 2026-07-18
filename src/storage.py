@@ -274,6 +274,36 @@ class IntelligenceItem(Base):
     )
 
 
+class NewsTranslationCache(Base):
+    """Korean news card translation cache (additive, ko-only lazy batch).
+
+    One row per (normalized title+snippet pair, target language). Translation
+    depends only on the original content, so cached rows are static. Rows with
+    ``translation_status='unavailable'`` are short-TTL retry markers.
+    """
+
+    __tablename__ = 'news_translation_cache'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    content_hash = Column(String(64), nullable=False, index=True)
+    target_language = Column(String(8), nullable=False, index=True)
+    source_language = Column(String(16), nullable=True)
+    translated_title = Column(String(600), nullable=True)
+    translated_snippet = Column(Text, nullable=True)
+    translation_status = Column(String(16), nullable=False)  # translated|unavailable
+    model_used = Column(String(128), nullable=True)  # diagnostic only, not routing
+    created_at = Column(DateTime, default=datetime.now, index=True)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, index=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            'content_hash',
+            'target_language',
+            name='uix_news_translation_hash_lang',
+        ),
+    )
+
+
 class FundamentalSnapshot(Base):
     """
     基本面上下文快照（P0 write-only）。
@@ -1455,6 +1485,7 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             self._ensure_decision_signal_profile_schema()
             self._ensure_decision_signal_outcome_attribution_schema()
             self._ensure_intelligence_item_scope_values()
+            self._ensure_news_translation_cache_schema()
             self._ensure_schema_migration_record()
             self._ensure_intelligence_items_unique_index()
             self._ensure_portfolio_order_audit_append_only_triggers()
@@ -1580,6 +1611,37 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             connection.exec_driver_sql(
                 "CREATE INDEX IF NOT EXISTS ix_decision_signal_outcome_stats_attribution "
                 f"ON {table_name} (engine_version, dominant_attribution, horizon)"
+            )
+
+    def _ensure_news_translation_cache_schema(self) -> None:
+        """Create the additive news_translation_cache table on SQLite.
+
+        New table only (no data migration). ``checkfirst=True`` makes it
+        idempotent across boots. Non-SQLite engines skip this (existing
+        ``_ensure_*`` convention); those deployments simply re-translate on
+        each request since the cache table is absent.
+        """
+        if not self._is_sqlite_engine:
+            return
+        try:
+            NewsTranslationCache.__table__.create(self._engine, checkfirst=True)
+            with self._engine.begin() as connection:
+                connection.exec_driver_sql(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uix_news_translation_hash_lang "
+                    "ON news_translation_cache (content_hash, target_language)"
+                )
+                connection.exec_driver_sql(
+                    "CREATE INDEX IF NOT EXISTS ix_news_translation_cache_content_hash "
+                    "ON news_translation_cache (content_hash)"
+                )
+                connection.exec_driver_sql(
+                    "CREATE INDEX IF NOT EXISTS ix_news_translation_cache_target_language "
+                    "ON news_translation_cache (target_language)"
+                )
+        except OperationalError as exc:
+            logger.warning(
+                "news_translation_cache table creation skipped (continuing): %s",
+                exc,
             )
 
     def _ensure_decision_signal_profile_indexes(self) -> None:

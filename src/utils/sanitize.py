@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import html
 import re
+from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import parse_qsl, urlsplit
 
@@ -72,6 +74,48 @@ _TOKEN_LIKE_PATTERN = re.compile(
     r"\b(?:sk-[a-z0-9_\-]{16,}|xox[baprs]-[a-z0-9\-]{16,}|gh[pousr]_[a-z0-9_]{20,})\b",
     re.IGNORECASE,
 )
+_HTML_TAG_PATTERN = re.compile(
+    r"</?[A-Za-z][A-Za-z0-9:-]*(?:\s[^>]*)?/?>|<!--.*?-->|<!\[CDATA\[.*?\]\]>",
+    re.DOTALL,
+)
+_HTML_BLOCK_TAGS = {
+    "address",
+    "article",
+    "aside",
+    "blockquote",
+    "br",
+    "dd",
+    "div",
+    "dl",
+    "dt",
+    "figcaption",
+    "figure",
+    "footer",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "header",
+    "hr",
+    "li",
+    "main",
+    "nav",
+    "ol",
+    "p",
+    "pre",
+    "section",
+    "table",
+    "tbody",
+    "td",
+    "tfoot",
+    "th",
+    "thead",
+    "tr",
+    "ul",
+}
+_HTML_SUPPRESSED_TAGS = {"script", "style", "noscript"}
 
 
 def sanitize_diagnostic_text(text: Any, *, max_length: int = 300) -> str:
@@ -85,6 +129,66 @@ def sanitize_diagnostic_text(text: Any, *, max_length: int = 300) -> str:
     sanitized = re.sub(r"(?i)(token|secret|password|sendkey)([=:]\s*)[^\s,;&]+", r"\1\2[REDACTED]", sanitized)
     sanitized = re.sub(r"https?://[^\s]+", "[REDACTED_URL]", sanitized)
     return " ".join(sanitized.split())[:max_length]
+
+class _PlainTextHTMLParser(HTMLParser):
+    """Collect display text from trusted-as-data HTML without executing markup."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._parts: list[str] = []
+        self._suppressed_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        tag_name = tag.lower()
+        if tag_name in _HTML_SUPPRESSED_TAGS:
+            self._suppressed_depth += 1
+            return
+        if tag_name in _HTML_BLOCK_TAGS:
+            self._parts.append(" ")
+
+    def handle_endtag(self, tag: str) -> None:
+        tag_name = tag.lower()
+        if tag_name in _HTML_SUPPRESSED_TAGS:
+            self._suppressed_depth = max(0, self._suppressed_depth - 1)
+            return
+        if tag_name in _HTML_BLOCK_TAGS:
+            self._parts.append(" ")
+
+    def handle_data(self, data: str) -> None:
+        if self._suppressed_depth <= 0 and data:
+            self._parts.append(data)
+
+    def get_text(self) -> str:
+        return "".join(self._parts)
+
+
+def normalize_html_plain_text(value: Any) -> str:
+    """Return safe plain text for RSS/HTML descriptions.
+
+    The function treats upstream HTML as inert data: it repeatedly decodes HTML
+    entities to handle practical double-escaped feeds, strips markup with
+    ``HTMLParser`` only when the decoded text contains real-looking tags, and
+    collapses whitespace while preserving Unicode content such as Korean text.
+    Already-clean one-line text is returned unchanged apart from the final
+    whitespace normalization applied to all feed snippets.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return ""
+
+    for _ in range(3):
+        decoded = html.unescape(text)
+        if decoded == text:
+            break
+        text = decoded
+
+    if _HTML_TAG_PATTERN.search(text):
+        parser = _PlainTextHTMLParser()
+        parser.feed(text)
+        parser.close()
+        text = parser.get_text()
+
+    return " ".join(text.split())
 
 
 def redact_sensitive_mapping(obj: Any) -> Any:

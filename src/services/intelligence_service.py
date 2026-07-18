@@ -7,7 +7,6 @@ import hashlib
 import ipaddress
 import json
 import logging
-import re
 import socket
 import threading
 from dataclasses import dataclass
@@ -24,6 +23,7 @@ from src.config import Config, get_config
 from src.repositories.intelligence_repo import IntelligenceRepository
 from src.storage import IntelligenceSource, INTELLIGENCE_ITEM_NULL_SCOPE_VALUE
 from src.services.run_diagnostics import sanitize_diagnostic_text
+from src.utils.sanitize import normalize_html_plain_text
 
 logger = logging.getLogger(__name__)
 _ALLOWED_SOURCE_TYPES = {"rss", "atom", "newsnow"}
@@ -64,6 +64,42 @@ _BUILTIN_SOURCE_TEMPLATES = [
         "scope_type": "market",
         "market": "global",
         "description": "Public market news RSS for global market context. Test before enabling.",
+    },
+    {
+        "template_id": "kr-yna-economy",
+        "name": "Yonhap Economy (\uc5f0\ud569\ub274\uc2a4 \uacbd\uc81c)",
+        "source_type": "rss",
+        "url": "https://www.yna.co.kr/rss/economy.xml",
+        "scope_type": "market",
+        "market": "kr",
+        "description": "Public Yonhap economy RSS for Korean market evidence. Test before enabling.",
+    },
+    {
+        "template_id": "kr-bok-press",
+        "name": "Bank of Korea Press Releases (\ud55c\uad6d\uc740\ud589 \ubcf4\ub3c4\uc790\ub8cc)",
+        "source_type": "rss",
+        "url": "https://www.bok.or.kr/portal/bbs/B0000552/news.rss?menuNo=200690",
+        "scope_type": "market",
+        "market": "kr",
+        "description": "Bank of Korea all press releases RSS for Korean macro evidence. Test before enabling.",
+    },
+    {
+        "template_id": "us-fed-press",
+        "name": "Federal Reserve All Press Releases",
+        "source_type": "rss",
+        "url": "https://www.federalreserve.gov/feeds/press_all.xml",
+        "scope_type": "market",
+        "market": "us",
+        "description": "Federal Reserve all press releases RSS for US macro evidence. Test before enabling.",
+    },
+    {
+        "template_id": "us-nasdaq-stocks",
+        "name": "Nasdaq Stocks Feed",
+        "source_type": "rss",
+        "url": "https://www.nasdaq.com/feed/rssoutbound?category=Stocks",
+        "scope_type": "market",
+        "market": "us",
+        "description": "Nasdaq Stocks RSS for US market context. Test before enabling.",
     },
 ]
 _NEWSNOW_DEFAULT_SOURCE_DEFS = [
@@ -724,8 +760,8 @@ class IntelligenceService:
             "source_id": item.source_id,
             "source_name": item.source_name,
             "source_type": item.source_type,
-            "title": item.title,
-            "summary": item.summary,
+            "title": normalize_html_plain_text(item.title),
+            "summary": normalize_html_plain_text(item.summary),
             "url": item.url,
             "source": item.source,
             "published_at": IntelligenceService._iso(item.published_at),
@@ -768,7 +804,7 @@ class IntelligenceService:
 
     @staticmethod
     def _clean_text(value: str) -> str:
-        return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", value or "")).strip()
+        return normalize_html_plain_text(value)
 
     @staticmethod
     def _parse_datetime(value: str) -> Optional[datetime]:

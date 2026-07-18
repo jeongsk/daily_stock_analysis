@@ -89,4 +89,78 @@ describe('ReportNews', () => {
 
     expect(await screen.findByText('重试成功')).toBeInTheDocument();
   });
+
+  it('renders Korean translated news first with original text and pool provenance', async () => {
+    vi.mocked(historyApi.getNews).mockResolvedValue({
+      total: 1,
+      items: [
+        {
+          title: '연준 금리 인하',
+          snippet: '시장이 상승했습니다.',
+          url: 'https://example.com/fed',
+          originalTitle: 'Fed cuts rates',
+          originalSnippet: 'Markets rally.',
+          translationStatus: 'translated',
+          sourceLanguage: 'en',
+          provenance: 'pool',
+          sourceType: 'rss',
+          source: 'Federal Reserve All Press Releases',
+        },
+      ],
+    });
+
+    render(<ReportNews recordId={1} language="ko" />);
+
+    expect(await screen.findByText('연준 금리 인하')).toBeInTheDocument();
+    expect(screen.getByText('Fed cuts rates')).toBeInTheDocument();
+    expect(screen.getByText('RSS · Federal Reserve All Press Releases')).toBeVisible();
+    expect(screen.getByLabelText('뉴스 원문')).toBeInTheDocument();
+  });
+
+  it('renders unavailable badge and keeps original text', async () => {
+    vi.mocked(historyApi.getNews).mockResolvedValue({
+      total: 1,
+      items: [
+        {
+          title: 'Fed cuts rates',
+          snippet: 'Markets rally.',
+          url: 'https://example.com/fed',
+          translationStatus: 'unavailable',
+          sourceLanguage: 'en',
+          provenance: 'pool',
+          sourceType: 'newsnow',
+          source: 'cls-hot',
+        },
+      ],
+    });
+
+    render(<ReportNews recordId={1} language="ko" />);
+
+    expect(await screen.findByText('Fed cuts rates')).toBeInTheDocument();
+    expect(screen.getByText('번역 불가')).toBeVisible();
+    expect(screen.getByText('NewsNow · cls-hot')).toBeVisible();
+    expect(screen.queryByText('원문')).not.toBeInTheDocument();
+  });
+
+  it('keeps skipped or legacy responses as a single block', async () => {
+    vi.mocked(historyApi.getNews).mockResolvedValue({
+      total: 1,
+      items: [
+        {
+          title: 'Legacy title',
+          snippet: 'Legacy snippet',
+          url: 'https://example.com/legacy',
+          translationStatus: 'skipped',
+          provenance: 'direct',
+          sourceType: 'search',
+        },
+      ],
+    });
+
+    render(<ReportNews recordId={1} language="en" />);
+
+    expect(await screen.findByText('Legacy title')).toBeInTheDocument();
+    expect(screen.getByText('Search')).toBeVisible();
+    expect(screen.queryByText('Original')).not.toBeInTheDocument();
+  });
 });

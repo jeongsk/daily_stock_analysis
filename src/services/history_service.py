@@ -42,6 +42,8 @@ from src.schemas.decision_action import (
     display_operation_advice_for_result,
 )
 from src.schemas.decision_scale import extract_decision_guardrail_reason
+from src.services.news_merge_service import NewsCardMerger
+from src.services.news_translation_service import NewsTranslationService
 from src.utils.sniper_points import find_sniper_points
 from src.utils.data_processing import (
     extract_realtime_detail_fields,
@@ -50,11 +52,27 @@ from src.utils.data_processing import (
     signal_attribution_has_content,
     signal_attribution_weight_items,
 )
+from src.utils.sanitize import normalize_html_plain_text
 
 if TYPE_CHECKING:
     from src.analyzer import AnalysisResult
 
 logger = logging.getLogger(__name__)
+
+
+def _record_report_language(record: Any) -> Optional[str]:
+    """Best-effort report_language extraction from persisted record payloads."""
+    for attr in ("raw_result", "context_snapshot"):
+        payload = parse_json_field(getattr(record, attr, None))
+        if not isinstance(payload, dict):
+            continue
+        direct = payload.get("report_language")
+        if direct:
+            return str(direct)
+        meta = payload.get("meta") or payload.get("report_meta")
+        if isinstance(meta, dict) and meta.get("report_language"):
+            return str(meta.get("report_language"))
+    return None
 
 
 class MarkdownReportGenerationError(Exception):
@@ -391,7 +409,7 @@ class HistoryService:
             logger.error(f"resolve_and_get_detail failed for {record_id}: {e}", exc_info=True)
             return None
 
-    def resolve_and_get_news(self, record_id: str, limit: int = 20) -> List[Dict[str, str]]:
+    def resolve_and_get_news(self, record_id: str, limit: int = 20) -> List[Dict[str, Any]]:
         """
         Resolve record_id (int PK or query_id string) and return associated news.
 
@@ -407,7 +425,32 @@ class HistoryService:
             if not record:
                 logger.warning(f"resolve_and_get_news: record not found for {record_id}")
                 return []
-            return self.get_news_intel(query_id=record.query_id, limit=limit)
+            direct_items = self._format_direct_news_records(
+                self.db.get_news_intel_by_query_id(query_id=record.query_id, limit=limit)
+                or self._fallback_news_by_analysis_context(query_id=record.query_id, limit=limit)
+            )
+            # Merge direct news with relevant intelligence_items pool rows (B1).
+            # Fail-open: any merge error leaves the direct items intact.
+            try:
+                merged_items = NewsCardMerger().merge_for_report(
+                    record=record, direct_items=direct_items, limit=limit,
+                )
+            except Exception as exc:
+                logger.warning("news card merge failed (fail-open, direct only): %s", exc)
+                merged_items = direct_items
+            # Korean-only lazy batch translation (B2). Fail-open: failures keep
+            # the merged items with translation_status=unavailable/original/skipped.
+            report_language = normalize_report_language(
+                _record_report_language(record)
+            )
+            try:
+                final_items = NewsTranslationService().translate_items(
+                    merged_items, report_language,
+                )
+            except Exception as exc:
+                logger.warning("news translation failed (fail-open, originals kept): %s", exc)
+                final_items = merged_items
+            return final_items
         except Exception as e:
             logger.error(f"resolve_and_get_news failed for {record_id}: {e}", exc_info=True)
             return []
@@ -647,11 +690,11 @@ class HistoryService:
 
             items: List[Dict[str, str]] = []
             for record in records:
-                snippet = (record.snippet or "").strip()
+                snippet = normalize_html_plain_text(record.snippet or "")
                 if len(snippet) > 200:
                     snippet = f"{snippet[:197]}..."
                 items.append({
-                    "title": record.title,
+                    "title": normalize_html_plain_text(record.title),
                     "snippet": snippet,
                     "url": record.url,
                 })
@@ -688,6 +731,27 @@ class HistoryService:
         except Exception as e:
             logger.error(f"根据 record_id 查询新闻情报失败: {e}", exc_info=True)
             return []
+
+    @staticmethod
+    def _format_direct_news_records(records: List[Any]) -> List[Dict[str, Any]]:
+        """Format direct query-linked news and attach public provenance metadata."""
+        items: List[Dict[str, Any]] = []
+        for row in records:
+            snippet = normalize_html_plain_text(getattr(row, "snippet", "") or "")
+            if len(snippet) > 200:
+                snippet = f"{snippet[:197]}..."
+            published = getattr(row, "published_date", None) or getattr(row, "fetched_at", None)
+            items.append({
+                "title": normalize_html_plain_text(getattr(row, "title", "") or ""),
+                "snippet": snippet,
+                "url": getattr(row, "url", "") or "",
+                "provenance": "direct",
+                "source": getattr(row, "source", None) or getattr(row, "provider", None) or "search",
+                "source_type": "search",
+                "published_at": published.isoformat() if isinstance(published, datetime) else None,
+                "_published_dt": published if isinstance(published, datetime) else None,
+            })
+        return items
 
     def _fallback_news_by_analysis_context(self, query_id: str, limit: int) -> List[Any]:
         """

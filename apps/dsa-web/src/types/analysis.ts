@@ -579,6 +579,14 @@ export interface NewsIntelItem {
   title: string;
   snippet: string;
   url: string;
+  originalTitle?: string | null;
+  originalSnippet?: string | null;
+  translationStatus?: 'translated' | 'unavailable' | 'original' | 'skipped' | string | null;
+  sourceLanguage?: 'zh' | 'en' | 'ko' | 'mixed' | 'unknown' | string | null;
+  provenance?: 'direct' | 'pool' | string | null;
+  source?: string | null;
+  sourceType?: 'rss' | 'newsnow' | 'search' | string | null;
+  publishedAt?: string | null;
 }
 
 /** News response */

@@ -6,9 +6,10 @@ Issue #1707 的首版能力聚焦“合规资讯源采集、本地沉淀、可�
 
 - 支持配置 RSS / Atom HTTP(S) 资讯源。
 - 支持 NewsNow HTTP JSON 源，默认内置财联社热门、雪球热门股票、华尔街见闻快讯、金十数据和格隆汇事件等主流财经源。
+- 内置多语言 RSS 源（韩国语/英语），覆盖 SEC、HKEX、MarketWatch 以及 연합뉴스 경제·한국은행·Federal Reserve·Nasdaq Stocks，便于 A 股以外市场（kr/us/global）的证据补充。
 - 支持查询内置 RSS/Atom/NewsNow 模板，并可从模板创建可测试、可启停的资讯源；也可以一键创建全部内置默认源。
 - 保存资讯源配置、启用状态、作用域和最近一次拉取状态。
-- 拉取条目落库到 `intelligence_items`，保存标题、摘要、URL、来源、发布时间、拉取时间、市场与作用域。
+- 拉取条目落库到 `intelligence_items`，保存标题、摘要、URL、来源、发布时间、拉取时间、市场与作用域；RSS/Atom/NewsNow 标题与摘要在入库前会按安全纯文本归一化（解码 HTML 实体、剥离标签、折叠空白并保留 Unicode/韩国语正文），历史脏数据在报告页读取时也会防御性归一化。
 - 按 URL 去重；无 URL 条目使用 `no-url:intel:<hash>` 兜底键。
 - 支持 `symbol` / `market` / `sector` 作用域，以及 `cn` / `hk` / `us` / `jp` / `kr` / `tw` / `global` 市场标记。
 - 拉取批处理采用 fail-open：单个源失败不会阻塞其他源或主分析链路。
@@ -101,6 +102,19 @@ GET {NEWSNOW_BASE_URL}/api/s?id=cls-hot
 - `gelonghui`：格隆汇事件，偏港股和中概股上下文。
 
 如果需要更多国内平台，可以继续通过 `POST /sources` 手动添加 NewsNow 源，`source_type=newsnow`，`url` 填 `https://<your-newsnow>/api/s?id=<source_id>`。如果更偏好 RSS，也可以用 RSSHub 等合规 RSS 源继续按 `source_type=rss` 接入。
+
+## 多语言 RSS 内置源
+
+除 NewsNow 默认源外，还内置以下公开 RSS 源（`source_type=rss`，`scope_type=market`），用于补充韩国语/英语市场证据：
+
+- `kr-yna-economy`：연합뉴스 경제（`market=kr`），韩国市场宏观与个股上下文。
+- `kr-bok-press`：한국은행 전체 보도자료（`market=kr`），韩国宏观与利率政策。
+- `us-fed-press`：Federal Reserve 전체 보도자료（`market=us`），美国宏观与货币政策。
+- `us-nasdaq-stocks`：Nasdaq Stocks（`market=us`），美股市场上下文。
+
+这些源与既有 `sec-company-news`/`hkex-news`/`global-marketwatch` 遵循完全相同的生命周期：模板注册 ≠ 自动启用，默认 `POST /sources/defaults` 以 `enabled=false` 创建，只有 `NEWS_INTEL_AUTO_FETCH_ENABLED=true` 时才会被 `ensure_default_sources_enabled` 自动创建并启用。所有源都走现有 SSRF 校验、DNS guard、proxy 禁用、重定向重校验、2MB 响应上限与 fail-open 单源失败隔离。
+
+这些 RSS 源入库后写入 `intelligence_items`，既作为分析输入 `news_context` 的证据（LLM 会按报告语言现地化），也会在韩国语报告的「相关资讯」卡片中作为补充资讯合并展示（详见报告页 `GET /api/v1/history/{record_id}/news` 与 `docs/superpowers/specs/2026-07-18-multilingual-news-translation-design.md`）。
 
 ## 后续接入建议
 

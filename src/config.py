@@ -915,6 +915,8 @@ class Config:
     news_intel_max_items_per_source: int = 50  # 单次每个资讯源最多采集条数
     news_intel_auto_fetch_enabled: bool = False  # 是否在分析前自动初始化并拉取本地资讯源
     newsnow_base_url: str = "https://newsnow.busiyi.world"  # NewsNow HTTP API base URL (数据源侧，不影响 LLM/provider base URL)
+    news_card_merge_intel_enabled: bool = True  # 报告页相关资讯卡片是否合并 intelligence_items 池（opt-out，失败 fail-open）
+    news_translation_unavailable_ttl_hours: int = 24  # 翻译失败缓存的重试间隔（小时），仅影响 unavailable 行
     bias_threshold: float = 5.0  # 乖离率阈值（%），超过此值提示不追高
 
     # === Agent 模式配置 ===
@@ -1835,6 +1837,16 @@ class Config:
                 False,
             ),
             newsnow_base_url=((os.getenv('NEWSNOW_BASE_URL') or '').strip().rstrip('/') or 'https://newsnow.busiyi.world'),
+            news_card_merge_intel_enabled=parse_env_bool(
+                os.getenv('NEWS_CARD_MERGE_INTEL_ENABLED'),
+                True,
+            ),
+            news_translation_unavailable_ttl_hours=parse_env_int(
+                os.getenv('NEWS_TRANSLATION_UNAVAILABLE_TTL_HOURS'),
+                24,
+                field_name='NEWS_TRANSLATION_UNAVAILABLE_TTL_HOURS',
+                minimum=1,
+            ),
             bias_threshold=parse_env_float(os.getenv('BIAS_THRESHOLD'), 5.0, field_name='BIAS_THRESHOLD', minimum=1.0),
             agent_generation_backend=agent_generation_backend,
             agent_litellm_model=agent_litellm_model,

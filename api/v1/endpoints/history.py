@@ -706,7 +706,15 @@ def get_history_news(
             NewsIntelItem(
                 title=item.get("title", ""),
                 snippet=item.get("snippet"),
-                url=item.get("url", "")
+                url=item.get("url", ""),
+                original_title=item.get("original_title"),
+                original_snippet=item.get("original_snippet"),
+                translation_status=item.get("translation_status"),
+                source_language=item.get("source_language"),
+                provenance=item.get("provenance"),
+                source=item.get("source"),
+                source_type=item.get("source_type"),
+                published_at=item.get("published_at"),
             )
             for item in items
         ]
