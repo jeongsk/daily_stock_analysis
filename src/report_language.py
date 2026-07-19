@@ -639,6 +639,14 @@ _REPORT_LABELS: Dict[str, Dict[str, str]] = {
         "board_change_pct_label": "테마 등락률",
         "leading_board_label": "상승 주도",
         "lagging_board_label": "하락 주도",
+        "signal_attribution_heading": "신호 귀인 분석",
+        "attribution_weights_label": "귀인 가중치",
+        "technical_indicators_label": "기술 지표",
+        "news_sentiment_label": "뉴스 심리",
+        "fundamentals_label": "펀더멘털",
+        "market_conditions_label": "시장 환경",
+        "strongest_bullish_signal_label": "최강 매수 신호",
+        "strongest_bearish_signal_label": "최강 매도 신호",
     },
 }
 

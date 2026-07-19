@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修复] `REPORT_LANGUAGE=ko`에서 신호 귀인 라벨 8종(`signal_attribution_heading` 등)이 `_REPORT_LABELS["ko"]`에 누락되어 귀인 데이터가 있는 종목 포함 시 일일 집계 리포트 저장(`_save_local_report`)과 해당 종목 알림이 KeyError로 실패하던 회귀 수정(2026-07-08 이후 `reports/report_*.md` 미생성 원인); ko 라벨 8종 추가 + 로케일 간 라벨 키 패리티 회귀 테스트 추가.
 - [修复] RSS/Atom/NewsNow 资讯入库与报告页读取统一做安全纯文本归一化：解码转义/双重转义 HTML 实体、剥离标签并折叠空白，修复 한국은행 RSS 摘要在「相关资讯」卡片中显示 `&lt;p style=...` 字符串且误触发翻译/原文框的问题；已入库的脏 `intelligence_items` 读取时防御性清理，无需手动破坏性迁移。
 - [新功能] 韩文报告页「相关资讯」卡片新增 additive 懒翻译与缓存：仅 `REPORT_LANGUAGE=ko` 时复用现有 GenerationBackend/LiteLLM 配置翻译 direct+pool 新闻标题/摘要，新增 `news_translation_cache` 表按 normalized title+snippet hash 缓存，API/UI additive 暴露 `translation_status`/`source_language`/`original_title`/`original_snippet`，失败 fail-open 保留原文；非韩文报告仅标记 skipped，不新增 provider/model/base URL。
 - [新功能] 多语言 intelligence RSS 源（연합뉴스 경제·한국은행·Federal Reserve·Nasdaq Stocks）additive 追加：模板默认不启用，仅 `NEWS_INTEL_AUTO_FETCH_ENABLED=true` 时由 `ensure_default_sources_enabled` 自动创建/激活；沿用现有 SSRF 校验、DNS guard、fail-open 单源失败隔离，不新增 provider/model/base URL。

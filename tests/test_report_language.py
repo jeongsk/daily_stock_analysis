@@ -254,6 +254,17 @@ class ReportLanguageTestCase(unittest.TestCase):
         text = "今日市场由三星电子和SK하이닉스领涨。"
         self.assertFalse(detect_report_script_mismatch("zh", text))
 
+    def test_report_labels_have_identical_keys_across_locales(self) -> None:
+        from src.report_language import _REPORT_LABELS
+
+        all_keys = set().union(*(labels.keys() for labels in _REPORT_LABELS.values()))
+        for lang, labels in _REPORT_LABELS.items():
+            missing = all_keys - set(labels.keys())
+            self.assertFalse(
+                missing,
+                f"locale '{lang}' is missing label keys: {sorted(missing)}",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
