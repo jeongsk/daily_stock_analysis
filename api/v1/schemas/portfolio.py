@@ -6,7 +6,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class PortfolioAccountCreateRequest(BaseModel):
@@ -447,3 +447,97 @@ class PortfolioOrderStatusResponse(BaseModel):
     orderedAt: str
     canceledAt: Optional[str] = None
     execution: Optional[PortfolioOrderExecutionItem] = None
+
+
+# ----------------------------------------------------------------------
+# Server-side conditional-order proposals (Phase 4 — Toss Invest). Same
+# two-step shape as the plain-order schemas above, but "approve" registers
+# a Toss-side SINGLE/STOP conditional order that Toss auto-executes once
+# triggered, with no further confirmation step. Local state machine:
+# pending -> approving -> approved | registration_failed |
+# registration_unknown; pending -> canceled | expired | dry_run_approved;
+# approved -> triggered_completed | toss_expired | toss_canceled | paused;
+# registration_unknown -> approved | registration_failed (reconcile). See
+# docs/superpowers/specs/2026-07-19-toss-conditional-order-phase4-design.md.
+#
+# There is deliberately no `type`/`condition_type` field — this system only
+# ever creates SINGLE + STOP conditional orders (design spec §3 "타입
+# 스코프"); OCO/OTO/PROFIT_RATE are not representable at all. `extra="forbid"`
+# additionally rejects any unrecognized field (e.g. a client attempting to
+# smuggle in `type: "OCO"`) with a 422, matching the design spec §5 "스키마
+# 레벨에서 422 거부(enum 미포함)" edge-case contract.
+# ----------------------------------------------------------------------
+
+
+class PortfolioConditionalOrderProposalCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str = Field(..., min_length=1, max_length=16, description="KR 6-digit code/.KS/.KQ or US ticker")
+    side: Literal["buy", "sell"]
+    trigger_price: float = Field(..., gt=0, description="STOP watch price")
+    limit_price: float = Field(..., gt=0, description="LIMIT leg order price (the only leg type supported)")
+    quantity: float = Field(..., gt=0)
+    expire_date: date = Field(..., description="Conditional-order expiry (<= today+7 days KST)")
+
+
+class PortfolioConditionalOrderProposalItem(BaseModel):
+    proposal_uuid: str
+    account_id: int
+    symbol: str
+    storage_symbol: str
+    market: str
+    currency: str
+    side: str
+    trigger_price: float
+    limit_price: float
+    quantity: float
+    est_amount_krw: float
+    expire_date: str
+    status: str
+    toss_status: Optional[str] = None
+    toss_conditional_order_id: Optional[str] = None
+    created_at: str
+    expires_at: str
+    approved_at: Optional[str] = None
+    mode: Optional[str] = Field(
+        None, description="'dry_run' or 'live' preview/outcome; absent for list/cancel responses"
+    )
+
+
+class PortfolioConditionalOrderProposalListResponse(BaseModel):
+    proposals: List[PortfolioConditionalOrderProposalItem] = Field(default_factory=list)
+
+
+class PortfolioConditionalOrderApproveRequest(BaseModel):
+    confirm: bool = Field(
+        ...,
+        description=(
+            "Must be true — required even when the outcome will be dry-run. Approving registers a "
+            "Toss-side conditional order that auto-executes once triggered, with no further "
+            "confirmation step."
+        ),
+    )
+
+
+class PortfolioConditionalOrderSyncResponse(BaseModel):
+    checked: int
+    updated: int
+
+
+class PortfolioConditionalOrderForceResolveRequest(BaseModel):
+    """Manual escape hatch for a proposal permanently stuck
+    ``registration_unknown`` (design spec §7 / Codex BLOCK review major 3) —
+    OPERATOR-ONLY: use only after independently confirming on the Toss
+    app/API that no matching conditional order actually exists. Calling
+    this while an order is genuinely live on Toss would release the
+    daily-cap reservation for an order that can still auto-execute."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    confirm: bool = Field(..., description="Must be true.")
+    reason: str = Field(
+        ...,
+        min_length=1,
+        max_length=500,
+        description="Required: record why the operator confirmed on Toss that no matching order exists.",
+    )

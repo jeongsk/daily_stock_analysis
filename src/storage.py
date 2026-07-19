@@ -951,6 +951,130 @@ class PortfolioOrderAudit(Base):
     )
 
 
+class PortfolioConditionalOrderProposal(Base):
+    """Server-side conditional-order proposal (Toss Invest Phase 4 — design
+    spec docs/superpowers/specs/2026-07-19-toss-conditional-order-phase4-design.md
+    §3 "저장 모델"). Additive table — Phase 3's ``PortfolioOrderProposal`` and
+    its state machine are unchanged; a conditional order has a third
+    lifecycle (local claim state *plus* a Toss-side remote-monitoring state)
+    that does not fit either as a type column on the existing table.
+
+    Local state machine (design spec §3 "로컬 상태기계", §5 edge cases):
+
+    ``pending`` -> ``approving`` -> ``approved`` | ``registration_failed`` |
+    ``registration_unknown``; ``pending`` -> ``canceled`` | ``expired`` |
+    ``dry_run_approved``; ``approved`` -> ``triggered_completed`` |
+    ``toss_expired`` | ``toss_canceled`` | ``paused`` (non-terminal);
+    ``registration_unknown`` -> ``approved`` | ``registration_failed`` (via
+    ``reconcile``). No transition is ever accepted out of a terminal state
+    (terminal: ``canceled``, ``expired``, ``dry_run_approved``,
+    ``registration_failed``, ``triggered_completed``, ``toss_expired``,
+    ``toss_canceled``).
+
+    Unlike Phase 3, **"approved" here means "registered on Toss and being
+    monitored server-side"** — Toss auto-executes the underlying order the
+    moment the trigger condition is met, with no further approval step
+    (design spec §1: "승인 = Toss에 조건주문을 등록하는 것"). ``approving`` is
+    the same atomic-claim pattern as Phase 3's ``executing`` (single write
+    transaction: re-verify ``pending``, re-check every cap, record the
+    reservation, all before the Toss POST — "로그 없으면 등록 없음").
+
+    ``toss_status`` mirrors Toss's own remote lifecycle value verbatim
+    (``WATCHING``/``PAUSED``/``ORDERING``/``ORDERED``/``COMPLETED``/
+    ``EXPIRED`` — probe A table / design spec §2), refreshed lazily (on read)
+    or via the bulk sync endpoint (design spec §3 "상태 동기화") — kept
+    separate from ``status`` (this row's own local claim/approval state) so
+    a raw Toss value is never conflated with this system's approval
+    semantics; ``WATCHING``/``PAUSED``/``ORDERING``/``ORDERED`` all map to
+    the local ``approved`` status (non-terminal, reservation held) with
+    ``toss_status`` distinguishing the finer remote detail.
+
+    ``trigger_price`` is the STOP condition's watch price (Toss `triggerPrice`);
+    ``limit_price`` is the LIMIT leg's order price (Toss `orderPrice`) — the
+    only leg type this system ever sends (design spec §3 "타입 스코프": SINGLE
+    + STOP only, LIMIT-only leg, no OCO/OTO/PROFIT_RATE). ``est_amount_krw``
+    is computed from ``limit_price × quantity`` (KRW-converted), **not**
+    ``trigger_price`` (design spec §3 "한도 산입"), via the same FX
+    fail-closed path Phase 3 uses (``PortfolioOrderService._estimate_amount_krw``,
+    reused, not duplicated).
+
+    ``client_order_id`` is this system's idempotency key sent as Toss's
+    ``clientOrderId`` on the create POST. It intentionally does **not**
+    follow the Phase 4 design spec's literal ``dsa-cond-{proposal_uuid}``
+    format — that is 45 characters, but Toss's ``clientOrderId`` has a
+    verified hard 36-character max (live OpenAPI spec: ``maxLength: 36`` on
+    ``ConditionalOrderCreateRequest.clientOrderId`` — the design spec's
+    own cited probe table already noted this same 36-char limit, so the
+    spec's literal format string is itself unimplementable; see this
+    module's `docs/superpowers/specs/2026-07-19-toss-conditional-order-phase4-design.md`
+    companion note in ``PortfolioConditionalOrderService``). This system
+    instead uses ``f"dc-{proposal_uuid.replace('-', '')}"`` (3 + 32 = 35
+    chars, matches Toss's ``^[a-zA-Z0-9\\-_]+$`` pattern).
+
+    Also verified against the live OpenAPI spec and **not** implementable as
+    the design spec §4/§6 literally describes: Toss's conditional-order
+    list/detail response (``ConditionalOrderDetailResponse``) carries no
+    ``clientOrderId`` field at all (only the one-time create response does),
+    so ``reconcile_proposal`` cannot literally "GET 목록에서 clientOrderId
+    매칭" as specified — see that method's docstring for the resulting
+    (advisor-reviewed) attribute-match fallback and its safety-preserving
+    "no match -> stays registration_unknown, never registration_failed"
+    rule.
+
+    ``expires_at`` is the pending-proposal TTL (10 minutes, mirrors Phase 3);
+    unrelated to ``expire_date`` (the Toss conditional order's own up-to-7-day
+    expiry — design spec §3 "expireDate 상한").
+
+    **v3 (Codex 2nd-round review blocker 1, coordinator-confirmed convergence
+    contract — "원격 conditionalOrderId의 로컬 소유권을 확정할 수 없다")**:
+    ``toss_conditional_order_id`` carried no uniqueness constraint at all, so
+    two different local proposals could both end up recording the same
+    remote ID — e.g. proposal B's reconcile mistaking proposal A's already-
+    registered order for its own (both have identical attributes, A just
+    happened to register first). ``DatabaseManager._ensure_conditional_order_toss_id_unique_index``
+    adds a **partial** unique index (``WHERE toss_conditional_order_id IS
+    NOT NULL`` — a proposal that has never registered stays NULL and is
+    exempt) as the DB-level backstop behind
+    ``PortfolioRepository.find_conditional_order_ids_owned_by_others``'s
+    application-layer ownership-exclusivity check (see that method's and
+    ``PortfolioConditionalOrderService.reconcile_proposal``'s docstrings for
+    the full contract: symbol match + full attribute match + createdAt time
+    window + candidate uniqueness + no unresolved same-attribute local
+    contender + no ID already owned by another proposal, all of which must
+    hold before reconcile adopts a candidate).
+    """
+
+    __tablename__ = 'portfolio_conditional_order_proposals'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, ForeignKey('portfolio_accounts.id'), nullable=False, index=True)
+    proposal_uuid = Column(String(36), nullable=False, unique=True, index=True)
+    symbol = Column(String(16), nullable=False)
+    storage_symbol = Column(String(16), nullable=False)
+    market = Column(String(8), nullable=False)  # kr/us
+    currency = Column(String(8), nullable=False)  # KRW/USD
+    side = Column(String(8), nullable=False)  # buy/sell (Toss orderSide)
+    trigger_price = Column(Float, nullable=False)
+    limit_price = Column(Float, nullable=False)
+    quantity = Column(Float, nullable=False)
+    est_amount_krw = Column(Float, nullable=False)
+    expire_date = Column(Date, nullable=False)  # Toss conditional-order expireDate, <= KST+7d
+    client_order_id = Column(String(40), nullable=False)
+    status = Column(String(32), nullable=False, default='pending', index=True)
+    toss_status = Column(String(16))  # raw Toss lifecycle value, lazily refreshed
+    toss_conditional_order_id = Column(String(128), index=True)
+    created_at = Column(DateTime, nullable=False, index=True)
+    expires_at = Column(DateTime, nullable=False, index=True)  # pending-proposal TTL, distinct from expire_date
+    reserved_at = Column(DateTime, index=True)  # set once, on entering 'approving'
+    approved_at = Column(DateTime)  # set once Toss registration (or dry-run) resolves
+    last_synced_at = Column(DateTime)  # last lazy/bulk Toss status refresh
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    __table_args__ = (
+        Index('ix_portfolio_conditional_order_proposal_account_status', 'account_id', 'status'),
+    )
+
+
 class ConversationMessage(Base):
     """
     Agent 对话历史记录表
@@ -1489,6 +1613,7 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             self._ensure_schema_migration_record()
             self._ensure_intelligence_items_unique_index()
             self._ensure_portfolio_order_audit_append_only_triggers()
+            self._ensure_conditional_order_toss_id_unique_index()
 
             self._initialized = True
             logger.info(f"数据库初始化完成: {db_url}")
@@ -1852,6 +1977,52 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                     "SELECT RAISE(ABORT, 'portfolio_order_audits is append-only: DELETE is not permitted'); "
                     "END"
                 )
+            )
+
+    def _ensure_conditional_order_toss_id_unique_index(self) -> None:
+        """Codex 2nd-round review R1 (coordinator-confirmed convergence
+        contract): enforce ``toss_conditional_order_id`` uniqueness at the
+        DB level — the application-layer ownership-exclusivity check
+        (``PortfolioRepository.find_conditional_order_ids_owned_by_others``)
+        is a read-then-write guard with an unavoidable race window between
+        the check and the eventual ``transition_conditional_proposal``
+        write; this index is the backstop that turns a race that slips past
+        that check into a loud ``IntegrityError`` instead of two local
+        proposals silently sharing one remote registration.
+
+        A **partial** unique index (``WHERE toss_conditional_order_id IS
+        NOT NULL``) so a proposal that has never registered (the common
+        case: ``pending``/``approving``/unmatched ``registration_unknown``)
+        is exempt — mirrors this file's other conditional unique-index
+        migrations (``_ensure_news_translation_cache_schema``). The table
+        is additive/new as of the design spec's original introduction, so a
+        fresh deploy has no legacy-duplicate concern; ``CREATE UNIQUE INDEX
+        IF NOT EXISTS`` is still wrapped defensively in case an existing
+        deployment already accumulated duplicate rows before this fix
+        landed — that failure is logged as critical (not raised) so DB init
+        does not crash; it means ownership exclusivity is not yet enforced
+        at the DB level until an operator manually resolves the duplicates,
+        matching this repo's non-destructive migration convention."""
+        if not self._is_sqlite_engine:
+            return
+        if not inspect(self._engine).has_table(PortfolioConditionalOrderProposal.__tablename__):
+            return
+        try:
+            with self._engine.begin() as connection:
+                connection.exec_driver_sql(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS "
+                    "uix_portfolio_conditional_order_proposal_toss_id "
+                    "ON portfolio_conditional_order_proposals (toss_conditional_order_id) "
+                    "WHERE toss_conditional_order_id IS NOT NULL"
+                )
+        except OperationalError as exc:
+            logger.critical(
+                "[PortfolioConditionalOrder] could not create unique index on "
+                "toss_conditional_order_id -- likely pre-existing duplicate "
+                "conditional_order_id rows predating this fix; ownership exclusivity "
+                "(Codex 2nd-round review R1) is NOT enforced at the DB level until this "
+                "is manually resolved: %s",
+                exc,
             )
 
     def _rebuild_intelligence_items_table(self) -> None:

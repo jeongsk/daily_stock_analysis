@@ -77,6 +77,15 @@ _BUYING_POWER_URL = f"{_TOSS_BASE_URL}/api/v1/buying-power"
 _SELLABLE_QUANTITY_URL = f"{_TOSS_BASE_URL}/api/v1/sellable-quantity"
 _COMMISSIONS_URL = f"{_TOSS_BASE_URL}/api/v1/commissions"
 
+# Phase 4 (server-side conditional orders) — design spec
+# docs/superpowers/specs/2026-07-19-toss-conditional-order-phase4-design.md §2/§3.
+_CONDITIONAL_ORDERS_URL = f"{_TOSS_BASE_URL}/api/v1/conditional-orders"
+# Path-only form, same rationale as _ORDERS_URL_PATH above — the write gate
+# must match regardless of a trailing query string.
+_CONDITIONAL_ORDERS_URL_PATH = urlparse(_CONDITIONAL_ORDERS_URL).path
+_CONDITIONAL_ORDER_LIST_PAGE_LIMIT = 100
+_CONDITIONAL_ORDER_STATUS_VALUES = ("OPEN", "CLOSED")  # Toss's only valid `status` filter values
+
 _TOKEN_EXPIRY_MARGIN_SECONDS = 60  # refresh 60s before actual expiry
 _MAX_CANDLES_PER_CALL = 200
 _MAX_CANDLE_PAGES = 2  # 2 pages * 200 bars covers the ~250-day indicator window
@@ -85,6 +94,28 @@ _STOCKS_BATCH_SLEEP_SECONDS = 0.25  # STOCK rate-limit group is 5 TPS
 _RETRY_LIMIT = 2  # 429 retry cap before giving up to the manager's fallback
 _IP_LOOKUP_URL = "https://api.ipify.org"
 _IP_LOOKUP_TIMEOUT_SECONDS = 5
+
+# Codex 2nd-round review R2 (coordinator-confirmed convergence contract —
+# "지연 POST 결과의 유실"): per-HTTP-call timeout applied to a conditional-order
+# write request (place_conditional_order's POST / cancel_conditional_order's
+# DELETE, via _request_write/_request_delete) and to the token-fetch request
+# each of those can trigger (_fetch_token, called from _get_access_token).
+_CONDITIONAL_ORDER_WRITE_TIMEOUT_SECONDS = 15
+
+# Worst-case wall-clock time a single _request_write/_request_delete call on
+# the conditional-orders path can take: a 429 there never retries (see
+# _request_write's conditional-orders branch), so the only source of a
+# second attempt is one 401 -> refresh-once -> retry-once cycle. That is at
+# most 2 token-fetch calls (_get_access_token's initial attempt + the
+# force_refresh=True retry) plus 2 main POST/DELETE calls (the original
+# attempt + the one retried after refreshing), each individually bounded by
+# _CONDITIONAL_ORDER_WRITE_TIMEOUT_SECONDS -- i.e. 4x that value. This bound
+# is what PortfolioConditionalOrderService asserts its reconcile
+# stale-approving threshold is a comfortable (>=10x) multiple of, so a
+# "delayed POST result arrives after reconcile already took the claim over"
+# race is structurally impossible for any live process (see that module's
+# _RECONCILE_STALE_APPROVING_AFTER).
+_CONDITIONAL_ORDER_WRITE_WORST_CASE_SECONDS = 4 * _CONDITIONAL_ORDER_WRITE_TIMEOUT_SECONDS
 
 _ACCOUNT_HEADER = "X-Tossinvest-Account"
 _ORDERS_STATUS_CLOSED = "CLOSED"
@@ -199,6 +230,20 @@ def _to_toss_symbol(stock_code: str) -> Optional[str]:
     return None
 
 
+def _is_order_write_gated_path(request_path: str) -> bool:
+    """Whether ``request_path`` (a URL *path*, no query/fragment — see
+    ``_ORDERS_URL_PATH`` docstring above) falls under either write-gated
+    order-family base: plain orders (``/api/v1/orders*``, Phase 3) or
+    conditional orders (``/api/v1/conditional-orders*``, Phase 4 design spec
+    §3 "write 게이트 확장"). Both ``_request_write`` and ``_request_delete``
+    call this as their single shared gate predicate so the two families are
+    always extended/tested together, never drifting apart."""
+    for base in (_ORDERS_URL_PATH, _CONDITIONAL_ORDERS_URL_PATH):
+        if request_path == base or request_path.startswith(f"{base}/"):
+            return True
+    return False
+
+
 def _parse_candle_date(ts: Optional[str]) -> Optional[date]:
     if not ts:
         return None
@@ -304,7 +349,7 @@ class TossFetcher(BaseFetcher):
                     "client_secret": self._client_secret,
                 },
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
-                timeout=15,
+                timeout=_CONDITIONAL_ORDER_WRITE_TIMEOUT_SECONDS,
             )
         except requests.RequestException as e:
             raise DataFetchError(f"[Toss] token request failed: {e}") from e
@@ -908,9 +953,17 @@ class TossFetcher(BaseFetcher):
         gate undetected (reviewer re-review major 3). Comparing paths instead
         ignores query/fragment the same way the rest of this gate's callers
         already implicitly expect.
+
+        Phase 4 (design spec
+        docs/superpowers/specs/2026-07-19-toss-conditional-order-phase4-design.md
+        §3 "write 게이트 확장"): the gate predicate (``_is_order_write_gated_path``)
+        also covers ``/api/v1/conditional-orders*`` — this was the Phase 4
+        implementation's first, blocker-priority task, since without it a
+        dry-run process could register a real server-side conditional order
+        that Toss then auto-executes unattended.
         """
         request_path = urlparse(url).path
-        if request_path == _ORDERS_URL_PATH or request_path.startswith(f"{_ORDERS_URL_PATH}/"):
+        if _is_order_write_gated_path(request_path):
             if not self.is_order_live_enabled():
                 raise TossOrderNotLiveError(
                     "TOSS_ORDER_LIVE is not enabled; refusing to POST an orders-family "
@@ -929,7 +982,9 @@ class TossFetcher(BaseFetcher):
             if account_seq is not None:
                 headers[_ACCOUNT_HEADER] = str(account_seq)
             try:
-                resp = requests.post(url, json=json_body, headers=headers, timeout=15)
+                resp = requests.post(
+                    url, json=json_body, headers=headers, timeout=_CONDITIONAL_ORDER_WRITE_TIMEOUT_SECONDS
+                )
             except requests.RequestException as e:
                 raise DataFetchError(f"[Toss] HTTP request failed: {e}") from e
 
@@ -944,6 +999,24 @@ class TossFetcher(BaseFetcher):
                 continue
 
             if resp.status_code == 429:
+                if request_path == _CONDITIONAL_ORDERS_URL_PATH or request_path.startswith(
+                    f"{_CONDITIONAL_ORDERS_URL_PATH}/"
+                ):
+                    # Phase 4 design spec §5 "429": a conditional-order
+                    # registration POST must NOT be retried — whether the
+                    # first attempt actually registered is unknown, and a
+                    # blind retry risks a duplicate registration (Codex
+                    # review major 1). Surface immediately, exactly like a
+                    # lost/timed-out response, so the service layer resolves
+                    # this to registration_unknown rather than guessing.
+                    # Phase 3's plain-order POST (the other branch below)
+                    # keeps its existing retry-with-backoff behavior
+                    # unchanged — this branch only narrows the
+                    # conditional-orders path.
+                    raise DataFetchError(
+                        f"[Toss] 429 rate limited on conditional-order write {url}; not retrying "
+                        f"(design spec §5 — ambiguous outcome, must resolve to registration_unknown)"
+                    )
                 attempt += 1
                 if attempt > _RETRY_LIMIT:
                     raise DataFetchError(f"[Toss] rate limited after {_RETRY_LIMIT} retries: {url}")
@@ -956,6 +1029,114 @@ class TossFetcher(BaseFetcher):
                 )
                 time.sleep(backoff)
                 continue
+
+            try:
+                payload = resp.json()
+            except ValueError as e:
+                raise DataFetchError(f"[Toss] invalid JSON response from {url}: {e}") from e
+
+            if 200 <= resp.status_code < 300:
+                return payload.get("result") or {}
+
+            error = payload.get("error") if isinstance(payload, dict) else None
+            if isinstance(error, dict):
+                raw_data = error.get("data")
+                raise TossOrderRejectedError(
+                    status_code=resp.status_code,
+                    code=str(error.get("code") or "unknown"),
+                    message=str(error.get("message") or ""),
+                    data=raw_data if isinstance(raw_data, dict) else None,
+                )
+            raise DataFetchError(f"[Toss] HTTP {resp.status_code} for {url}: {payload!r}")
+
+    def _request_delete(
+        self,
+        url: str,
+        *,
+        account_seq: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        """DELETE helper for order-family cancel endpoints that respond with
+        an empty ``204 No Content`` (Phase 4 design spec §2: ``DELETE
+        /api/v1/conditional-orders/{id}`` — unlike ``_request_write``'s
+        POST/JSON-body order create/cancel calls, Toss's conditional-order
+        cancel is a bare DELETE with no response body on success).
+
+        Deliberately duplicates ``_request_write``'s auth/403/401/
+        error-envelope handling (rather than threading a ``method=``
+        parameter through a shared helper) for the same reason
+        ``_request_write`` itself gives for staying separate from
+        ``_request``: every already-reviewed line of that hardened Phase 3
+        write path stays byte-for-byte untouched by this Phase 4 addition,
+        and this new DELETE path can be read/reviewed/tested in one place
+        without threading an extra branch through code that has already
+        been through multiple blocker-finding reviews. **429 handling is
+        deliberately NOT mirrored** — unlike ``_request_write`` (which
+        retries plain-order 429s to preserve Phase 3's existing behavior),
+        this method has no Phase 3 caller at all, so it never retries a 429
+        response; it raises immediately and lets the caller
+        (``PortfolioConditionalOrderService.cancel_proposal``) decide
+        whether to retry (design spec §5 "429", Codex review major 1).
+
+        SAFETY GATE: identical predicate to ``_request_write``
+        (``_is_order_write_gated_path``) — any URL under ``_ORDERS_URL`` or
+        ``_CONDITIONAL_ORDERS_URL`` is refused unless ``TOSS_ORDER_LIVE`` is
+        enabled, checked here independently of whatever a public method
+        above (``cancel_conditional_order``) already checked.
+        """
+        request_path = urlparse(url).path
+        if _is_order_write_gated_path(request_path):
+            if not self.is_order_live_enabled():
+                raise TossOrderNotLiveError(
+                    "TOSS_ORDER_LIVE is not enabled; refusing to DELETE an orders-family "
+                    f"write request ({url}) — fetcher-level gate, design spec §3 dual gate"
+                )
+        if not self._is_configured():
+            raise DataFetchError("[Toss] TOSS_CLIENT_ID/TOSS_CLIENT_SECRET not configured")
+        if is_toss_forbidden():
+            raise DataFetchError("[Toss] previously blocked by IP allow-list (403); skipped for this process")
+
+        retried_auth = False
+        while True:
+            token = self._get_access_token()
+            headers = {"Authorization": f"Bearer {token}"}
+            if account_seq is not None:
+                headers[_ACCOUNT_HEADER] = str(account_seq)
+            try:
+                resp = requests.delete(url, headers=headers, timeout=_CONDITIONAL_ORDER_WRITE_TIMEOUT_SECONDS)
+            except requests.RequestException as e:
+                raise DataFetchError(f"[Toss] HTTP request failed: {e}") from e
+
+            if resp.status_code == 403:
+                _mark_forbidden_and_warn(f"DELETE {url} status=403")
+                raise DataFetchError(f"[Toss] 403 Forbidden (IP not allow-listed): {url}")
+
+            if resp.status_code == 401 and not retried_auth:
+                retried_auth = True
+                logger.debug(f"[Toss] 401 received for {url}, refreshing token once and retrying")
+                self._get_access_token(force_refresh=True)
+                continue
+
+            if resp.status_code == 429:
+                # Phase 4 design spec §5 "429": a conditional-order cancel
+                # DELETE must NOT be retried either — surface immediately so
+                # the caller (PortfolioConditionalOrderService.cancel_proposal)
+                # can decide whether to retry, rather than this fetcher
+                # silently retrying a write whose first attempt's outcome is
+                # unknown (Codex review major 1 — this method has no Phase 3
+                # caller, so unlike _request_write there is no "existing
+                # behavior" here to preserve).
+                raise DataFetchError(
+                    f"[Toss] 429 rate limited on conditional-order cancel {url}; not retrying "
+                    f"(design spec §5 — caller must decide whether to retry)"
+                )
+
+            body_text = (resp.text or "").strip()
+            if resp.status_code == 204 or not body_text:
+                if 200 <= resp.status_code < 300:
+                    return {}
+                # Non-2xx with an empty body: no structured error envelope to
+                # parse — surface the bare status instead of guessing a code.
+                raise DataFetchError(f"[Toss] HTTP {resp.status_code} for {url}: <empty body>")
 
             try:
                 payload = resp.json()
@@ -1052,3 +1233,182 @@ class TossFetcher(BaseFetcher):
         if is_toss_forbidden():
             raise DataFetchError("[Toss] previously blocked by IP allow-list (403); skipped for this process")
         return self._request_write(f"{_ORDERS_URL}/{order_id}/cancel", json_body={}, account_seq=account_seq)
+
+    # ------------------------------------------------------------------
+    # Conditional order writes/reads (Phase 4) — server-side SINGLE/STOP
+    # conditional orders. Design spec
+    # docs/superpowers/specs/2026-07-19-toss-conditional-order-phase4-design.md
+    # §2/§3, request/response shapes confirmed against the live Toss OpenAPI
+    # spec (openapi.tossinvest.com/openapi-docs/latest/openapi.json,
+    # info.version "1.2.4", fetched during Phase 4 implementation — the
+    # nesting/field names below are the *verified* shape, not the
+    # Phase 4 design spec's informal prose summary of them).
+    # ------------------------------------------------------------------
+
+    def place_conditional_order(
+        self,
+        account_seq: Any,
+        *,
+        symbol: str,
+        side: str,
+        trigger_price: Any,
+        limit_price: Any,
+        quantity: Any,
+        expire_date: str,
+        client_order_id: str,
+    ) -> Dict[str, Any]:
+        """Register a SINGLE/STOP conditional order (``POST
+        /conditional-orders``, ``CONDITIONAL_ORDER`` rate-limit group) —
+        design spec §3 "타입 스코프": ``type=SINGLE``, condition
+        ``type=STOP`` (a fixed trigger price, not ``PROFIT_RATE``), leg
+        ``orderType=LIMIT`` only (Toss API constraint — MARKET legs are not
+        representable by this method at all, mirroring how Phase 3's
+        ``TOSS_ORDER_ALLOW_MARKET`` concept has no conditional-order
+        equivalent). The request body only ever sets ``first`` — ``second``
+        (OCO/OTO's paired leg) is never sent, keeping this method
+        structurally incapable of creating anything but a single-condition
+        order regardless of caller input.
+
+        SAFETY GATE: refuses — without making any HTTP call — unless
+        ``TOSS_ORDER_LIVE`` is enabled (same dual-gate contract as
+        ``place_order``): checked here, and independently again inside
+        ``_request_write`` for any caller that reaches it directly.
+
+        ``client_order_id`` is a required keyword argument. There is
+        deliberately no ``confirm_high_value_order`` parameter — Toss's
+        conditional-order create request has the same field
+        (``confirmHighValueOrder``, probe A table), and this system must
+        never be able to construct a request that auto-confirms a
+        high-value order; the service layer hard-rejects any estimated
+        amount at/above 100,000,000 KRW long before this call is reached.
+        """
+        if not self.is_order_live_enabled():
+            raise TossOrderNotLiveError(
+                "TOSS_ORDER_LIVE is not enabled; refusing to register a live conditional "
+                "order (fetcher-level gate — design spec §3 dual gate)"
+            )
+        if not self._is_configured():
+            raise DataFetchError("[Toss] TOSS_CLIENT_ID/TOSS_CLIENT_SECRET not configured")
+        if is_toss_forbidden():
+            raise DataFetchError("[Toss] previously blocked by IP allow-list (403); skipped for this process")
+
+        body: Dict[str, Any] = {
+            "symbol": symbol,
+            "type": "SINGLE",
+            "quantity": str(quantity),
+            "orderType": "LIMIT",
+            "clientOrderId": client_order_id,
+            "expireDate": expire_date,
+            "first": {
+                "orderSide": side,
+                "triggerPrice": str(trigger_price),
+                "orderPrice": str(limit_price),
+            },
+        }
+        return self._request_write(_CONDITIONAL_ORDERS_URL, json_body=body, account_seq=account_seq)
+
+    def cancel_conditional_order(self, account_seq: Any, conditional_order_id: str) -> Dict[str, Any]:
+        """Cancel a registered conditional order (``DELETE
+        /conditional-orders/{conditionalOrderId}``, ``CONDITIONAL_ORDER``
+        rate-limit group, 204 on success).
+
+        SAFETY GATE: shares the exact same ``TOSS_ORDER_LIVE`` gate as
+        ``place_conditional_order`` — a registered conditional order can
+        only ever exist while live mode is/was enabled, so a real Toss
+        DELETE must not be reachable in dry-run mode either."""
+        if not self.is_order_live_enabled():
+            raise TossOrderNotLiveError(
+                "TOSS_ORDER_LIVE is not enabled; refusing to cancel a live conditional order "
+                "(fetcher-level gate — design spec §3 dual gate applies to cancel too)"
+            )
+        if not self._is_configured():
+            raise DataFetchError("[Toss] TOSS_CLIENT_ID/TOSS_CLIENT_SECRET not configured")
+        if is_toss_forbidden():
+            raise DataFetchError("[Toss] previously blocked by IP allow-list (403); skipped for this process")
+        return self._request_delete(
+            f"{_CONDITIONAL_ORDERS_URL}/{conditional_order_id}", account_seq=account_seq
+        )
+
+    def get_conditional_order(self, account_seq: Any, conditional_order_id: str) -> Dict[str, Any]:
+        """Full status of one conditional order, any state (``GET
+        /conditional-orders/{conditionalOrderId}``,
+        ``CONDITIONAL_ORDER_HISTORY`` rate-limit group). Read-only — used for
+        the lazy per-proposal status refresh (design spec §3 "상태 동기화")
+        once a proposal already has a known ``conditionalOrderId``."""
+        payload = self._request(f"{_CONDITIONAL_ORDERS_URL}/{conditional_order_id}", account_seq=account_seq)
+        return payload.get("result") or {}
+
+    def list_conditional_orders(
+        self,
+        account_seq: Any,
+        *,
+        status: str,
+        symbol: Optional[str] = None,
+        cursor: Optional[str] = None,
+        limit: int = _CONDITIONAL_ORDER_LIST_PAGE_LIMIT,
+    ) -> Dict[str, Any]:
+        """One page of ``GET /conditional-orders`` (``CONDITIONAL_ORDER_HISTORY``
+        rate-limit group, cursor pagination). ``status`` is a *required* Toss
+        query parameter with only two valid values — ``"OPEN"`` (``status``
+        ∈ WATCHING/PAUSED/ORDERING/ORDERED) or ``"CLOSED"`` (COMPLETED/
+        EXPIRED) — confirmed against the live OpenAPI spec, not the design
+        spec's informal ``OPEN|CLOSED`` prose. Read-only; pagination across
+        pages/both status values is the caller's responsibility (mirrors
+        ``get_closed_orders``'s envelope but does *not* auto-paginate to
+        exhaustion the way that method does, since this is a general-purpose
+        page fetch used by two very different callers — the observation
+        list endpoint, which only ever wants one UI-sized page, and
+        ``PortfolioConditionalOrderService.reconcile_proposal``'s bounded
+        attribute-match search, which owns its own page-count cap).
+
+        Raises ``DataFetchError`` on a malformed envelope (missing/invalid
+        ``result``/``conditionalOrders``/``hasNext``/``nextCursor``) — same
+        "a schema surprise must fail loudly" contract as
+        ``get_closed_orders``, since a caller silently treating a malformed
+        response as "no results" could wrongly resolve an ambiguous
+        registration to ``registration_failed``.
+        """
+        if status not in _CONDITIONAL_ORDER_STATUS_VALUES:
+            raise ValueError(f"status must be one of {_CONDITIONAL_ORDER_STATUS_VALUES}, got {status!r}")
+
+        params: Dict[str, Any] = {"status": status, "limit": limit}
+        if symbol:
+            params["symbol"] = symbol
+        if cursor:
+            params["cursor"] = cursor
+
+        payload = self._request(_CONDITIONAL_ORDERS_URL, params=params, account_seq=account_seq)
+        result = payload.get("result")
+        if not isinstance(result, dict):
+            raise DataFetchError(
+                f"[Toss] conditional-orders envelope missing object 'result' for "
+                f"account_seq={account_seq}: {payload!r}"
+            )
+
+        orders = result.get("conditionalOrders")
+        if not isinstance(orders, list):
+            raise DataFetchError(
+                f"[Toss] conditional-orders envelope missing/invalid "
+                f"'result.conditionalOrders' list for account_seq={account_seq}: {result!r}"
+            )
+
+        if "hasNext" not in result or not isinstance(result.get("hasNext"), bool):
+            raise DataFetchError(
+                f"[Toss] conditional-orders envelope missing/invalid 'result.hasNext' bool "
+                f"for account_seq={account_seq}: {result!r}"
+            )
+        has_next = result["hasNext"]
+
+        next_cursor = result.get("nextCursor")
+        if next_cursor is not None and not isinstance(next_cursor, str):
+            raise DataFetchError(
+                f"[Toss] conditional-orders envelope 'result.nextCursor' must be str or null "
+                f"for account_seq={account_seq}: {next_cursor!r}"
+            )
+        if has_next and not next_cursor:
+            raise DataFetchError(
+                f"[Toss] conditional-orders envelope hasNext=true but nextCursor is empty "
+                f"for account_seq={account_seq}"
+            )
+
+        return {"conditionalOrders": orders, "hasNext": has_next, "nextCursor": next_cursor}

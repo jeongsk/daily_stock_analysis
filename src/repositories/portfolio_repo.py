@@ -10,7 +10,7 @@ import json
 import logging
 from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from sqlalchemy import and_, delete, desc, func, or_, select
 from sqlalchemy.exc import IntegrityError, OperationalError
@@ -20,6 +20,7 @@ from src.storage import (
     PortfolioAccount,
     PortfolioBrokerLink,
     PortfolioCashLedger,
+    PortfolioConditionalOrderProposal,
     PortfolioCorporateAction,
     PortfolioDailySnapshot,
     PortfolioFxRate,
@@ -55,6 +56,124 @@ class PendingProposalCapExceededError(Exception):
     check + insert (design spec v2 §3: "pending 10건 상한 검사도 count+insert를
     동일 write 트랜잭션으로" — the count-then-insert TOCTOU that let concurrent
     creates both slip past the 10-pending-proposal cap)."""
+
+
+class PendingConditionalProposalCapExceededError(Exception):
+    """Raised inside the same write transaction as the pending-conditional-
+    proposal count check + insert (Phase 4 design spec — mirrors Phase 3's
+    ``PendingProposalCapExceededError`` count+insert-in-one-transaction
+    pattern; the design spec is silent on a conditional-specific pending
+    cap, so this inherits Phase 3's guardrail philosophy per the
+    implementation brief's "스펙이 침묵하는 세부는 Phase 3 구현의 기존 패턴을
+    따르세요")."""
+
+
+_CONDITIONAL_ORDER_ATTRIBUTE_MATCH_EPS = 1e-6
+
+
+def _conditional_order_attributes_match(
+    a: "PortfolioConditionalOrderProposal", b: "PortfolioConditionalOrderProposal"
+) -> bool:
+    """Codex 3rd-round review R1c helper: do two *local* proposal rows
+    describe the same order (symbol/side/trigger/limit/quantity/
+    expire_date)? Deliberately duplicated from
+    ``PortfolioConditionalOrderService._is_same_order_attributes`` (not
+    imported — services import repositories, not the reverse, and this
+    check must run *inside*
+    ``PortfolioRepository.adopt_reconciled_order_if_uncontended``'s write
+    transaction, not via a service-layer call)."""
+    if (a.symbol or "").strip().upper() != (b.symbol or "").strip().upper():
+        return False
+    if (a.side or "").strip().lower() != (b.side or "").strip().lower():
+        return False
+    eps = _CONDITIONAL_ORDER_ATTRIBUTE_MATCH_EPS
+    if abs(a.trigger_price - b.trigger_price) > eps * max(1.0, abs(b.trigger_price)):
+        return False
+    if abs(a.limit_price - b.limit_price) > eps * max(1.0, abs(b.limit_price)):
+        return False
+    if abs(a.quantity - b.quantity) > eps * max(1.0, abs(b.quantity)):
+        return False
+    if a.expire_date != b.expire_date:
+        return False
+    return True
+
+
+class ConditionalClaimOutcome:
+    """Result of ``PortfolioRepository.claim_conditional_proposal_for_approval``
+    — the atomic ``pending -> approving`` claim (Phase 4 design spec §3
+    "로컬 상태기계", mirroring Phase 3's ``ClaimOutcome``/
+    ``claim_proposal_for_execution`` pattern exactly). Also reused (with a
+    different, non-overlapping outcome subset) by
+    ``reconcile_claim_stale_approving`` below — see that method's docstring
+    (Codex BLOCK review blocker 2: reconcile must not preempt an in-flight
+    ``approving`` claim except as a bounded, atomic crash-recovery path).
+
+    ``outcome`` is one of (``claim_conditional_proposal_for_approval``):
+      - ``"not_found"``: no such proposal for this account.
+      - ``"already_terminal"``: already ``dry_run_approved``/
+        ``registration_failed``/``triggered_completed``/``toss_expired``/
+        ``toss_canceled``/``canceled``/``expired`` — idempotent-retry return.
+      - ``"in_progress"``: already ``approving``/``registration_unknown`` —
+        a concurrent approve (or an unresolved prior attempt) is in flight;
+        caller should point the client at ``.../reconcile``.
+      - ``"already_approved"``: already ``approved``/``paused`` — an
+        idempotent-retry return distinct from ``already_terminal`` since
+        these are non-terminal (still being monitored by Toss).
+      - ``"rejected"``: still ``pending`` but failed a cap check inside this
+        same transaction — the row is now ``registration_failed`` and
+        ``reason``/``limit_type`` explain why (never reached Toss).
+      - ``"claimed"``: the row is now ``approving`` with the reservation
+        recorded — caller may proceed to POST to Toss.
+
+    ``outcome`` is one of (``reconcile_claim_stale_approving``):
+      - ``"not_found"``: no such proposal for this account.
+      - ``"not_reconcilable"``: status is neither ``approving`` nor
+        ``registration_unknown`` — nothing for reconcile to do.
+      - ``"approval_in_progress"``: status is ``approving`` and the claim
+        (``reserved_at``) is still fresh (within the stale-claim window) —
+        a real approve POST is plausibly still in flight; reconcile must
+        not touch it.
+      - ``"ready"``: status is already ``registration_unknown`` (no
+        takeover needed), or was ``approving`` and stale enough that this
+        call atomically took it over as ``registration_unknown`` — either
+        way, the caller may now proceed with the attribute-match search.
+
+    ``outcome`` is one of (``adopt_reconciled_order_if_uncontended``,
+    Codex 3rd-round review R1c):
+      - ``"not_found"``: no such proposal for this account.
+      - ``"not_reconcilable"``: status is no longer ``registration_unknown``
+        — something else (another reconcile call, the original approve
+        POST, force-resolve) already resolved it since the caller's entry
+        gate; idempotent-retry return, caller should just serialize
+        ``proposal`` as-is.
+      - ``"contended"``: re-verified *inside this same write transaction*
+        that the candidate ID is owned by another proposal, or that a
+        same-attribute local proposal is still unresolved — adoption is
+        cancelled, the row stays ``registration_unknown`` (an audit row
+        recording ``local_contender_count``/``owned_by_other_proposal_count``
+        has already been appended by this call). ``detail`` carries those
+        counts too for the caller's own logging.
+      - ``"adopted"``: the row was uncontended and has been transitioned
+        to the requested status with the candidate's ID recorded, all
+        inside this one transaction.
+    """
+
+    __slots__ = ("outcome", "proposal", "reason", "limit_type", "detail")
+
+    def __init__(
+        self,
+        outcome: str,
+        *,
+        proposal: Optional["PortfolioConditionalOrderProposal"] = None,
+        reason: Optional[str] = None,
+        limit_type: Optional[str] = None,
+        detail: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        self.outcome = outcome
+        self.proposal = proposal
+        self.reason = reason
+        self.limit_type = limit_type
+        self.detail = detail
 
 
 class ClaimOutcome:
@@ -1742,6 +1861,18 @@ class PortfolioRepository:
             midnight still counts on both its reservation and confirmation
             dates once resolved — design spec's conservative call).
         ``dry_run_executed``/``canceled``/``expired``/``failed`` never count.
+
+        Phase 4 (design spec
+        docs/superpowers/specs/2026-07-19-toss-conditional-order-phase4-design.md
+        §3 "한도 산입": "Phase 3 v3의 일일 한도 합산 로직에 조건주문 미확정분
+        합류") — this is that join point: the return value also folds in
+        every unresolved ``PortfolioConditionalOrderProposal`` reservation
+        for this account/date (see ``_sum_conditional_reserved_amount_in_session``
+        below), so this one function is the single shared daily-cap ceiling
+        both Phase 3's ``claim_proposal_for_execution`` and Phase 4's
+        ``claim_conditional_proposal_for_approval`` check against — a
+        conditional-order registration counts against (and is blocked by)
+        the same daily total as a plain order, and vice versa.
         """
         day_start = datetime.combine(kst_date, time.min)
         day_end = day_start + timedelta(days=1)
@@ -1766,6 +1897,58 @@ class PortfolioRepository:
                 )
             )
         ).scalar_one()
+        conditional_total = PortfolioRepository._sum_conditional_reserved_amount_in_session(
+            session, account_id=account_id, kst_date=kst_date
+        )
+        return float(total or 0.0) + conditional_total
+
+    @staticmethod
+    def _sum_conditional_reserved_amount_in_session(
+        session: Any, *, account_id: int, kst_date: date
+    ) -> float:
+        """The Phase 4 half of the shared daily-cap sum (see the docstring
+        above this call site) — same date-agnostic-while-unresolved
+        philosophy as Phase 3's sum, applied to
+        ``PortfolioConditionalOrderProposal``:
+
+          - **every** ``approving``/``registration_unknown``/``approved``/
+            ``paused`` row counts in full, *regardless of date* — all four
+            represent an unresolved liability (a claim in flight, an
+            ambiguous registration, or a live Toss-side monitored order
+            that could auto-execute at any moment) until it resolves to a
+            terminal state or ``triggered_completed``.
+          - every ``triggered_completed`` row (Toss observed ``COMPLETED`` —
+            the conditional-order equivalent of Phase 3's ``executed``)
+            whose ``reserved_at`` *or* ``approved_at`` falls on this date.
+          - ``canceled``/``expired``/``dry_run_approved``/
+            ``registration_failed``/``toss_expired``/``toss_canceled``
+            never count.
+        """
+        day_start = datetime.combine(kst_date, time.min)
+        day_end = day_start + timedelta(days=1)
+
+        def _in_day(column):
+            return and_(column >= day_start, column < day_end)
+
+        total = session.execute(
+            select(func.coalesce(func.sum(PortfolioConditionalOrderProposal.est_amount_krw), 0.0)).where(
+                and_(
+                    PortfolioConditionalOrderProposal.account_id == account_id,
+                    or_(
+                        PortfolioConditionalOrderProposal.status.in_(
+                            ("approving", "registration_unknown", "approved", "paused")
+                        ),
+                        and_(
+                            PortfolioConditionalOrderProposal.status == "triggered_completed",
+                            or_(
+                                _in_day(PortfolioConditionalOrderProposal.reserved_at),
+                                _in_day(PortfolioConditionalOrderProposal.approved_at),
+                            ),
+                        ),
+                    ),
+                )
+            )
+        ).scalar_one()
         return float(total or 0.0)
 
     def sum_daily_reserved_and_executed_amount_krw(self, account_id: int, *, kst_date: date) -> float:
@@ -1773,7 +1956,10 @@ class PortfolioRepository:
         best-effort pre-checks (``create_proposal``'s early friendly
         rejection — the authoritative check is
         ``claim_proposal_for_execution``'s in-transaction version above) and
-        for status/report display."""
+        for status/report display. Since Phase 4, this already folds in
+        conditional-order reservations too (see
+        ``_sum_reserved_and_live_amount_in_session``) — used unchanged by
+        both Phase 3's and Phase 4's best-effort proposal-creation checks."""
         with self.db.get_session() as session:
             return self._sum_reserved_and_live_amount_in_session(session, account_id=account_id, kst_date=kst_date)
 
@@ -2048,7 +2234,11 @@ class PortfolioRepository:
 
     def list_order_audits(self, account_id: int, *, proposal_uuid: Optional[str] = None) -> List[PortfolioOrderAudit]:
         """List audit rows for one account (optionally scoped to one
-        proposal), oldest first — used for order-status/history responses."""
+        proposal), oldest first — used for order-status/history responses.
+        Shared verbatim by Phase 4 conditional-order proposals too (the
+        audit table is keyed by ``account_id``/``proposal_uuid``, not by
+        which proposal table the row originated from — see
+        ``_conditional_audit_row``)."""
         with self.db.get_session() as session:
             conditions = [PortfolioOrderAudit.account_id == account_id]
             if proposal_uuid is not None:
@@ -2060,3 +2250,837 @@ class PortfolioRepository:
             for row in rows:
                 session.expunge(row)
             return rows
+
+    # ------------------------------------------------------------------
+    # Conditional order proposals (Toss Invest Phase 4 — server-side
+    # SINGLE/STOP conditional orders). Design spec
+    # docs/superpowers/specs/2026-07-19-toss-conditional-order-phase4-design.md
+    # §3 "저장 모델"/"로컬 상태기계". Mirrors the Phase 3 order-proposal section
+    # above structurally (same atomic-claim/transition/TTL patterns); the
+    # shared ``PortfolioOrderAudit`` table (and its append-only DB trigger)
+    # is reused unchanged — see ``_conditional_audit_row``.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _conditional_audit_row(
+        *,
+        account_id: int,
+        proposal_uuid: str,
+        symbol: str,
+        side: str,
+        limit_price: Optional[float],
+        quantity: float,
+        currency: str,
+        est_amount_krw: float,
+        mode: Optional[str],
+        event: str,
+        toss_conditional_order_id: Optional[str],
+        created_at: datetime,
+        error_code: Optional[str] = None,
+        detail: Optional[Dict[str, Any]] = None,
+    ) -> PortfolioOrderAudit:
+        """Build one Phase 4 conditional-order audit row on the shared,
+        append-only ``PortfolioOrderAudit`` table (design spec §3 "저장 모델":
+        "감사는 기존 PortfolioOrderAudit 재사용"). ``order_type`` is always
+        recorded as ``"LIMIT"`` (the only leg type Phase 4 ever sends);
+        ``price`` holds the leg's *limit* price, never the STOP trigger
+        price (put ``trigger_price`` in ``detail`` instead) — this matches
+        how ``est_amount_krw`` itself is computed (limit_price × quantity,
+        not trigger_price × quantity, design spec §3 "한도 산입"). Event
+        names use a ``cond_`` prefix, not the design spec's literal
+        ``conditional_`` prefix — several of the spec's own event names
+        (e.g. ``conditional_registration_unknown``, 33 chars) do not fit
+        this shared table's existing ``event = String(24)`` column, which
+        this Phase 4 change must not widen (additive-only contract on an
+        existing, already-reviewed Phase 3 table). ``toss_order_id`` —
+        despite the column name, inherited unchanged from Phase 3 — holds
+        the Toss ``conditionalOrderId`` for every ``cond_*`` event once
+        known; there is no separate column for it."""
+        return PortfolioOrderAudit(
+            account_id=account_id,
+            proposal_uuid=proposal_uuid,
+            symbol=symbol,
+            side=side,
+            order_type="LIMIT",
+            price=limit_price,
+            quantity=quantity,
+            currency=currency,
+            est_amount_krw=est_amount_krw,
+            mode=mode,
+            event=event,
+            toss_order_id=toss_conditional_order_id,
+            error_code=error_code,
+            detail=json.dumps(detail) if detail is not None else None,
+            created_at=created_at,
+        )
+
+    def create_conditional_order_proposal_with_audit(
+        self,
+        *,
+        account_id: int,
+        proposal_uuid: str,
+        symbol: str,
+        storage_symbol: str,
+        market: str,
+        currency: str,
+        side: str,
+        trigger_price: float,
+        limit_price: float,
+        quantity: float,
+        est_amount_krw: float,
+        expire_date: date,
+        client_order_id: str,
+        created_at: datetime,
+        expires_at: datetime,
+        max_pending_proposals: int,
+    ) -> PortfolioConditionalOrderProposal:
+        """Atomically insert the conditional-order proposal row and its
+        ``cond_proposed`` audit event, with the pending-proposal-count cap
+        check and insert in the same write transaction (mirrors Phase 3's
+        ``create_order_proposal_with_audit`` TOCTOU fix — design spec is
+        silent on a conditional-specific pending cap, so this inherits
+        Phase 3's guardrail count of 10, per the implementation brief's
+        "스펙이 침묵하는 세부는 Phase 3 구현의 기존 패턴을 따르세요")."""
+        with self.portfolio_write_session() as session:
+            pending_count = int(
+                session.execute(
+                    select(func.count(PortfolioConditionalOrderProposal.id)).where(
+                        and_(
+                            PortfolioConditionalOrderProposal.account_id == account_id,
+                            PortfolioConditionalOrderProposal.status == "pending",
+                            PortfolioConditionalOrderProposal.expires_at > created_at,
+                        )
+                    )
+                ).scalar_one()
+            )
+            if pending_count >= max_pending_proposals:
+                raise PendingConditionalProposalCapExceededError(
+                    f"account_id={account_id} already has {pending_count} pending conditional "
+                    f"proposals (max {max_pending_proposals})"
+                )
+
+            row = PortfolioConditionalOrderProposal(
+                account_id=account_id,
+                proposal_uuid=proposal_uuid,
+                symbol=symbol,
+                storage_symbol=storage_symbol,
+                market=market,
+                currency=currency,
+                side=side,
+                trigger_price=trigger_price,
+                limit_price=limit_price,
+                quantity=quantity,
+                est_amount_krw=est_amount_krw,
+                expire_date=expire_date,
+                client_order_id=client_order_id,
+                status="pending",
+                created_at=created_at,
+                expires_at=expires_at,
+            )
+            session.add(row)
+            session.flush()
+            session.add(
+                self._conditional_audit_row(
+                    account_id=account_id,
+                    proposal_uuid=proposal_uuid,
+                    symbol=symbol,
+                    side=side,
+                    limit_price=limit_price,
+                    quantity=quantity,
+                    currency=currency,
+                    est_amount_krw=est_amount_krw,
+                    mode=None,
+                    event="cond_proposed",
+                    toss_conditional_order_id=None,
+                    created_at=created_at,
+                    detail={"trigger_price": trigger_price, "expire_date": expire_date.isoformat()},
+                )
+            )
+            session.flush()
+            session.refresh(row)
+            session.expunge(row)
+            return row
+
+    def _materialize_conditional_expiry_in_session(
+        self, *, session: Any, row: PortfolioConditionalOrderProposal, now: datetime
+    ) -> None:
+        """Same lazy-TTL-materialization pattern as Phase 3's
+        ``_materialize_expiry_in_session`` — only the still-``pending`` TTL
+        (``expires_at``, 10 minutes) is handled here; the Toss-side
+        ``expire_date`` (up to 7 days) is observed via sync, not a local
+        timer."""
+        if row.status == "pending" and row.expires_at <= now:
+            row.status = "expired"
+            row.updated_at = datetime.now()
+            session.add(
+                self._conditional_audit_row(
+                    account_id=row.account_id,
+                    proposal_uuid=row.proposal_uuid,
+                    symbol=row.symbol,
+                    side=row.side,
+                    limit_price=row.limit_price,
+                    quantity=row.quantity,
+                    currency=row.currency,
+                    est_amount_krw=row.est_amount_krw,
+                    mode=None,
+                    event="cond_expired",
+                    toss_conditional_order_id=None,
+                    created_at=now,
+                )
+            )
+            session.flush()
+
+    def _materialize_conditional_expiry_standalone(
+        self, *, proposal_uuid: str, account_id: Optional[int], now: datetime
+    ) -> None:
+        with self.portfolio_write_session() as session:
+            conditions = [PortfolioConditionalOrderProposal.proposal_uuid == proposal_uuid]
+            if account_id is not None:
+                conditions.append(PortfolioConditionalOrderProposal.account_id == account_id)
+            row = session.execute(
+                select(PortfolioConditionalOrderProposal).where(and_(*conditions)).limit(1)
+            ).scalar_one_or_none()
+            if row is None:
+                return
+            self._materialize_conditional_expiry_in_session(session=session, row=row, now=now)
+
+    def get_conditional_order_proposal(
+        self,
+        proposal_uuid: str,
+        *,
+        account_id: Optional[int] = None,
+        now: Optional[datetime] = None,
+    ) -> Optional[PortfolioConditionalOrderProposal]:
+        """Fetch one conditional-order proposal, lazily materializing pending
+        TTL expiry first when ``now`` is given."""
+        if now is not None:
+            self._materialize_conditional_expiry_standalone(proposal_uuid=proposal_uuid, account_id=account_id, now=now)
+        with self.db.get_session() as session:
+            conditions = [PortfolioConditionalOrderProposal.proposal_uuid == proposal_uuid]
+            if account_id is not None:
+                conditions.append(PortfolioConditionalOrderProposal.account_id == account_id)
+            row = session.execute(
+                select(PortfolioConditionalOrderProposal).where(and_(*conditions)).limit(1)
+            ).scalar_one_or_none()
+            if row is not None:
+                session.expunge(row)
+            return row
+
+    def list_conditional_order_proposals(
+        self,
+        account_id: int,
+        *,
+        status: Optional[str] = None,
+        now: Optional[datetime] = None,
+    ) -> List[PortfolioConditionalOrderProposal]:
+        """List conditional-order proposals for one account, optionally
+        filtered by status; lazily materializes overdue-``pending`` TTL
+        expiry first when ``now`` is given (mirrors
+        ``list_order_proposals``)."""
+        if now is not None:
+            with self.db.get_session() as session:
+                overdue_uuids = session.execute(
+                    select(PortfolioConditionalOrderProposal.proposal_uuid).where(
+                        and_(
+                            PortfolioConditionalOrderProposal.account_id == account_id,
+                            PortfolioConditionalOrderProposal.status == "pending",
+                            PortfolioConditionalOrderProposal.expires_at <= now,
+                        )
+                    )
+                ).scalars().all()
+            for proposal_uuid in overdue_uuids:
+                self._materialize_conditional_expiry_standalone(proposal_uuid=proposal_uuid, account_id=account_id, now=now)
+
+        with self.db.get_session() as session:
+            conditions = [PortfolioConditionalOrderProposal.account_id == account_id]
+            if status is not None:
+                conditions.append(PortfolioConditionalOrderProposal.status == status)
+            rows = session.execute(
+                select(PortfolioConditionalOrderProposal)
+                .where(and_(*conditions))
+                .order_by(PortfolioConditionalOrderProposal.id.desc())
+            ).scalars().all()
+            rows = list(rows)
+            for row in rows:
+                session.expunge(row)
+            return rows
+
+    def find_conditional_order_ids_owned_by_others(
+        self, toss_conditional_order_ids: Iterable[str], *, exclude_proposal_uuid: str
+    ) -> Set[str]:
+        """Codex 2nd-round review R1-2 (coordinator-confirmed convergence
+        contract): return the subset of ``toss_conditional_order_ids`` that
+        are already recorded — **regardless of status** — on some *other*
+        local proposal row (any account; a remote ``conditionalOrderId`` is
+        Toss's own identifier, not scoped to this system's account rows).
+        Callers must drop these from reconcile's candidate set before
+        adopting a match — an ID already owned elsewhere can never
+        legitimately be re-adopted by this proposal, ambiguous-looking
+        uniqueness in the remote search notwithstanding. This is an
+        application-layer check; ``DatabaseManager._ensure_conditional_order_toss_id_unique_index``
+        is the DB-level backstop for the race window between this read and
+        the eventual write."""
+        ids = {str(x) for x in toss_conditional_order_ids if x}
+        if not ids:
+            return set()
+        with self.db.get_session() as session:
+            rows = session.execute(
+                select(PortfolioConditionalOrderProposal.toss_conditional_order_id).where(
+                    and_(
+                        PortfolioConditionalOrderProposal.toss_conditional_order_id.in_(ids),
+                        PortfolioConditionalOrderProposal.proposal_uuid != exclude_proposal_uuid,
+                    )
+                )
+            ).scalars().all()
+            return {str(r) for r in rows if r}
+
+    def list_other_unresolved_conditional_proposals(
+        self, *, account_id: int, exclude_proposal_uuid: str
+    ) -> List[PortfolioConditionalOrderProposal]:
+        """Codex 2nd-round review R1-3 (coordinator-confirmed convergence
+        contract): list every *other* conditional-order proposal on this
+        account still ``approving``/``registration_unknown`` (i.e. not yet
+        known to have registered or definitively failed). Used by
+        ``PortfolioConditionalOrderService.reconcile_proposal`` to detect a
+        same-attribute "local contender" — if another unresolved proposal
+        shares this one's exact symbol/side/trigger/limit/quantity/
+        expire_date, a single remote candidate cannot be safely attributed
+        to either one by attributes alone, so reconcile must not adopt it
+        even when the remote search itself found exactly one match."""
+        with self.db.get_session() as session:
+            rows = session.execute(
+                select(PortfolioConditionalOrderProposal).where(
+                    and_(
+                        PortfolioConditionalOrderProposal.account_id == account_id,
+                        PortfolioConditionalOrderProposal.proposal_uuid != exclude_proposal_uuid,
+                        PortfolioConditionalOrderProposal.status.in_(("approving", "registration_unknown")),
+                    )
+                )
+            ).scalars().all()
+            rows = list(rows)
+            for row in rows:
+                session.expunge(row)
+            return rows
+
+    def adopt_reconciled_order_if_uncontended(
+        self,
+        *,
+        proposal_uuid: str,
+        account_id: int,
+        now: datetime,
+        conditional_order_id: str,
+        toss_status: str,
+        to_status: str,
+    ) -> ConditionalClaimOutcome:
+        """Codex 3rd-round review R1c (coordinator-confirmed convergence
+        contract — "경쟁자 조회~채택이 원자적이지 않다"): re-verify ownership
+        (``find_conditional_order_ids_owned_by_others``) and local-contender
+        (``list_other_unresolved_conditional_proposals``) exclusivity, and
+        adopt the candidate if uncontended, **all inside one
+        ``BEGIN IMMEDIATE`` write transaction** — closing the TOCTOU gap
+        between ``PortfolioConditionalOrderService.reconcile_proposal``'s
+        earlier advisory pre-checks (ordinary read sessions, no write lock)
+        and the eventual status/ID write. SQLite's ``BEGIN IMMEDIATE``
+        acquires the RESERVED lock for the whole transaction, so as long as
+        every writer to this table goes through
+        ``PortfolioRepository.portfolio_write_session`` (they all do), no
+        other proposal can enter ``approving``/acquire this exact
+        ``conditional_order_id`` between this method's re-check and its own
+        write — the race the advisory pre-checks alone could not close.
+
+        Callers MUST have already done all network I/O (the Toss
+        OPEN/CLOSED listing search) *before* calling this — this method
+        touches only the local DB, never Toss, so no network I/O ever runs
+        inside the write-locked transaction.
+
+        Returns a ``ConditionalClaimOutcome`` — see that class's docstring
+        for the four possible ``outcome`` values."""
+        with self.portfolio_write_session() as session:
+            row = session.execute(
+                select(PortfolioConditionalOrderProposal).where(
+                    and_(
+                        PortfolioConditionalOrderProposal.proposal_uuid == proposal_uuid,
+                        PortfolioConditionalOrderProposal.account_id == account_id,
+                    )
+                ).limit(1)
+            ).scalar_one_or_none()
+            if row is None:
+                return ConditionalClaimOutcome("not_found")
+
+            if row.status != "registration_unknown":
+                # Something else (a concurrent reconcile call, the original
+                # approve POST's own outcome resolution, or force-resolve)
+                # already moved this row on since the caller's entry gate —
+                # idempotent-retry return, never overwrite it.
+                session.refresh(row)
+                session.expunge(row)
+                return ConditionalClaimOutcome("not_reconcilable", proposal=row)
+
+            owned_by_other_proposal_count = session.execute(
+                select(func.count()).select_from(PortfolioConditionalOrderProposal).where(
+                    and_(
+                        PortfolioConditionalOrderProposal.toss_conditional_order_id == conditional_order_id,
+                        PortfolioConditionalOrderProposal.proposal_uuid != proposal_uuid,
+                    )
+                )
+            ).scalar_one()
+
+            contenders = session.execute(
+                select(PortfolioConditionalOrderProposal).where(
+                    and_(
+                        PortfolioConditionalOrderProposal.account_id == account_id,
+                        PortfolioConditionalOrderProposal.proposal_uuid != proposal_uuid,
+                        PortfolioConditionalOrderProposal.status.in_(("approving", "registration_unknown")),
+                    )
+                )
+            ).scalars().all()
+            local_contender_count = sum(
+                1 for other in contenders if _conditional_order_attributes_match(other, row)
+            )
+
+            if owned_by_other_proposal_count > 0 or local_contender_count > 0:
+                row.updated_at = datetime.now()
+                session.add(
+                    self._conditional_audit_row(
+                        account_id=account_id,
+                        proposal_uuid=proposal_uuid,
+                        symbol=row.symbol,
+                        side=row.side,
+                        limit_price=row.limit_price,
+                        quantity=row.quantity,
+                        currency=row.currency,
+                        est_amount_krw=row.est_amount_krw,
+                        mode="live",
+                        event="cond_reconciled",
+                        toss_conditional_order_id=None,
+                        created_at=now,
+                        error_code="local-contender" if local_contender_count > 0 else "owned-by-other-proposal",
+                        detail={
+                            "candidate_conditional_order_id": conditional_order_id,
+                            "local_contender_count": local_contender_count,
+                            "owned_by_other_proposal_count": int(owned_by_other_proposal_count),
+                            "note": (
+                                "re-verified under the write lock immediately before adoption "
+                                "(Codex 3rd-round review R1c) -- a contender/owner appeared between "
+                                "the caller's advisory pre-check and this atomic recheck; adoption "
+                                "cancelled, staying registration_unknown"
+                            ),
+                        },
+                    )
+                )
+                session.flush()
+                session.refresh(row)
+                session.expunge(row)
+                return ConditionalClaimOutcome(
+                    "contended",
+                    proposal=row,
+                    detail={
+                        "local_contender_count": local_contender_count,
+                        "owned_by_other_proposal_count": int(owned_by_other_proposal_count),
+                    },
+                )
+
+            row.status = to_status
+            row.updated_at = datetime.now()
+            row.toss_conditional_order_id = conditional_order_id
+            row.toss_status = toss_status
+            row.last_synced_at = now
+            if to_status in ("approved", "paused"):
+                row.approved_at = now
+            session.add(
+                self._conditional_audit_row(
+                    account_id=account_id,
+                    proposal_uuid=proposal_uuid,
+                    symbol=row.symbol,
+                    side=row.side,
+                    limit_price=row.limit_price,
+                    quantity=row.quantity,
+                    currency=row.currency,
+                    est_amount_krw=row.est_amount_krw,
+                    mode="live",
+                    event="cond_reconciled",
+                    toss_conditional_order_id=conditional_order_id,
+                    created_at=now,
+                    detail={"via": "reconcile", "matched_toss_status": toss_status, "candidate_count": 1},
+                )
+            )
+            session.flush()
+            session.refresh(row)
+            session.expunge(row)
+            return ConditionalClaimOutcome("adopted", proposal=row)
+
+    def claim_conditional_proposal_for_approval(
+        self,
+        *,
+        proposal_uuid: str,
+        account_id: int,
+        now: datetime,
+        est_amount_krw: float,
+        high_value_threshold_krw: float,
+        per_order_cap_krw: float,
+        daily_cap_krw: float,
+        eps: float = 1e-6,
+    ) -> ConditionalClaimOutcome:
+        """Atomic ``pending -> approving`` claim — the Phase 4 analog of
+        Phase 3's ``claim_proposal_for_execution`` (design spec §3 "로컬
+        상태기계": "원자적 claim: Phase 3 execute와 동일 패턴"). Inside one
+        write transaction: materialize TTL expiry if due, then — only if
+        still ``pending`` — re-validate the high-value hard reject, the
+        per-order cap, and the *shared* daily cap (via
+        ``_sum_reserved_and_live_amount_in_session``, which folds in both
+        Phase 3 and Phase 4 reservations) before inserting the
+        ``approving`` reservation. A failing cap check transitions the row
+        straight to ``registration_failed`` in the same transaction — it
+        never reached Toss, so ``registration_failed`` (not
+        ``registration_unknown``) is correct here.
+
+        This is only ever called on the live path — dry-run never claims
+        (mirrors Phase 3: nothing to reserve against since Toss is never
+        contacted)."""
+        with self.portfolio_write_session() as session:
+            row = session.execute(
+                select(PortfolioConditionalOrderProposal).where(
+                    and_(
+                        PortfolioConditionalOrderProposal.proposal_uuid == proposal_uuid,
+                        PortfolioConditionalOrderProposal.account_id == account_id,
+                    )
+                ).limit(1)
+            ).scalar_one_or_none()
+            if row is None:
+                return ConditionalClaimOutcome("not_found")
+
+            self._materialize_conditional_expiry_in_session(session=session, row=row, now=now)
+
+            terminal_statuses = {
+                "canceled",
+                "expired",
+                "dry_run_approved",
+                "registration_failed",
+                "triggered_completed",
+                "toss_expired",
+                "toss_canceled",
+            }
+            if row.status in terminal_statuses:
+                session.refresh(row)
+                session.expunge(row)
+                return ConditionalClaimOutcome("already_terminal", proposal=row)
+            if row.status in ("approving", "registration_unknown"):
+                session.refresh(row)
+                session.expunge(row)
+                return ConditionalClaimOutcome("in_progress", proposal=row)
+            if row.status in ("approved", "paused"):
+                session.refresh(row)
+                session.expunge(row)
+                return ConditionalClaimOutcome("already_approved", proposal=row)
+            if row.status != "pending":
+                # Defensive — every known status is covered above; a future
+                # unlisted status must not silently fall through to a claim.
+                session.refresh(row)
+                session.expunge(row)
+                return ConditionalClaimOutcome("not_executable", proposal=row)
+
+            def _reject(*, limit_type: str, error_code: str, reason: str) -> ConditionalClaimOutcome:
+                row.status = "registration_failed"
+                row.updated_at = datetime.now()
+                session.add(
+                    self._conditional_audit_row(
+                        account_id=account_id,
+                        proposal_uuid=proposal_uuid,
+                        symbol=row.symbol,
+                        side=row.side,
+                        limit_price=row.limit_price,
+                        quantity=row.quantity,
+                        currency=row.currency,
+                        est_amount_krw=est_amount_krw,
+                        mode="live",
+                        event="cond_rejected",
+                        toss_conditional_order_id=None,
+                        created_at=now,
+                        error_code=error_code,
+                        detail={"reason": reason},
+                    )
+                )
+                session.flush()
+                session.refresh(row)
+                session.expunge(row)
+                return ConditionalClaimOutcome("rejected", proposal=row, reason=reason, limit_type=limit_type)
+
+            if est_amount_krw >= high_value_threshold_krw:
+                return _reject(
+                    limit_type="high_value",
+                    error_code="high-value-hard-reject",
+                    reason=(
+                        f"Estimated order amount {est_amount_krw:,.0f} KRW is at or above the "
+                        f"{high_value_threshold_krw:,.0f} KRW hard-reject threshold"
+                    ),
+                )
+            if est_amount_krw > per_order_cap_krw + eps:
+                return _reject(
+                    limit_type="per_order",
+                    error_code="limit-exceeded",
+                    reason=(
+                        f"Estimated order amount {est_amount_krw:,.0f} KRW exceeds the per-order cap "
+                        f"{per_order_cap_krw:,.0f} KRW"
+                    ),
+                )
+            already_reserved = self._sum_reserved_and_live_amount_in_session(
+                session, account_id=account_id, kst_date=now.date()
+            )
+            if already_reserved + est_amount_krw > daily_cap_krw + eps:
+                return _reject(
+                    limit_type="daily",
+                    error_code="limit-exceeded",
+                    reason=(
+                        f"Estimated order amount {est_amount_krw:,.0f} KRW would push today's reserved+"
+                        f"executed total to {already_reserved + est_amount_krw:,.0f} KRW, exceeding the "
+                        f"daily cap {daily_cap_krw:,.0f} KRW"
+                    ),
+                )
+
+            row.status = "approving"
+            row.reserved_at = now
+            row.est_amount_krw = est_amount_krw
+            row.updated_at = datetime.now()
+            session.add(
+                self._conditional_audit_row(
+                    account_id=account_id,
+                    proposal_uuid=proposal_uuid,
+                    symbol=row.symbol,
+                    side=row.side,
+                    limit_price=row.limit_price,
+                    quantity=row.quantity,
+                    currency=row.currency,
+                    est_amount_krw=est_amount_krw,
+                    mode="live",
+                    event="cond_approving",
+                    toss_conditional_order_id=None,
+                    created_at=now,
+                )
+            )
+            session.flush()
+            session.refresh(row)
+            session.expunge(row)
+            return ConditionalClaimOutcome("claimed", proposal=row)
+
+    def reconcile_claim_stale_approving(
+        self,
+        *,
+        proposal_uuid: str,
+        account_id: int,
+        now: datetime,
+        stale_after: timedelta,
+    ) -> ConditionalClaimOutcome:
+        """Reconcile's entry gate (Codex BLOCK review blocker 2 fix — design
+        spec §5 "429"/§3 reconcile contract, coordinator-confirmed
+        convergence contract): reconcile must never preempt a genuinely
+        in-flight ``approve_proposal`` call. A ``registration_unknown`` row
+        is always fair game (that is reconcile's whole purpose). An
+        ``approving`` row is fair game **only** if its claim
+        (``reserved_at``) is older than ``stale_after`` — a normal approve
+        call resolves ``approving`` to a terminal-ish outcome within a
+        single request, so anything still ``approving`` after
+        ``stale_after`` almost certainly means the process that held the
+        claim died mid-POST (crash recovery), not that a POST is still
+        genuinely in flight.
+
+        The staleness check and the ``approving -> registration_unknown``
+        takeover happen atomically in one write transaction — there is no
+        window between "checked staleness" and "took over the row" for a
+        concurrent approve's own POST-outcome resolution to race against
+        (that resolution's own ``from_statuses`` includes
+        ``registration_unknown``, so it still converges correctly even if
+        this takeover runs first — see
+        ``PortfolioConditionalOrderService._resolve_registration_outcome``).
+
+        See ``ConditionalClaimOutcome`` for the possible ``outcome`` values.
+        """
+        with self.portfolio_write_session() as session:
+            row = session.execute(
+                select(PortfolioConditionalOrderProposal).where(
+                    and_(
+                        PortfolioConditionalOrderProposal.proposal_uuid == proposal_uuid,
+                        PortfolioConditionalOrderProposal.account_id == account_id,
+                    )
+                ).limit(1)
+            ).scalar_one_or_none()
+            if row is None:
+                return ConditionalClaimOutcome("not_found")
+
+            if row.status == "registration_unknown":
+                session.refresh(row)
+                session.expunge(row)
+                return ConditionalClaimOutcome("ready", proposal=row)
+
+            if row.status != "approving":
+                session.refresh(row)
+                session.expunge(row)
+                return ConditionalClaimOutcome("not_reconcilable", proposal=row)
+
+            claimed_at = row.reserved_at
+            if claimed_at is None or (now - claimed_at) < stale_after:
+                session.refresh(row)
+                session.expunge(row)
+                return ConditionalClaimOutcome("approval_in_progress", proposal=row)
+
+            row.status = "registration_unknown"
+            row.updated_at = datetime.now()
+            session.add(
+                self._conditional_audit_row(
+                    account_id=account_id,
+                    proposal_uuid=proposal_uuid,
+                    symbol=row.symbol,
+                    side=row.side,
+                    limit_price=row.limit_price,
+                    quantity=row.quantity,
+                    currency=row.currency,
+                    est_amount_krw=row.est_amount_krw,
+                    mode="live",
+                    event="cond_reg_unknown",
+                    toss_conditional_order_id=None,
+                    created_at=now,
+                    error_code="stale-approving-claim",
+                    detail={
+                        "reason": (
+                            f"approving claim older than {stale_after} (reserved_at="
+                            f"{claimed_at.isoformat()}); reconcile taking over as crash recovery"
+                        )
+                    },
+                )
+            )
+            session.flush()
+            session.refresh(row)
+            session.expunge(row)
+            return ConditionalClaimOutcome("ready", proposal=row)
+
+    def transition_conditional_proposal(
+        self,
+        *,
+        proposal_uuid: str,
+        account_id: int,
+        now: datetime,
+        from_statuses: Iterable[str],
+        to_status: str,
+        event: str,
+        mode: Optional[str] = None,
+        toss_conditional_order_id: Optional[str] = None,
+        approved_at: Optional[datetime] = None,
+        toss_status: Optional[str] = None,
+        error_code: Optional[str] = None,
+        detail: Optional[Dict[str, Any]] = None,
+        est_amount_krw_override: Optional[float] = None,
+    ) -> Optional[PortfolioConditionalOrderProposal]:
+        """Atomically materialize pending-TTL expiry if due, then — only if
+        the row's resulting status is still one of ``from_statuses`` —
+        apply the requested transition and append a matching audit row in
+        the same DB transaction (mirrors Phase 3's ``transition_proposal``).
+        Used for every non-claim transition: dry-run resolution, POST
+        outcome resolution (approved/registration_failed/
+        registration_unknown), reconcile, cancel, and sync-driven Toss
+        status updates (via ``toss_status``/``to_status`` together).
+
+        Returns the proposal reflecting its *actual* final status, which
+        may differ from ``to_status`` (e.g. concurrently resolved already)
+        — callers compare ``row.status`` against what they expected, same
+        idempotent-retry contract as Phase 3. Returns ``None`` only when no
+        such proposal exists at all for this account."""
+        with self.portfolio_write_session() as session:
+            row = session.execute(
+                select(PortfolioConditionalOrderProposal).where(
+                    and_(
+                        PortfolioConditionalOrderProposal.proposal_uuid == proposal_uuid,
+                        PortfolioConditionalOrderProposal.account_id == account_id,
+                    )
+                ).limit(1)
+            ).scalar_one_or_none()
+            if row is None:
+                return None
+
+            self._materialize_conditional_expiry_in_session(session=session, row=row, now=now)
+
+            if row.status not in set(from_statuses):
+                session.refresh(row)
+                session.expunge(row)
+                return row
+
+            row.status = to_status
+            row.updated_at = datetime.now()
+            if approved_at is not None:
+                row.approved_at = approved_at
+            if toss_conditional_order_id is not None:
+                row.toss_conditional_order_id = toss_conditional_order_id
+            if toss_status is not None:
+                row.toss_status = toss_status
+                row.last_synced_at = now
+
+            est_amount = est_amount_krw_override if est_amount_krw_override is not None else row.est_amount_krw
+            session.add(
+                self._conditional_audit_row(
+                    account_id=account_id,
+                    proposal_uuid=proposal_uuid,
+                    symbol=row.symbol,
+                    side=row.side,
+                    limit_price=row.limit_price,
+                    quantity=row.quantity,
+                    currency=row.currency,
+                    est_amount_krw=est_amount,
+                    mode=mode,
+                    event=event,
+                    toss_conditional_order_id=(
+                        toss_conditional_order_id if toss_conditional_order_id is not None else row.toss_conditional_order_id
+                    ),
+                    created_at=now,
+                    error_code=error_code,
+                    detail=detail,
+                )
+            )
+            session.flush()
+            session.refresh(row)
+            session.expunge(row)
+            return row
+
+    def append_standalone_conditional_audit(
+        self,
+        *,
+        account_id: int,
+        proposal_uuid: str,
+        symbol: str,
+        side: str,
+        limit_price: Optional[float],
+        quantity: float,
+        currency: str,
+        est_amount_krw: float,
+        mode: Optional[str],
+        event: str,
+        toss_conditional_order_id: Optional[str],
+        created_at: datetime,
+        error_code: Optional[str] = None,
+        detail: Optional[Dict[str, Any]] = None,
+    ) -> PortfolioOrderAudit:
+        """Append one audit row without touching
+        ``PortfolioConditionalOrderProposal.status`` — used by reconcile's
+        "no attribute match found" case (status stays ``registration_unknown``,
+        only the reconcile *attempt* is logged) and by a rejected
+        Toss-side cancel (the proposal stays ``approved``/``paused``; only
+        the cancel attempt failed). Mirrors ``append_standalone_order_audit``."""
+        with self.portfolio_write_session() as session:
+            audit = self._conditional_audit_row(
+                account_id=account_id,
+                proposal_uuid=proposal_uuid,
+                symbol=symbol,
+                side=side,
+                limit_price=limit_price,
+                quantity=quantity,
+                currency=currency,
+                est_amount_krw=est_amount_krw,
+                mode=mode,
+                event=event,
+                toss_conditional_order_id=toss_conditional_order_id,
+                created_at=created_at,
+                error_code=error_code,
+                detail=detail,
+            )
+            session.add(audit)
+            session.flush()
+            session.refresh(audit)
+            session.expunge(audit)
+            return audit

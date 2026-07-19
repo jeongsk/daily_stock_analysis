@@ -1010,6 +1010,337 @@ class TestOrderInfoReads(TossFetcherTestCase):
         self.assertEqual(result["status"], "FILLED")
 
 
+class TestConditionalOrderWriteGateRegression(TossFetcherTestCase):
+    """Phase 4 design spec §3 "write 게이트 확장" / §6 "게이트 회귀(최우선)":
+    every bypass path into a conditional-order write must be blocked in
+    dry-run — this is the blocker-priority regression the design spec calls
+    out by name (probe B-1: the pre-Phase-4 gate matched only
+    ``/api/v1/orders*`` and would have let a conditional-order POST/DELETE
+    straight through undetected). Covers: the two new public fetcher
+    methods, ``_request_write``/``_request_delete`` called directly
+    (bypassing both public methods), and a query-string variant of each
+    conditional-orders URL (reviewer re-review major 3's exact failure mode,
+    now re-verified against the conditional-orders path too)."""
+
+    @patch("data_provider.toss_fetcher.requests.post")
+    def test_place_conditional_order_refuses_without_live_flag_and_makes_no_http_call(self, mock_post):
+        fetcher = _make_fetcher()
+        with patch.object(TossFetcher, "is_order_live_enabled", return_value=False):
+            with self.assertRaises(toss_fetcher.TossOrderNotLiveError):
+                fetcher.place_conditional_order(
+                    "555",
+                    symbol="005930",
+                    side="SELL",
+                    trigger_price="65000",
+                    limit_price="64500",
+                    quantity="1",
+                    expire_date="2026-07-26",
+                    client_order_id="dc-abc123",
+                )
+        mock_post.assert_not_called()
+
+    @patch("data_provider.toss_fetcher.requests.delete")
+    def test_cancel_conditional_order_refuses_without_live_flag_and_makes_no_http_call(self, mock_delete):
+        fetcher = _make_fetcher()
+        with patch.object(TossFetcher, "is_order_live_enabled", return_value=False):
+            with self.assertRaises(toss_fetcher.TossOrderNotLiveError):
+                fetcher.cancel_conditional_order("555", "cond-abc123")
+        mock_delete.assert_not_called()
+
+    @patch("data_provider.toss_fetcher.requests.post")
+    def test_request_write_gates_conditional_orders_url_even_when_called_directly(self, mock_post):
+        fetcher = _make_fetcher()
+        with patch.object(TossFetcher, "is_order_live_enabled", return_value=False):
+            with self.assertRaises(toss_fetcher.TossOrderNotLiveError):
+                fetcher._request_write(
+                    toss_fetcher._CONDITIONAL_ORDERS_URL, json_body={"symbol": "005930"}, account_seq="555"
+                )
+        mock_post.assert_not_called()
+
+    @patch("data_provider.toss_fetcher.requests.post")
+    def test_request_write_gates_conditional_orders_url_with_query_string(self, mock_post):
+        fetcher = _make_fetcher()
+        with patch.object(TossFetcher, "is_order_live_enabled", return_value=False):
+            with self.assertRaises(toss_fetcher.TossOrderNotLiveError):
+                fetcher._request_write(
+                    f"{toss_fetcher._CONDITIONAL_ORDERS_URL}?foo=bar",
+                    json_body={"symbol": "005930"},
+                    account_seq="555",
+                )
+        mock_post.assert_not_called()
+
+    @patch("data_provider.toss_fetcher.requests.delete")
+    def test_request_delete_gates_conditional_orders_url_even_when_called_directly(self, mock_delete):
+        fetcher = _make_fetcher()
+        with patch.object(TossFetcher, "is_order_live_enabled", return_value=False):
+            with self.assertRaises(toss_fetcher.TossOrderNotLiveError):
+                fetcher._request_delete(
+                    f"{toss_fetcher._CONDITIONAL_ORDERS_URL}/cond-abc123", account_seq="555"
+                )
+        mock_delete.assert_not_called()
+
+    @patch("data_provider.toss_fetcher.requests.delete")
+    def test_request_delete_gates_conditional_orders_url_with_query_string(self, mock_delete):
+        fetcher = _make_fetcher()
+        with patch.object(TossFetcher, "is_order_live_enabled", return_value=False):
+            with self.assertRaises(toss_fetcher.TossOrderNotLiveError):
+                fetcher._request_delete(
+                    f"{toss_fetcher._CONDITIONAL_ORDERS_URL}/cond-abc123?foo=bar", account_seq="555"
+                )
+        mock_delete.assert_not_called()
+
+    @patch("data_provider.toss_fetcher.requests.delete")
+    def test_request_delete_gates_plain_orders_url_too(self, mock_delete):
+        """The DELETE gate must also cover plain ``/orders*`` (not just
+        conditional-orders) — no such DELETE endpoint is used by Phase 3
+        (which uses POST .../cancel), but the shared predicate must not
+        accidentally narrow to conditional-orders only."""
+        fetcher = _make_fetcher()
+        with patch.object(TossFetcher, "is_order_live_enabled", return_value=False):
+            with self.assertRaises(toss_fetcher.TossOrderNotLiveError):
+                fetcher._request_delete(f"{toss_fetcher._ORDERS_URL}/abc123", account_seq="555")
+        mock_delete.assert_not_called()
+
+
+class TestConditionalOrderWrites(TossFetcherTestCase):
+    """``place_conditional_order``/``cancel_conditional_order``/
+    ``get_conditional_order``/``list_conditional_orders`` — design spec
+    Phase 4 §2/§3. Request/response shapes verified against the live Toss
+    OpenAPI spec (see ``toss_fetcher.py``'s Phase 4 section docstring)."""
+
+    @patch("data_provider.toss_fetcher.requests.post")
+    def test_place_conditional_order_live_success_sends_expected_body(self, mock_post):
+        mock_post.side_effect = [
+            _make_resp({"access_token": "tok-1", "expires_in": 3600}),
+            _make_resp(
+                {"result": {"conditionalOrderId": "cond-1", "clientOrderId": "dc-abc123"}}, status_code=200
+            ),
+        ]
+        fetcher = _make_fetcher()
+        with patch.object(TossFetcher, "is_order_live_enabled", return_value=True):
+            result = fetcher.place_conditional_order(
+                "555",
+                symbol="005930",
+                side="SELL",
+                trigger_price="65000",
+                limit_price="64500",
+                quantity="1",
+                expire_date="2026-07-26",
+                client_order_id="dc-abc123",
+            )
+        self.assertEqual(result["conditionalOrderId"], "cond-1")
+        order_call = mock_post.call_args_list[1]
+        self.assertEqual(order_call.args[0], toss_fetcher._CONDITIONAL_ORDERS_URL)
+        self.assertEqual(
+            order_call.kwargs["json"],
+            {
+                "symbol": "005930",
+                "type": "SINGLE",
+                "quantity": "1",
+                "orderType": "LIMIT",
+                "clientOrderId": "dc-abc123",
+                "expireDate": "2026-07-26",
+                "first": {"orderSide": "SELL", "triggerPrice": "65000", "orderPrice": "64500"},
+            },
+        )
+        self.assertNotIn("confirmHighValueOrder", order_call.kwargs["json"])
+        self.assertNotIn("second", order_call.kwargs["json"])
+        # Codex 2nd-round review R2 (coordinator-confirmed convergence
+        # contract): the conditional-order write POST must use the named,
+        # asserted-against-reconcile's-stale-threshold timeout constant, not
+        # a bare literal that could silently drift out of sync with it.
+        self.assertEqual(
+            order_call.kwargs["timeout"], toss_fetcher._CONDITIONAL_ORDER_WRITE_TIMEOUT_SECONDS
+        )
+
+    def test_conditional_order_write_worst_case_timeout_is_4x_single_call_timeout(self) -> None:
+        """R4-8: the worst-case-per-write-call constant that reconcile's
+        stale-approving threshold is asserted against (see
+        portfolio_conditional_order_service.py's module-level assert) must
+        stay derived from, not independent of, the single-call timeout —
+        one possible 401 retry means at most 2 token-fetch calls + 2 main
+        POST/DELETE calls, each individually bounded by the single-call
+        timeout."""
+        self.assertEqual(
+            toss_fetcher._CONDITIONAL_ORDER_WRITE_WORST_CASE_SECONDS,
+            4 * toss_fetcher._CONDITIONAL_ORDER_WRITE_TIMEOUT_SECONDS,
+        )
+
+    @patch("data_provider.toss_fetcher.time.sleep")
+    @patch("data_provider.toss_fetcher.requests.post")
+    def test_place_conditional_order_429_does_not_retry(self, mock_post, mock_sleep):
+        """Codex review major 1 / design spec §5 "429": unlike Phase 3's
+        place_order (which retries a plain-order 429 with backoff — see
+        test_place_order_429_backs_off_then_succeeds), a conditional-order
+        registration POST must never be retried — the first attempt's
+        outcome is ambiguous, and a blind retry risks double-registering a
+        real, auto-executing conditional order."""
+        mock_post.side_effect = [
+            _make_resp({"access_token": "tok-1", "expires_in": 3600}),
+            _make_resp({}, status_code=429),
+        ]
+        fetcher = _make_fetcher()
+        with patch.object(TossFetcher, "is_order_live_enabled", return_value=True):
+            with self.assertRaises(DataFetchError):
+                fetcher.place_conditional_order(
+                    "555",
+                    symbol="005930",
+                    side="SELL",
+                    trigger_price="65000",
+                    limit_price="64500",
+                    quantity="1",
+                    expire_date="2026-07-26",
+                    client_order_id="dc-abc123",
+                )
+        # Exactly one POST (the 429) — token issuance is a separate POST call.
+        self.assertEqual(mock_post.call_count, 2)
+        mock_sleep.assert_not_called()
+
+    def test_place_order_429_retry_is_unaffected_by_conditional_order_change(self) -> None:
+        """Scope guard (coordinator directive): Phase 3's place_order 429
+        retry-with-backoff behavior must remain completely untouched by the
+        Phase 4 429 change — this is already covered by
+        test_place_order_429_backs_off_then_succeeds above; this test only
+        documents the intent so a future edit to the shared 429 branch in
+        _request_write cannot silently narrow Phase 3's retry path too."""
+        import inspect
+
+        source = inspect.getsource(TossFetcher._request_write)
+        # The conditional-orders no-retry branch must raise before ever
+        # reaching the Phase 3 attempt-counter/backoff code below it.
+        cond_branch_pos = source.index("_CONDITIONAL_ORDERS_URL_PATH")
+        retry_pos = source.index("attempt += 1")
+        self.assertLess(cond_branch_pos, retry_pos)
+
+    @patch("data_provider.toss_fetcher.requests.post")
+    def test_place_conditional_order_rejected_business_error_preserves_code(self, mock_post):
+        mock_post.side_effect = [
+            _make_resp({"access_token": "tok-1", "expires_in": 3600}),
+            _make_resp(
+                {"error": {"code": "invalid-request", "message": "감시 가격이 유효한 숫자가 아닙니다."}},
+                status_code=400,
+            ),
+        ]
+        fetcher = _make_fetcher()
+        with patch.object(TossFetcher, "is_order_live_enabled", return_value=True):
+            with self.assertRaises(toss_fetcher.TossOrderRejectedError) as ctx:
+                fetcher.place_conditional_order(
+                    "555",
+                    symbol="005930",
+                    side="SELL",
+                    trigger_price="bad",
+                    limit_price="64500",
+                    quantity="1",
+                    expire_date="2026-07-26",
+                    client_order_id="dc-abc123",
+                )
+        self.assertEqual(ctx.exception.code, "invalid-request")
+
+    @patch("data_provider.toss_fetcher.requests.delete")
+    @patch("data_provider.toss_fetcher.requests.post")
+    def test_cancel_conditional_order_live_success_204_no_body(self, mock_post, mock_delete):
+        mock_post.return_value = _make_resp({"access_token": "tok-1", "expires_in": 3600})
+        resp = _make_resp({}, status_code=204)
+        resp.text = ""
+        mock_delete.return_value = resp
+        fetcher = _make_fetcher()
+        with patch.object(TossFetcher, "is_order_live_enabled", return_value=True):
+            result = fetcher.cancel_conditional_order("555", "cond-1")
+        self.assertEqual(result, {})
+        self.assertEqual(
+            mock_delete.call_args.args[0], f"{toss_fetcher._CONDITIONAL_ORDERS_URL}/cond-1"
+        )
+        self.assertEqual(
+            mock_delete.call_args.kwargs["timeout"], toss_fetcher._CONDITIONAL_ORDER_WRITE_TIMEOUT_SECONDS
+        )
+
+    @patch("data_provider.toss_fetcher.requests.delete")
+    @patch("data_provider.toss_fetcher.requests.post")
+    def test_cancel_conditional_order_not_found_error(self, mock_post, mock_delete):
+        mock_post.return_value = _make_resp({"access_token": "tok-1", "expires_in": 3600})
+        resp = _make_resp(
+            {"error": {"code": "conditional-order-not-found", "message": "조건주문 없음"}}, status_code=404
+        )
+        mock_delete.return_value = resp
+        fetcher = _make_fetcher()
+        with patch.object(TossFetcher, "is_order_live_enabled", return_value=True):
+            with self.assertRaises(toss_fetcher.TossOrderRejectedError) as ctx:
+                fetcher.cancel_conditional_order("555", "cond-1")
+        self.assertEqual(ctx.exception.code, "conditional-order-not-found")
+
+    @patch("data_provider.toss_fetcher.time.sleep")
+    @patch("data_provider.toss_fetcher.requests.delete")
+    @patch("data_provider.toss_fetcher.requests.post")
+    def test_cancel_conditional_order_429_does_not_retry(self, mock_post, mock_delete, mock_sleep):
+        mock_post.return_value = _make_resp({"access_token": "tok-1", "expires_in": 3600})
+        mock_delete.return_value = _make_resp({}, status_code=429)
+        fetcher = _make_fetcher()
+        with patch.object(TossFetcher, "is_order_live_enabled", return_value=True):
+            with self.assertRaises(DataFetchError):
+                fetcher.cancel_conditional_order("555", "cond-1")
+        self.assertEqual(mock_delete.call_count, 1)
+        mock_sleep.assert_not_called()
+
+    @patch("data_provider.toss_fetcher.requests.get")
+    @patch("data_provider.toss_fetcher.requests.post")
+    def test_get_conditional_order(self, mock_post, mock_get):
+        mock_post.return_value = _make_resp({"access_token": "tok-1", "expires_in": 3600})
+        mock_get.return_value = _make_resp({"result": {"conditionalOrderId": "cond-1", "status": "WATCHING"}})
+        fetcher = _make_fetcher()
+        result = fetcher.get_conditional_order("555", "cond-1")
+        self.assertEqual(result["status"], "WATCHING")
+        self.assertEqual(
+            mock_get.call_args.args[0], f"{toss_fetcher._CONDITIONAL_ORDERS_URL}/cond-1"
+        )
+
+    @patch("data_provider.toss_fetcher.requests.get")
+    @patch("data_provider.toss_fetcher.requests.post")
+    def test_list_conditional_orders_rejects_invalid_status(self, mock_post, mock_get):
+        fetcher = _make_fetcher()
+        with self.assertRaises(ValueError):
+            fetcher.list_conditional_orders("555", status="BOGUS")
+        mock_get.assert_not_called()
+
+    @patch("data_provider.toss_fetcher.requests.get")
+    @patch("data_provider.toss_fetcher.requests.post")
+    def test_list_conditional_orders_happy_path(self, mock_post, mock_get):
+        mock_post.return_value = _make_resp({"access_token": "tok-1", "expires_in": 3600})
+        mock_get.return_value = _make_resp(
+            {
+                "result": {
+                    "conditionalOrders": [{"conditionalOrderId": "cond-1", "status": "WATCHING"}],
+                    "hasNext": False,
+                    "nextCursor": None,
+                }
+            }
+        )
+        fetcher = _make_fetcher()
+        result = fetcher.list_conditional_orders("555", status="OPEN", symbol="005930")
+        self.assertEqual(len(result["conditionalOrders"]), 1)
+        self.assertFalse(result["hasNext"])
+        self.assertEqual(mock_get.call_args.kwargs["params"], {"status": "OPEN", "limit": 100, "symbol": "005930"})
+
+    @patch("data_provider.toss_fetcher.requests.get")
+    @patch("data_provider.toss_fetcher.requests.post")
+    def test_list_conditional_orders_malformed_envelope_raises(self, mock_post, mock_get):
+        mock_post.return_value = _make_resp({"access_token": "tok-1", "expires_in": 3600})
+        mock_get.return_value = _make_resp({"result": {"conditionalOrders": [], "hasNext": True, "nextCursor": None}})
+        fetcher = _make_fetcher()
+        with self.assertRaises(DataFetchError):
+            fetcher.list_conditional_orders("555", status="OPEN")
+
+    @patch("data_provider.toss_fetcher.requests.get")
+    @patch("data_provider.toss_fetcher.requests.post")
+    def test_list_conditional_orders_passes_cursor(self, mock_post, mock_get):
+        mock_post.return_value = _make_resp({"access_token": "tok-1", "expires_in": 3600})
+        mock_get.return_value = _make_resp(
+            {"result": {"conditionalOrders": [], "hasNext": False, "nextCursor": None}}
+        )
+        fetcher = _make_fetcher()
+        fetcher.list_conditional_orders("555", status="CLOSED", cursor="next-page-token")
+        self.assertEqual(mock_get.call_args.kwargs["params"]["cursor"], "next-page-token")
+
+
 class TestTossNetworkSmoke(unittest.TestCase):
     """Live smoke against the real Toss OpenAPI. Requires TOSS_CLIENT_ID/
     TOSS_CLIENT_SECRET plus an IP already allow-listed in Toss WTS (ADR 0003) —

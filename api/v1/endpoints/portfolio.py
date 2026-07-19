@@ -25,6 +25,12 @@ from api.v1.schemas.portfolio import (
     PortfolioBrokerSyncResponse,
     PortfolioCashLedgerListResponse,
     PortfolioCashLedgerCreateRequest,
+    PortfolioConditionalOrderApproveRequest,
+    PortfolioConditionalOrderForceResolveRequest,
+    PortfolioConditionalOrderProposalCreateRequest,
+    PortfolioConditionalOrderProposalItem,
+    PortfolioConditionalOrderProposalListResponse,
+    PortfolioConditionalOrderSyncResponse,
     PortfolioCorporateActionListResponse,
     PortfolioCorporateActionCreateRequest,
     PortfolioDeleteResponse,
@@ -55,6 +61,17 @@ from src.services.portfolio_broker_sync_service import (
     PortfolioBrokerSyncService,
     TossNotConfiguredError,
     TossUpstreamError,
+)
+from src.services.portfolio_conditional_order_service import (
+    ConditionalApprovalInProgressError,
+    ConditionalProposalInProgressError,
+    ConditionalProposalNotApprovableError,
+    ConditionalProposalNotCancelableError,
+    ConditionalProposalNotForceResolvableError,
+    ConditionalProposalNotFoundError,
+    ConditionalProposalNotReconcilableError,
+    ExpireDateTooFarError,
+    PortfolioConditionalOrderService,
 )
 from src.services.portfolio_import_service import PortfolioImportService
 from src.services.portfolio_order_service import (
@@ -1183,3 +1200,368 @@ def get_placed_order_status(account_id: int, toss_order_id: str) -> PortfolioOrd
         raise api_error(502, "toss-upstream-error", str(exc))
     except Exception as exc:
         raise _internal_error("Get order status failed", exc)
+
+
+# ----------------------------------------------------------------------
+# Server-side conditional-order proposals (Phase 4 — Toss Invest). Same
+# two-step shape as the plain-order endpoints above (proposal -> separate
+# approve call, confirm=true required), but "approve" registers a Toss-side
+# SINGLE/STOP conditional order that Toss auto-executes once triggered —
+# see docs/superpowers/specs/2026-07-19-toss-conditional-order-phase4-design.md.
+# Every write endpoint below requires ADMIN_AUTH_ENABLED=true + a verified
+# session via ``_require_order_auth``, same as Phase 3.
+# ----------------------------------------------------------------------
+
+
+@router.post(
+    "/links/{account_id}/conditional-orders/proposals",
+    response_model=PortfolioConditionalOrderProposalItem,
+    responses={
+        400: {"model": ErrorResponse},
+        403: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+        409: {"model": ErrorResponse},
+        422: {"model": ErrorResponse},
+        502: {"model": ErrorResponse},
+        500: {"model": ErrorResponse},
+    },
+    summary="Create a conditional-order proposal (SINGLE/STOP, validated, 10-minute TTL, not yet registered with Toss)",
+)
+def create_conditional_order_proposal(
+    account_id: int, request: PortfolioConditionalOrderProposalCreateRequest, http_request: Request
+) -> PortfolioConditionalOrderProposalItem:
+    _require_order_auth(http_request)
+    service = PortfolioConditionalOrderService()
+    try:
+        data = service.create_proposal(
+            account_id=account_id,
+            symbol=request.symbol,
+            side=request.side,
+            trigger_price=request.trigger_price,
+            limit_price=request.limit_price,
+            quantity=request.quantity,
+            expire_date=request.expire_date,
+        )
+        return PortfolioConditionalOrderProposalItem(**data)
+    except TossNotConfiguredError as exc:
+        raise api_error(400, "toss-not-configured", str(exc))
+    except BrokerLinkNotFoundError as exc:
+        raise api_error(404, "not_found", str(exc))
+    except ExpireDateTooFarError as exc:
+        raise api_error(422, "expire_date_too_far", str(exc))
+    except HighValueOrderRejectedError as exc:
+        raise api_error(422, "high_value_order_rejected", str(exc))
+    except FxRateUnavailableError as exc:
+        raise api_error(422, "fx_rate_unavailable", str(exc))
+    except (InsufficientBuyingPowerError, InsufficientSellableQuantityError) as exc:
+        raise api_error(422, "order_rejected", str(exc))
+    except OrderLimitExceededError as exc:
+        raise api_error(422, "order_limit_exceeded", str(exc), detail={"limit_type": exc.limit_type})
+    except PendingProposalLimitExceededError as exc:
+        raise _conflict_error(error="pending_proposal_limit_exceeded", message=str(exc))
+    except TossUpstreamError as exc:
+        raise api_error(502, "toss-upstream-error", str(exc))
+    except PortfolioBusyError as exc:
+        raise _conflict_error(error="portfolio_busy", message=str(exc))
+    except ValueError as exc:
+        raise _bad_request(exc)
+    except Exception as exc:
+        raise _internal_error("Create conditional order proposal failed", exc)
+
+
+@router.get(
+    "/links/{account_id}/conditional-orders/proposals",
+    response_model=PortfolioConditionalOrderProposalListResponse,
+    responses={403: {"model": ErrorResponse}, 404: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+    summary="List conditional-order proposals for one linked account",
+)
+def list_conditional_order_proposals(
+    account_id: int,
+    http_request: Request,
+    status: Optional[str] = Query(None, description="Filter by proposal status"),
+) -> PortfolioConditionalOrderProposalListResponse:
+    # Unlike Phase 3's read-only order-proposal list (which relies solely on
+    # the global AuthMiddleware), every Phase 4 endpoint — reads included —
+    # requires the extra order-write auth gate (Codex BLOCK review major 2):
+    # a proposal exposes symbol/side/trigger/limit/quantity/status/Toss id,
+    # which must not be visible to an unauthenticated caller when
+    # ADMIN_AUTH_ENABLED=false.
+    _require_order_auth(http_request)
+    service = PortfolioConditionalOrderService()
+    try:
+        rows = service.list_proposals(account_id=account_id, status=status)
+        return PortfolioConditionalOrderProposalListResponse(
+            proposals=[PortfolioConditionalOrderProposalItem(**item) for item in rows]
+        )
+    except BrokerLinkNotFoundError as exc:
+        raise api_error(404, "not_found", str(exc))
+    except Exception as exc:
+        raise _internal_error("List conditional order proposals failed", exc)
+
+
+@router.get(
+    "/links/{account_id}/conditional-orders/proposals/{proposal_uuid}",
+    response_model=PortfolioConditionalOrderProposalItem,
+    responses={403: {"model": ErrorResponse}, 404: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+    summary="Get one conditional-order proposal",
+)
+def get_conditional_order_proposal(
+    account_id: int, proposal_uuid: str, http_request: Request
+) -> PortfolioConditionalOrderProposalItem:
+    _require_order_auth(http_request)
+    service = PortfolioConditionalOrderService()
+    try:
+        data = service.get_proposal(account_id=account_id, proposal_uuid=proposal_uuid)
+        return PortfolioConditionalOrderProposalItem(**data)
+    except ConditionalProposalNotFoundError as exc:
+        raise api_error(404, "not_found", str(exc))
+    except BrokerLinkNotFoundError as exc:
+        raise api_error(404, "not_found", str(exc))
+    except Exception as exc:
+        raise _internal_error("Get conditional order proposal failed", exc)
+
+
+@router.post(
+    "/links/{account_id}/conditional-orders/proposals/{proposal_uuid}/approve",
+    response_model=PortfolioConditionalOrderProposalItem,
+    responses={
+        400: {"model": ErrorResponse},
+        403: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+        409: {"model": ErrorResponse},
+        422: {"model": ErrorResponse},
+        429: {"model": ErrorResponse},
+        502: {"model": ErrorResponse},
+        500: {"model": ErrorResponse},
+    },
+    summary="Approve a pending conditional-order proposal (confirm=true required) — registers it with Toss",
+)
+def approve_conditional_order_proposal(
+    account_id: int, proposal_uuid: str, request: PortfolioConditionalOrderApproveRequest, http_request: Request
+) -> PortfolioConditionalOrderProposalItem:
+    _require_order_auth(http_request)
+    service = PortfolioConditionalOrderService()
+    try:
+        data = service.approve_proposal(
+            account_id=account_id,
+            proposal_uuid=proposal_uuid,
+            confirm=request.confirm,
+        )
+        return PortfolioConditionalOrderProposalItem(**data)
+    except ConfirmRequiredError as exc:
+        raise api_error(400, "confirm_required", str(exc))
+    except ConditionalProposalNotFoundError as exc:
+        raise api_error(404, "not_found", str(exc))
+    except ConditionalProposalInProgressError as exc:
+        raise _conflict_error(error="proposal_in_progress", message=str(exc))
+    except ConditionalProposalNotApprovableError as exc:
+        raise _conflict_error(error="proposal_not_approvable", message=str(exc))
+    except TossNotConfiguredError as exc:
+        raise api_error(400, "toss-not-configured", str(exc))
+    except BrokerLinkNotFoundError as exc:
+        raise api_error(404, "not_found", str(exc))
+    except ExpireDateTooFarError as exc:
+        raise api_error(422, "expire_date_too_far", str(exc))
+    except HighValueOrderRejectedError as exc:
+        raise api_error(422, "high_value_order_rejected", str(exc))
+    except FxRateUnavailableError as exc:
+        raise api_error(422, "fx_rate_unavailable", str(exc))
+    except (InsufficientBuyingPowerError, InsufficientSellableQuantityError) as exc:
+        raise api_error(422, "order_rejected", str(exc))
+    except OrderLimitExceededError as exc:
+        raise api_error(422, "order_limit_exceeded", str(exc), detail={"limit_type": exc.limit_type})
+    except TossOrderRejectedError as exc:
+        raise _map_toss_order_error(exc)
+    except OrderAuditPersistFailedError as exc:
+        raise api_error(500, "order_audit_persist_failed", str(exc))
+    except TossUpstreamError as exc:
+        raise api_error(502, "toss-upstream-error", str(exc))
+    except PortfolioBusyError as exc:
+        raise _conflict_error(error="portfolio_busy", message=str(exc))
+    except ValueError as exc:
+        raise _bad_request(exc)
+    except Exception as exc:
+        raise _internal_error("Approve conditional order proposal failed", exc)
+
+
+@router.post(
+    "/links/{account_id}/conditional-orders/proposals/{proposal_uuid}/reconcile",
+    response_model=PortfolioConditionalOrderProposalItem,
+    responses={
+        403: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+        409: {"model": ErrorResponse},
+        502: {"model": ErrorResponse},
+        500: {"model": ErrorResponse},
+    },
+    summary="Resolve an 'approving'/'registration_unknown' proposal via a best-effort Toss listing match",
+)
+def reconcile_conditional_order_proposal(
+    account_id: int, proposal_uuid: str, http_request: Request
+) -> PortfolioConditionalOrderProposalItem:
+    _require_order_auth(http_request)
+    service = PortfolioConditionalOrderService()
+    try:
+        data = service.reconcile_proposal(account_id=account_id, proposal_uuid=proposal_uuid)
+        return PortfolioConditionalOrderProposalItem(**data)
+    except ConditionalProposalNotFoundError as exc:
+        raise api_error(404, "not_found", str(exc))
+    except ConditionalApprovalInProgressError as exc:
+        # Codex BLOCK review blocker 2: distinct from proposal_not_reconcilable
+        # — the proposal *is* reconcilable in principle, but its approving
+        # claim is still fresh enough that a real approve POST is plausibly
+        # in flight, so reconcile must not preempt it right now.
+        raise _conflict_error(error="approval-in-progress", message=str(exc))
+    except ConditionalProposalNotReconcilableError as exc:
+        raise _conflict_error(error="proposal_not_reconcilable", message=str(exc))
+    except TossNotConfiguredError as exc:
+        raise api_error(400, "toss-not-configured", str(exc))
+    except BrokerLinkNotFoundError as exc:
+        raise api_error(404, "not_found", str(exc))
+    except TossUpstreamError as exc:
+        raise api_error(502, "toss-upstream-error", str(exc))
+    except Exception as exc:
+        raise _internal_error("Reconcile conditional order proposal failed", exc)
+
+
+@router.delete(
+    "/links/{account_id}/conditional-orders/proposals/{proposal_uuid}",
+    response_model=PortfolioConditionalOrderProposalItem,
+    responses={
+        403: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+        409: {"model": ErrorResponse},
+        422: {"model": ErrorResponse},
+        500: {"model": ErrorResponse},
+        502: {"model": ErrorResponse},
+    },
+    summary="Cancel a conditional-order proposal (pending: local only; approved/paused: cancels the Toss registration)",
+)
+def cancel_conditional_order_proposal(
+    account_id: int, proposal_uuid: str, http_request: Request
+) -> PortfolioConditionalOrderProposalItem:
+    _require_order_auth(http_request)
+    service = PortfolioConditionalOrderService()
+    try:
+        data = service.cancel_proposal(account_id=account_id, proposal_uuid=proposal_uuid)
+        return PortfolioConditionalOrderProposalItem(**data)
+    except ConditionalProposalNotFoundError as exc:
+        raise api_error(404, "not_found", str(exc))
+    except BrokerLinkNotFoundError as exc:
+        raise api_error(404, "not_found", str(exc))
+    except ConditionalProposalNotReconcilableError as exc:
+        raise _conflict_error(error="proposal_not_reconcilable", message=str(exc))
+    except ConditionalProposalNotCancelableError as exc:
+        raise _conflict_error(error="proposal_not_cancelable", message=str(exc))
+    except TossOrderRejectedError as exc:
+        raise _map_toss_order_error(exc)
+    except OrderAuditPersistFailedError as exc:
+        raise api_error(500, "order_audit_persist_failed", str(exc))
+    except TossUpstreamError as exc:
+        raise api_error(502, "toss-upstream-error", str(exc))
+    except PortfolioBusyError as exc:
+        raise _conflict_error(error="portfolio_busy", message=str(exc))
+    except Exception as exc:
+        raise _internal_error("Cancel conditional order proposal failed", exc)
+
+
+@router.get(
+    "/links/{account_id}/conditional-orders",
+    response_model=PortfolioConditionalOrderProposalListResponse,
+    responses={403: {"model": ErrorResponse}, 404: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+    summary="Observe conditional orders (local state + lazy per-row Toss status refresh)",
+)
+def list_conditional_orders(
+    account_id: int,
+    http_request: Request,
+    status: Optional[str] = Query(None, description="Filter by local proposal status"),
+) -> PortfolioConditionalOrderProposalListResponse:
+    # Auth required (Codex BLOCK review major 2) — unlike a purely local
+    # read, this also exposes each approved proposal's Toss-side status via
+    # a lazy per-row refresh; the same order-data-exposure rationale as the
+    # two endpoints above applies.
+    _require_order_auth(http_request)
+    service = PortfolioConditionalOrderService()
+    try:
+        rows = service.list_conditional_orders_with_lazy_refresh(account_id=account_id, status=status)
+        return PortfolioConditionalOrderProposalListResponse(
+            proposals=[PortfolioConditionalOrderProposalItem(**item) for item in rows]
+        )
+    except BrokerLinkNotFoundError as exc:
+        raise api_error(404, "not_found", str(exc))
+    except TossUpstreamError as exc:
+        raise api_error(502, "toss-upstream-error", str(exc))
+    except Exception as exc:
+        raise _internal_error("List conditional orders failed", exc)
+
+
+@router.post(
+    "/links/{account_id}/conditional-orders/sync",
+    response_model=PortfolioConditionalOrderSyncResponse,
+    responses={
+        400: {"model": ErrorResponse},
+        403: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+        502: {"model": ErrorResponse},
+        500: {"model": ErrorResponse},
+    },
+    summary="Bulk-refresh every 'approved'/'paused' conditional order's Toss status",
+)
+def sync_conditional_orders(account_id: int, http_request: Request) -> PortfolioConditionalOrderSyncResponse:
+    _require_order_auth(http_request)
+    service = PortfolioConditionalOrderService()
+    try:
+        data = service.sync_proposals(account_id=account_id)
+        return PortfolioConditionalOrderSyncResponse(**data)
+    except TossNotConfiguredError as exc:
+        raise api_error(400, "toss-not-configured", str(exc))
+    except BrokerLinkNotFoundError as exc:
+        raise api_error(404, "not_found", str(exc))
+    except TossUpstreamError as exc:
+        raise api_error(502, "toss-upstream-error", str(exc))
+    except Exception as exc:
+        raise _internal_error("Sync conditional orders failed", exc)
+
+
+@router.post(
+    "/links/{account_id}/conditional-orders/proposals/{proposal_uuid}/force-resolve",
+    response_model=PortfolioConditionalOrderProposalItem,
+    responses={
+        400: {"model": ErrorResponse},
+        403: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+        409: {"model": ErrorResponse},
+        500: {"model": ErrorResponse},
+    },
+    summary=(
+        "OPERATOR-ONLY manual resolution of a permanently 'registration_unknown' proposal "
+        "(confirm Toss has no matching order first)"
+    ),
+)
+def force_resolve_conditional_order_proposal(
+    account_id: int, proposal_uuid: str, request: PortfolioConditionalOrderForceResolveRequest, http_request: Request
+) -> PortfolioConditionalOrderProposalItem:
+    _require_order_auth(http_request)
+    service = PortfolioConditionalOrderService()
+    try:
+        data = service.force_resolve_proposal(
+            account_id=account_id,
+            proposal_uuid=proposal_uuid,
+            confirm=request.confirm,
+            reason=request.reason,
+        )
+        return PortfolioConditionalOrderProposalItem(**data)
+    except ConfirmRequiredError as exc:
+        raise api_error(400, "confirm_required", str(exc))
+    except ConditionalProposalNotFoundError as exc:
+        raise api_error(404, "not_found", str(exc))
+    except ConditionalProposalNotForceResolvableError as exc:
+        raise _conflict_error(error="proposal_not_force_resolvable", message=str(exc))
+    except BrokerLinkNotFoundError as exc:
+        raise api_error(404, "not_found", str(exc))
+    except PortfolioBusyError as exc:
+        raise _conflict_error(error="portfolio_busy", message=str(exc))
+    except ValueError as exc:
+        raise _bad_request(exc)
+    except Exception as exc:
+        raise _internal_error("Force-resolve conditional order proposal failed", exc)
