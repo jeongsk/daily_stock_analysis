@@ -1030,6 +1030,118 @@ class PortfolioRepository:
                     identities.append(identity)
             return identities
 
+    def get_cached_position_quantity(
+        self,
+        *,
+        account_id: int,
+        symbol: str,
+        market: str,
+        cost_method: str = "fifo",
+    ) -> float:
+        """Ledger-truth held quantity for one ``(account_id, symbol, market)``
+        (Phase 5 auto-proposal design spec v1.1 "보유수량 소스 정정" — the
+        held-position/decision-signal reverse mapping itself carries no
+        quantity, so sizing reads this cached replay table directly instead).
+        Returns ``0.0`` when no cached row exists (nothing held) rather than
+        raising — an absent row is a legitimate "not held" state, not an
+        error."""
+        with self.db.get_session() as session:
+            value = session.execute(
+                select(PortfolioPosition.quantity).where(
+                    PortfolioPosition.account_id == account_id,
+                    PortfolioPosition.symbol == symbol,
+                    PortfolioPosition.market == market,
+                    PortfolioPosition.cost_method == cost_method,
+                )
+            ).scalar_one_or_none()
+            return float(value) if value is not None else 0.0
+
+    # Non-terminal ("still open") local statuses per proposal table — a
+    # Phase 5 auto proposal must not be created alongside an existing manual
+    # (or prior auto) proposal for the same (account, symbol, side) that
+    # hasn't yet reached a terminal state (design spec §3 "중복 방지").
+    _ACTIVE_ORDER_PROPOSAL_STATUSES = ("pending", "executing", "outcome_unknown")
+    _ACTIVE_CONDITIONAL_PROPOSAL_STATUSES = (
+        "pending",
+        "approving",
+        "approved",
+        "paused",
+        "registration_unknown",
+    )
+
+    def has_active_proposal_for_symbol_side(
+        self,
+        *,
+        account_id: int,
+        storage_symbol: str,
+        side: str,
+        now: datetime,
+    ) -> bool:
+        """True when an active (non-terminal) proposal already exists for
+        this ``(account_id, storage_symbol, side)`` in *either* the Phase 3
+        plain-order table or the Phase 4 conditional-order table (design spec
+        §3 "동일 (account,symbol,side) 활성 제안 존재 시에도 skip"). Checked
+        by ``storage_symbol`` (the repository-canonical symbol both tables
+        already store for display/audit — not the bare Toss-facing
+        ``symbol``) so KR suffix variants of the same underlying position
+        cannot slip past this guard.
+
+        ``now`` excludes a TTL-expired ``pending`` row from counting as
+        active (Codex review M3): ``pending`` is the only status in either
+        active-set subject to the 10-minute proposal TTL (``expires_at``),
+        and the existing list endpoints lazily materialize an overdue
+        ``pending`` row to ``expired`` the moment anyone reads it — without
+        this same ``expires_at > now`` filter here, a proposal nobody has
+        polled since it expired would block a genuine new defensive signal
+        indefinitely, even though it is already effectively dead. This does
+        not itself flip the row's stored ``status`` (no write happens in this
+        read-only check) — it only makes this method's *judgment* agree with
+        what a list call would show, which is the semantic parity Codex
+        asked for, not necessarily row-for-row identical DB state."""
+        with self.db.get_session() as session:
+            order_hit = session.execute(
+                select(PortfolioOrderProposal.id)
+                .where(
+                    PortfolioOrderProposal.account_id == account_id,
+                    PortfolioOrderProposal.storage_symbol == storage_symbol,
+                    PortfolioOrderProposal.side == side,
+                    PortfolioOrderProposal.status.in_(self._ACTIVE_ORDER_PROPOSAL_STATUSES),
+                    or_(
+                        PortfolioOrderProposal.status != "pending",
+                        PortfolioOrderProposal.expires_at > now,
+                    ),
+                )
+                .limit(1)
+            ).scalar_one_or_none()
+            if order_hit is not None:
+                return True
+
+            conditional_hit = session.execute(
+                select(PortfolioConditionalOrderProposal.id)
+                .where(
+                    PortfolioConditionalOrderProposal.account_id == account_id,
+                    PortfolioConditionalOrderProposal.storage_symbol == storage_symbol,
+                    PortfolioConditionalOrderProposal.side == side,
+                    PortfolioConditionalOrderProposal.status.in_(
+                        self._ACTIVE_CONDITIONAL_PROPOSAL_STATUSES
+                    ),
+                    or_(
+                        PortfolioConditionalOrderProposal.status != "pending",
+                        PortfolioConditionalOrderProposal.expires_at > now,
+                    ),
+                )
+                .limit(1)
+            ).scalar_one_or_none()
+            return conditional_hit is not None
+
+    def has_source_signal_unique_indexes(self) -> bool:
+        """Thin delegate to ``DatabaseManager.has_portfolio_proposal_source_
+        signal_unique_indexes`` — the Phase 5 batch's fail-closed gate
+        (Codex review B1) reads this through the repository layer like every
+        other DB fact it needs, rather than reaching into ``self.db``
+        directly."""
+        return self.db.has_portfolio_proposal_source_signal_unique_indexes()
+
     # ------------------------------------------------------------------
     # Snapshot / position cache
     # ------------------------------------------------------------------
@@ -1619,6 +1731,8 @@ class PortfolioRepository:
         created_at: datetime,
         expires_at: datetime,
         max_pending_proposals: int,
+        generation_source: str = "manual",
+        source_signal_id: Optional[int] = None,
     ) -> PortfolioOrderProposal:
         """Atomically insert the proposal row and its ``proposed`` audit event
         (design spec §7: status and audit trail must never drift apart).
@@ -1630,6 +1744,16 @@ class PortfolioRepository:
         account already has ``max_pending_proposals`` non-expired ``pending``
         rows, closing the count-then-insert TOCTOU that let two concurrent
         creates both slip past a separately-read count.
+
+        ``generation_source``/``source_signal_id`` (Phase 5, additive,
+        default ``'manual'``/``None``) are set verbatim on the row. When the
+        caller passes a ``source_signal_id``, the partial unique index on
+        that column (``uix_portfolio_order_proposal_source_signal``) makes a
+        repeat insert for the same signal raise ``IntegrityError`` here
+        instead of silently creating a second proposal — callers doing
+        batch/idempotent creation (the Phase 5 generator) must catch that
+        explicitly rather than checking for an existing row first (design
+        spec v1.1 "중복방지 TOCTOU→source_signal_id DB unique index").
         """
         with self.portfolio_write_session() as session:
             pending_count = int(
@@ -1664,6 +1788,8 @@ class PortfolioRepository:
                 status="pending",
                 created_at=created_at,
                 expires_at=expires_at,
+                generation_source=generation_source,
+                source_signal_id=source_signal_id,
             )
             session.add(row)
             session.flush()
@@ -1778,13 +1904,15 @@ class PortfolioRepository:
         account_id: int,
         *,
         status: Optional[str] = None,
+        generation_source: Optional[str] = None,
         now: Optional[datetime] = None,
     ) -> List[PortfolioOrderProposal]:
-        """List proposals for one account, optionally filtered by status.
-        When ``now`` is given, every still-``pending``-but-overdue row is
-        materialized to ``expired`` first so a polling caller sees the true
-        status without waiting for a future ``get``/``execute`` call to
-        trigger it."""
+        """List proposals for one account, optionally filtered by status
+        and/or ``generation_source`` (Phase 5, additive — ``'manual'``/
+        ``'auto'``). When ``now`` is given, every still-``pending``-but-
+        overdue row is materialized to ``expired`` first so a polling caller
+        sees the true status without waiting for a future ``get``/
+        ``execute`` call to trigger it."""
         if now is not None:
             with self.db.get_session() as session:
                 overdue_uuids = session.execute(
@@ -1803,6 +1931,8 @@ class PortfolioRepository:
             conditions = [PortfolioOrderProposal.account_id == account_id]
             if status is not None:
                 conditions.append(PortfolioOrderProposal.status == status)
+            if generation_source is not None:
+                conditions.append(PortfolioOrderProposal.generation_source == generation_source)
             rows = session.execute(
                 select(PortfolioOrderProposal).where(and_(*conditions)).order_by(PortfolioOrderProposal.id.desc())
             ).scalars().all()
@@ -2333,6 +2463,8 @@ class PortfolioRepository:
         created_at: datetime,
         expires_at: datetime,
         max_pending_proposals: int,
+        generation_source: str = "manual",
+        source_signal_id: Optional[int] = None,
     ) -> PortfolioConditionalOrderProposal:
         """Atomically insert the conditional-order proposal row and its
         ``cond_proposed`` audit event, with the pending-proposal-count cap
@@ -2340,7 +2472,14 @@ class PortfolioRepository:
         ``create_order_proposal_with_audit`` TOCTOU fix — design spec is
         silent on a conditional-specific pending cap, so this inherits
         Phase 3's guardrail count of 10, per the implementation brief's
-        "스펙이 침묵하는 세부는 Phase 3 구현의 기존 패턴을 따르세요")."""
+        "스펙이 침묵하는 세부는 Phase 3 구현의 기존 패턴을 따르세요").
+
+        ``generation_source``/``source_signal_id`` (Phase 5, additive) mirror
+        ``create_order_proposal_with_audit``'s own same-named parameters —
+        see that method's docstring for the partial-unique-index/
+        ``IntegrityError`` idempotency contract, which applies identically
+        here via ``uix_portfolio_conditional_order_proposal_source_signal``.
+        """
         with self.portfolio_write_session() as session:
             pending_count = int(
                 session.execute(
@@ -2376,6 +2515,8 @@ class PortfolioRepository:
                 status="pending",
                 created_at=created_at,
                 expires_at=expires_at,
+                generation_source=generation_source,
+                source_signal_id=source_signal_id,
             )
             session.add(row)
             session.flush()
@@ -2471,12 +2612,13 @@ class PortfolioRepository:
         account_id: int,
         *,
         status: Optional[str] = None,
+        generation_source: Optional[str] = None,
         now: Optional[datetime] = None,
     ) -> List[PortfolioConditionalOrderProposal]:
         """List conditional-order proposals for one account, optionally
-        filtered by status; lazily materializes overdue-``pending`` TTL
-        expiry first when ``now`` is given (mirrors
-        ``list_order_proposals``)."""
+        filtered by status and/or ``generation_source`` (Phase 5, additive);
+        lazily materializes overdue-``pending`` TTL expiry first when ``now``
+        is given (mirrors ``list_order_proposals``)."""
         if now is not None:
             with self.db.get_session() as session:
                 overdue_uuids = session.execute(
@@ -2495,6 +2637,8 @@ class PortfolioRepository:
             conditions = [PortfolioConditionalOrderProposal.account_id == account_id]
             if status is not None:
                 conditions.append(PortfolioConditionalOrderProposal.status == status)
+            if generation_source is not None:
+                conditions.append(PortfolioConditionalOrderProposal.generation_source == generation_source)
             rows = session.execute(
                 select(PortfolioConditionalOrderProposal)
                 .where(and_(*conditions))

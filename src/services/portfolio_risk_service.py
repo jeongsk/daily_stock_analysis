@@ -11,11 +11,14 @@ from src.config import Config, get_config
 from src.repositories.portfolio_repo import PortfolioRepository
 from src.services.decision_signal_service import DecisionSignalService
 from src.services.decision_signal_summary import summarize_decision_signal
+from src.services.portfolio_defensive_signals import (
+    DEFENSIVE_DECISION_SIGNAL_ACTIONS,
+    held_position_identities,
+    resolve_defensive_signal_matches,
+)
 from src.services.portfolio_service import PortfolioService
 
 logger = logging.getLogger(__name__)
-
-DEFENSIVE_DECISION_SIGNAL_ACTIONS = ("sell", "reduce", "alert")
 
 
 class PortfolioRiskService:
@@ -105,60 +108,29 @@ class PortfolioRiskService:
         snapshot: Dict[str, Any],
     ) -> Dict[str, Any]:
         try:
-            held_positions = self._held_position_identities(snapshot)
-            if not held_positions:
+            positions = self._held_position_identities(snapshot)
+            if not positions:
                 return self._empty_decision_signal_risk(available=True)
-            stock_identities = sorted({
-                (position["market"], position["signal_stock_code"])
-                for position in held_positions
-            })
 
-            defensive_actions = set(DEFENSIVE_DECISION_SIGNAL_ACTIONS)
-            latest_by_identity: Dict[Tuple[str, str], Dict[str, Any]] = {}
-            page = 1
-            while True:
-                response = self.decision_signal_service.list_signals(
-                    stock_identities=stock_identities,
-                    status="active",
-                    page=page,
-                    page_size=100,
-                )
-                items = response.get("items", []) if isinstance(response, dict) else []
-                for item in items:
-                    if str(item.get("action") or "") not in defensive_actions:
-                        continue
-                    key = (
-                        str(item.get("market") or "").strip().lower(),
-                        str(item.get("stock_code") or "").strip().upper(),
-                    )
-                    if key[0] and key[1] and key not in latest_by_identity:
-                        latest_by_identity[key] = item
-                total = int(response.get("total", 0) or 0) if isinstance(response, dict) else 0
-                if page * 100 >= total or not items:
-                    break
-                page += 1
+            matches = resolve_defensive_signal_matches(
+                positions,
+                decision_signal_service=self.decision_signal_service,
+            )
 
             risk_items: List[Dict[str, Any]] = []
             action_counts = {action: 0 for action in DEFENSIVE_DECISION_SIGNAL_ACTIONS}
-            seen: set[Tuple[Optional[int], str, str, int]] = set()
-            for position in held_positions:
-                signal = latest_by_identity.get((position["market"], position["signal_stock_code"]))
-                summary = summarize_decision_signal(signal)
+            for match in matches:
+                summary = summarize_decision_signal(match["signal"])
                 if not summary:
                     continue
                 action = str(summary.get("action") or "")
                 if action not in action_counts:
                     continue
-                signal_id = int(summary.get("id") or 0)
-                dedupe_key = (position["account_id"], position["market"], position["signal_stock_code"], signal_id)
-                if dedupe_key in seen:
-                    continue
-                seen.add(dedupe_key)
                 action_counts[action] += 1
                 risk_items.append({
-                    "account_id": position["account_id"],
-                    "symbol": position["symbol"],
-                    "market": position["market"],
+                    "account_id": match["account_id"],
+                    "symbol": match["symbol"],
+                    "market": match["market"],
                     "signal": summary,
                 })
 
@@ -183,22 +155,13 @@ class PortfolioRiskService:
 
     @staticmethod
     def _held_position_identities(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
-        positions: List[Dict[str, Any]] = []
-        for account in snapshot.get("accounts", []) or []:
-            account_id = account.get("account_id")
-            for pos in account.get("positions", []) or []:
-                symbol = str(pos.get("symbol") or "").strip().upper()
-                market = str(pos.get("market") or "").strip().lower()
-                if not symbol or market not in {"cn", "hk", "us"}:
-                    continue
-                signal_stock_code = DecisionSignalService.normalize_stock_code_for_signal(symbol, market=market)
-                positions.append({
-                    "account_id": account_id,
-                    "symbol": symbol,
-                    "market": market,
-                    "signal_stock_code": signal_stock_code,
-                })
-        return positions
+        """Thin wrapper over the shared
+        ``portfolio_defensive_signals.held_position_identities`` helper —
+        kept as a method (rather than inlining the import at every call
+        site) so this class's external behavior/market scope
+        (cn/hk/us — see that module's docstring) is unchanged after the
+        Phase 5 extraction."""
+        return held_position_identities(snapshot)
 
     def _ensure_drawdown_snapshot_window(
         self,

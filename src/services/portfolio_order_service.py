@@ -486,6 +486,8 @@ class PortfolioOrderService:
             "created_at": row.created_at.isoformat(),
             "expires_at": row.expires_at.isoformat(),
             "executed_at": row.executed_at.isoformat() if row.executed_at else None,
+            "generation_source": row.generation_source,
+            "source_signal_id": row.source_signal_id,
         }
         if mode is not None:
             data["mode"] = mode
@@ -503,7 +505,16 @@ class PortfolioOrderService:
         quantity: float,
         order_type: str = "LIMIT",
         price: Optional[float] = None,
+        generation_source: str = "manual",
+        source_signal_id: Optional[int] = None,
     ) -> Dict[str, Any]:
+        """``generation_source``/``source_signal_id`` (Phase 5, additive,
+        default ``'manual'``/``None``) are forwarded verbatim to the repo
+        insert — see ``PortfolioRepository.create_order_proposal_with_audit``
+        for the partial-unique-index idempotency contract they enable. Every
+        other validation/limit/FX/sellable-quantity check below is unchanged
+        and runs identically for auto-generated proposals; the Phase 5 batch
+        generator is just another caller of this same, unmodified path."""
         side_norm = (side or "").strip().lower()
         if side_norm not in ("buy", "sell"):
             raise ValueError("side must be 'buy' or 'sell'")
@@ -577,6 +588,8 @@ class PortfolioOrderService:
                 created_at=now,
                 expires_at=expires_at,
                 max_pending_proposals=_MAX_PENDING_PROPOSALS,
+                generation_source=generation_source,
+                source_signal_id=source_signal_id,
             )
         except PendingProposalCapExceededError as exc:
             raise PendingProposalLimitExceededError(str(exc)) from exc
@@ -1140,10 +1153,18 @@ class PortfolioOrderService:
     # ------------------------------------------------------------------
     # List proposals
     # ------------------------------------------------------------------
-    def list_proposals(self, *, account_id: int, status: Optional[str] = None) -> List[Dict[str, Any]]:
+    def list_proposals(
+        self,
+        *,
+        account_id: int,
+        status: Optional[str] = None,
+        generation_source: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         self._resolve_eligible_account_and_link(account_id=account_id)
         now = _now_kst_naive()
-        rows = self.repo.list_order_proposals(account_id, status=status, now=now)
+        rows = self.repo.list_order_proposals(
+            account_id, status=status, generation_source=generation_source, now=now
+        )
         return [self._serialize_proposal(row) for row in rows]
 
     # ------------------------------------------------------------------

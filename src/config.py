@@ -276,6 +276,48 @@ def parse_env_float_finite_positive(
     return parsed
 
 
+def parse_env_float_in_range(
+    value: Optional[str],
+    default: float,
+    *,
+    field_name: str,
+    minimum: float,
+    maximum: float,
+) -> float:
+    """Parse a float env value that must be finite and within
+    ``[minimum, maximum]`` (Phase 5 auto-proposal design spec §3 "NaN/범위밖
+    방어", e.g. ``PHASE5_MIN_CONFIDENCE``'s 0~1 scale): mirrors
+    ``parse_env_float_finite_positive``'s "never clamp, force the safe
+    default wholesale" policy rather than ``parse_env_float``'s clamp — a
+    clamp could paper over a badly wrong config (e.g. someone passing a 0~100
+    confidence instead of 0~1) as if it were merely out of range instead of
+    the wrong scale entirely, and ``NaN`` compares false against every bound
+    so it would otherwise silently defeat the range check."""
+    if value is None or not str(value).strip():
+        return float(default)
+    try:
+        parsed = float(str(value).strip())
+    except (TypeError, ValueError):
+        logger.error(
+            "%s=%r is not a valid number; forcing default %s",
+            field_name,
+            value,
+            default,
+        )
+        return float(default)
+    if not math.isfinite(parsed) or parsed < minimum or parsed > maximum:
+        logger.error(
+            "%s=%r must be a finite number within [%s, %s]; forcing default %s",
+            field_name,
+            value,
+            minimum,
+            maximum,
+            default,
+        )
+        return float(default)
+    return parsed
+
+
 def parse_env_int(
     value: Optional[str],
     default: int,
@@ -811,6 +853,23 @@ class Config:
     toss_order_max_amount_krw: float = 1_000_000.0
     toss_order_daily_max_amount_krw: float = 5_000_000.0
     toss_order_allow_market: bool = False
+
+    # === Toss defensive-signal auto-proposal batch (Phase 5) ===
+    # Off by default (PHASE5_AUTO_PROPOSAL_ENABLED unset means the daily
+    # pipeline hook is a complete no-op — design spec §3 "활성화·설정"). Uses
+    # the same strict TOSS_ORDER_LIVE-style parser for the enable flag
+    # (parse_strict_true_env_bool) since a typo must fail closed, not
+    # silently enable an auto-proposal batch. PHASE5_MIN_CONFIDENCE is a 0~1
+    # scale (design spec v1.1 "confidence 0~1 스케일 실측 확정" — distinct
+    # from DecisionSignalRecord.score's 0~100 scale) validated with
+    # parse_env_float_in_range so an out-of-scale value is never silently
+    # clamped into range. PHASE5_SELL_SLIPPAGE_BPS applies identically to
+    # both the immediate-sell LIMIT price and the stop-loss conditional
+    # order's LIMIT leg (design spec v1.1 "조건주문 limit에도 slippage 적용");
+    # 0 is a valid (if risky) value, only NaN/negative are rejected.
+    phase5_auto_proposal_enabled: bool = False
+    phase5_min_confidence: float = 0.6
+    phase5_sell_slippage_bps: float = 50.0
     stock_index_remote_update_enabled: bool = True
 
     # === AlphaSift optional stock screening integration ===
@@ -1731,6 +1790,23 @@ class Config:
                 field_name='TOSS_ORDER_DAILY_MAX_AMOUNT_KRW',
             ),
             toss_order_allow_market=parse_env_bool(os.getenv('TOSS_ORDER_ALLOW_MARKET'), default=False),
+            phase5_auto_proposal_enabled=parse_strict_true_env_bool(
+                os.getenv('PHASE5_AUTO_PROPOSAL_ENABLED'), field_name='PHASE5_AUTO_PROPOSAL_ENABLED'
+            ),
+            phase5_min_confidence=parse_env_float_in_range(
+                os.getenv('PHASE5_MIN_CONFIDENCE'),
+                0.6,
+                field_name='PHASE5_MIN_CONFIDENCE',
+                minimum=0.0,
+                maximum=1.0,
+            ),
+            phase5_sell_slippage_bps=parse_env_float_in_range(
+                os.getenv('PHASE5_SELL_SLIPPAGE_BPS'),
+                50.0,
+                field_name='PHASE5_SELL_SLIPPAGE_BPS',
+                minimum=0.0,
+                maximum=10_000.0,
+            ),
             stock_index_remote_update_enabled=parse_env_bool(
                 os.getenv('STOCK_INDEX_REMOTE_UPDATE_ENABLED'),
                 default=True,

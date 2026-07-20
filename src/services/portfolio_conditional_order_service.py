@@ -486,6 +486,8 @@ class PortfolioConditionalOrderService:
             "created_at": row.created_at.isoformat(),
             "expires_at": row.expires_at.isoformat(),
             "approved_at": row.approved_at.isoformat() if row.approved_at else None,
+            "generation_source": row.generation_source,
+            "source_signal_id": row.source_signal_id,
         }
         if mode is not None:
             data["mode"] = mode
@@ -504,7 +506,12 @@ class PortfolioConditionalOrderService:
         limit_price: float,
         quantity: float,
         expire_date: date,
+        generation_source: str = "manual",
+        source_signal_id: Optional[int] = None,
     ) -> Dict[str, Any]:
+        """``generation_source``/``source_signal_id`` (Phase 5, additive) —
+        see ``PortfolioOrderService.create_proposal``'s docstring; the same
+        contract applies here."""
         side_norm = (side or "").strip().lower()
         if side_norm not in ("buy", "sell"):
             raise ValueError("side must be 'buy' or 'sell'")
@@ -577,6 +584,8 @@ class PortfolioConditionalOrderService:
                 created_at=now,
                 expires_at=expires_at,
                 max_pending_proposals=_MAX_PENDING_CONDITIONAL_PROPOSALS,
+                generation_source=generation_source,
+                source_signal_id=source_signal_id,
             )
         except PendingConditionalProposalCapExceededError as exc:
             raise PendingProposalLimitExceededError(str(exc)) from exc
@@ -1636,10 +1645,18 @@ class PortfolioConditionalOrderService:
     # ------------------------------------------------------------------
     # List / get proposals (local rows, no Toss contact)
     # ------------------------------------------------------------------
-    def list_proposals(self, *, account_id: int, status: Optional[str] = None) -> List[Dict[str, Any]]:
+    def list_proposals(
+        self,
+        *,
+        account_id: int,
+        status: Optional[str] = None,
+        generation_source: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         self._order_service._resolve_eligible_account_and_link(account_id=account_id)
         now = _now_kst_naive()
-        rows = self.repo.list_conditional_order_proposals(account_id, status=status, now=now)
+        rows = self.repo.list_conditional_order_proposals(
+            account_id, status=status, generation_source=generation_source, now=now
+        )
         return [self._serialize_proposal(row) for row in rows]
 
     def get_proposal(self, *, account_id: int, proposal_uuid: str) -> Dict[str, Any]:

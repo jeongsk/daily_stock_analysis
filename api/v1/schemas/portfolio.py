@@ -402,6 +402,12 @@ class PortfolioOrderProposalItem(BaseModel):
     created_at: str
     expires_at: str
     executed_at: Optional[str] = None
+    generation_source: str = Field(
+        "manual", description="'manual' (human-created) or 'auto' (Phase 5 defensive-signal batch generator)"
+    )
+    source_signal_id: Optional[int] = Field(
+        None, description="DecisionSignalRecord.id that produced this proposal; null for manual proposals"
+    )
     mode: Optional[str] = Field(
         None, description="'dry_run' or 'live' preview/outcome; absent for list/cancel responses"
     )
@@ -499,6 +505,12 @@ class PortfolioConditionalOrderProposalItem(BaseModel):
     created_at: str
     expires_at: str
     approved_at: Optional[str] = None
+    generation_source: str = Field(
+        "manual", description="'manual' (human-created) or 'auto' (Phase 5 defensive-signal batch generator)"
+    )
+    source_signal_id: Optional[int] = Field(
+        None, description="DecisionSignalRecord.id that produced this proposal; null for manual proposals"
+    )
     mode: Optional[str] = Field(
         None, description="'dry_run' or 'live' preview/outcome; absent for list/cancel responses"
     )

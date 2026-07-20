@@ -111,6 +111,25 @@ def _bad_request(exc: Exception) -> HTTPException:
     return api_error(400, "validation_error", str(exc))
 
 
+# Phase 5 additive filter on both proposal-list endpoints (design spec §3
+# "출처 메타"). Codex review minor 2: an unrecognized value must be a loud
+# 422, not silently treated as "no results" the way an unmatched status
+# string effectively is today.
+_VALID_GENERATION_SOURCES = {"manual", "auto"}
+
+
+def _validate_generation_source_filter(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    if value not in _VALID_GENERATION_SOURCES:
+        raise api_error(
+            422,
+            "invalid_generation_source",
+            f"generation_source must be one of {sorted(_VALID_GENERATION_SOURCES)}, got {value!r}",
+        )
+    return value
+
+
 # Toss order-error codes that mean "conflicting/duplicate request" rather than
 # a business-rule rejection — mapped to 409 instead of 422 so a client can
 # tell "retry/inspect state" apart from "this order itself is invalid".
@@ -985,14 +1004,18 @@ def create_order_proposal(
 def list_order_proposals(
     account_id: int,
     status: Optional[str] = Query(None, description="Filter by proposal status"),
+    generation_source: Optional[str] = Query(
+        None, description="Filter by 'manual' or 'auto' (Phase 5 defensive-signal batch generator)"
+    ),
 ) -> PortfolioOrderProposalListResponse:
     # Read-only — design spec §3 scopes the extra order-auth gate to *write*
     # endpoints (proposal create/execute/cancel, order cancel, reconcile);
     # this list is no more sensitive than any other read-only portfolio GET,
     # which already relies solely on the global AuthMiddleware.
+    generation_source = _validate_generation_source_filter(generation_source)
     service = PortfolioOrderService()
     try:
-        rows = service.list_proposals(account_id=account_id, status=status)
+        rows = service.list_proposals(account_id=account_id, status=status, generation_source=generation_source)
         return PortfolioOrderProposalListResponse(proposals=[PortfolioOrderProposalItem(**item) for item in rows])
     except BrokerLinkNotFoundError as exc:
         raise api_error(404, "not_found", str(exc))
@@ -1279,6 +1302,9 @@ def list_conditional_order_proposals(
     account_id: int,
     http_request: Request,
     status: Optional[str] = Query(None, description="Filter by proposal status"),
+    generation_source: Optional[str] = Query(
+        None, description="Filter by 'manual' or 'auto' (Phase 5 defensive-signal batch generator)"
+    ),
 ) -> PortfolioConditionalOrderProposalListResponse:
     # Unlike Phase 3's read-only order-proposal list (which relies solely on
     # the global AuthMiddleware), every Phase 4 endpoint — reads included —
@@ -1287,9 +1313,10 @@ def list_conditional_order_proposals(
     # which must not be visible to an unauthenticated caller when
     # ADMIN_AUTH_ENABLED=false.
     _require_order_auth(http_request)
+    generation_source = _validate_generation_source_filter(generation_source)
     service = PortfolioConditionalOrderService()
     try:
-        rows = service.list_proposals(account_id=account_id, status=status)
+        rows = service.list_proposals(account_id=account_id, status=status, generation_source=generation_source)
         return PortfolioConditionalOrderProposalListResponse(
             proposals=[PortfolioConditionalOrderProposalItem(**item) for item in rows]
         )

@@ -1011,6 +1011,21 @@ def run_full_analysis(
         except Exception as e:
             logger.warning(f"自动回测失败（已忽略）: {e}")
 
+        # === Phase 5: Toss defensive-signal auto-proposal batch ===
+        # Runs after stock analysis (pipeline.run above has already
+        # extracted/persisted this run's decision signals) — design spec
+        # docs/superpowers/specs/2026-07-20-toss-auto-proposal-phase5-design.md
+        # §3 "트리거 위치". No-ops unless PHASE5_AUTO_PROPOSAL_ENABLED=true
+        # and at least one active Toss broker link exists; a single failed
+        # signal or a notification failure never aborts this block (and
+        # never aborts the surrounding analysis run either).
+        try:
+            from src.services.auto_proposal_service import run_phase5_auto_proposal_batch
+
+            run_phase5_auto_proposal_batch(notifier=pipeline.notifier)
+        except Exception as e:
+            logger.warning(f"Phase 5 自动提案批处理失败（已忽略）: {e}")
+
         return True
 
     except Exception as e:

@@ -16,6 +16,7 @@ from contextlib import contextmanager
 import hashlib
 import json
 import logging
+import re
 import threading
 import time
 from datetime import datetime, date, timedelta, timezone
@@ -868,6 +869,21 @@ class PortfolioOrderProposal(Base):
     was withdrawn before ever reaching Toss. Per design spec, cancellation of
     an ``executing``/``outcome_unknown`` proposal is refused outright
     (``.../reconcile`` first) even if a ``toss_order_id`` happens to be known.
+
+    ``generation_source``/``source_signal_id`` (Phase 5 — design spec
+    docs/superpowers/specs/2026-07-20-toss-auto-proposal-phase5-design.md §3
+    "출처 메타") are additive: every proposal created before Phase 5, and
+    every proposal a human creates through the API, is
+    ``generation_source='manual'`` with ``source_signal_id=NULL``. The Phase 5
+    batch generator sets ``generation_source='auto'`` and
+    ``source_signal_id=<DecisionSignalRecord.id>`` instead. The partial unique
+    index on ``source_signal_id`` (NULL exempt, so manual proposals are
+    unaffected) is what makes a same-day batch re-run idempotent: a repeat
+    ``create_proposal`` call for a signal that already produced a proposal
+    hits a DB-level ``IntegrityError`` instead of a second silent insert
+    (design spec v1.1 "중복방지 TOCTOU→source_signal_id DB unique index" —
+    the generator inserts first and catches the violation per-signal rather
+    than checking-then-inserting).
     """
 
     __tablename__ = 'portfolio_order_proposals'
@@ -891,6 +907,8 @@ class PortfolioOrderProposal(Base):
     reserved_at = Column(DateTime, index=True)  # set once, on entering 'executing'
     executed_at = Column(DateTime)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    generation_source = Column(String(16), nullable=False, default='manual', index=True)  # manual/auto (Phase 5)
+    source_signal_id = Column(Integer, index=True)  # DecisionSignalRecord.id, NULL for manual (Phase 5)
 
     __table_args__ = (
         Index('ix_portfolio_order_proposal_account_status', 'account_id', 'status'),
@@ -1042,6 +1060,15 @@ class PortfolioConditionalOrderProposal(Base):
     window + candidate uniqueness + no unresolved same-attribute local
     contender + no ID already owned by another proposal, all of which must
     hold before reconcile adopts a candidate).
+
+    ``generation_source``/``source_signal_id`` (Phase 5 — design spec
+    docs/superpowers/specs/2026-07-20-toss-auto-proposal-phase5-design.md §3
+    "출처 메타") mirror ``PortfolioOrderProposal``'s own additive columns of
+    the same name/purpose: ``manual``/``NULL`` for every pre-Phase-5 and
+    every human-created proposal, ``auto``/``<DecisionSignalRecord.id>`` for
+    the Phase 5 batch generator's stop-loss proposals. The same partial
+    unique index on ``source_signal_id`` (NULL exempt) makes a batch re-run
+    idempotent via a DB-level ``IntegrityError`` on the repeat insert.
     """
 
     __tablename__ = 'portfolio_conditional_order_proposals'
@@ -1069,6 +1096,8 @@ class PortfolioConditionalOrderProposal(Base):
     approved_at = Column(DateTime)  # set once Toss registration (or dry-run) resolves
     last_synced_at = Column(DateTime)  # last lazy/bulk Toss status refresh
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    generation_source = Column(String(16), nullable=False, default='manual', index=True)  # manual/auto (Phase 5)
+    source_signal_id = Column(Integer, index=True)  # DecisionSignalRecord.id, NULL for manual (Phase 5)
 
     __table_args__ = (
         Index('ix_portfolio_conditional_order_proposal_account_status', 'account_id', 'status'),
@@ -1614,6 +1643,8 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             self._ensure_intelligence_items_unique_index()
             self._ensure_portfolio_order_audit_append_only_triggers()
             self._ensure_conditional_order_toss_id_unique_index()
+            self._ensure_portfolio_proposal_generation_source_schema()
+            self._ensure_portfolio_proposal_source_signal_unique_indexes()
 
             self._initialized = True
             logger.info(f"数据库初始化完成: {db_url}")
@@ -2024,6 +2055,313 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                 "is manually resolved: %s",
                 exc,
             )
+
+    def _ensure_portfolio_proposal_generation_source_schema(self) -> None:
+        """Add and backfill ``generation_source``/``source_signal_id`` on both
+        Toss proposal tables for existing SQLite DBs (Phase 5 auto-proposal
+        design spec docs/superpowers/specs/2026-07-20-toss-auto-proposal-phase5-design.md
+        §3 "출처 메타"). Additive/non-destructive: any row that predates this
+        migration (every Phase 3/4 manual proposal ever created) backfills to
+        ``generation_source='manual'``/``source_signal_id=NULL`` via the
+        column's own SQL ``DEFAULT`` — no application-level backfill pass is
+        needed."""
+        if not self._is_sqlite_engine:
+            return
+        inspector = inspect(self._engine)
+        for model in (PortfolioOrderProposal, PortfolioConditionalOrderProposal):
+            table_name = model.__tablename__
+            if not inspector.has_table(table_name):
+                continue
+            try:
+                existing = {column["name"] for column in inspector.get_columns(table_name)}
+            except Exception as exc:
+                logger.error(
+                    "[PortfolioProposal] failed to inspect %s columns; Phase 5 "
+                    "generation_source migration cannot continue safely: %s",
+                    table_name,
+                    exc,
+                )
+                raise
+
+            if "generation_source" not in existing:
+                try:
+                    with self._engine.begin() as connection:
+                        connection.exec_driver_sql(
+                            f"ALTER TABLE {table_name} ADD COLUMN generation_source "
+                            "VARCHAR(16) NOT NULL DEFAULT 'manual'"
+                        )
+                except OperationalError as exc:
+                    if not self._is_sqlite_duplicate_column_error(exc, "generation_source"):
+                        raise
+            if "source_signal_id" not in existing:
+                try:
+                    with self._engine.begin() as connection:
+                        connection.exec_driver_sql(
+                            f"ALTER TABLE {table_name} ADD COLUMN source_signal_id INTEGER"
+                        )
+                except OperationalError as exc:
+                    if not self._is_sqlite_duplicate_column_error(exc, "source_signal_id"):
+                        raise
+
+    # Shared by the migration below and by
+    # ``has_portfolio_proposal_source_signal_unique_indexes`` — the latter is
+    # the only thing that makes a failed/skipped index creation *observable*
+    # to a caller instead of a log line nobody reads (Codex review B1: a
+    # fail-open ``CREATE UNIQUE INDEX`` failure previously let DB init
+    # "succeed" with no idempotency guard at all, silently reopening the
+    # exact TOCTOU the index exists to close).
+    _PORTFOLIO_PROPOSAL_SOURCE_SIGNAL_INDEX_NAMES = (
+        (
+            PortfolioOrderProposal.__tablename__,
+            "uix_portfolio_order_proposal_source_signal",
+        ),
+        (
+            PortfolioConditionalOrderProposal.__tablename__,
+            "uix_portfolio_conditional_order_proposal_source_signal",
+        ),
+    )
+
+    def _ensure_portfolio_proposal_source_signal_unique_indexes(self) -> None:
+        """Partial unique index on ``source_signal_id`` for both Toss proposal
+        tables (Phase 5 design spec v1.1 "중복방지 TOCTOU→source_signal_id DB
+        unique index"): ``WHERE source_signal_id IS NOT NULL`` so every manual
+        proposal (NULL) is exempt and only the Phase 5 batch generator's
+        auto proposals are constrained to at most one per signal. This is
+        what lets the generator insert-then-catch-IntegrityError instead of a
+        racy check-then-insert (mirrors
+        ``_ensure_conditional_order_toss_id_unique_index``'s same pattern).
+        Wrapped defensively per table: a pre-existing duplicate would make
+        index creation fail, which is logged as critical (not raised) rather
+        than crashing DB init, matching this file's non-destructive migration
+        convention — Phase 5 proposals are new as of this feature, so a fresh
+        deploy has no legacy-duplicate concern in practice.
+
+        A failure here (or simply running on a non-SQLite engine, where this
+        migration never runs at all) leaves the index missing — that fact is
+        NOT self-enforcing on its own; callers that need the idempotency
+        guarantee this index provides (the Phase 5 batch) must check
+        ``has_portfolio_proposal_source_signal_unique_indexes`` themselves
+        and refuse to run when it is False (Codex review B1).
+
+        **Codex 2nd-round review B1-a**: on a DB that already has duplicate
+        ``source_signal_id`` values (the exact "pre-existing duplicate rows"
+        case this method's own docstring already anticipated), SQLite's
+        ``CREATE UNIQUE INDEX`` does not fail with ``OperationalError`` — it
+        fails with ``IntegrityError`` (``UNIQUE constraint failed``; verified
+        directly against an in-memory DB: ``OperationalError`` is never
+        raised for this case, only ``IntegrityError``). The original code
+        only caught ``OperationalError``, so on such a DB the
+        ``IntegrityError`` propagated all the way out of
+        ``init_db``/``__init__`` and broke DB initialization entirely —
+        turning a single duplicate-data problem into a total outage, which
+        is a strictly worse failure mode than the fail-open index-missing
+        state this method exists to tolerate. Both exception types are now
+        caught so DB init always survives a duplicate-row DB; the
+        Phase-5-specific consequence (no idempotency guarantee) is then
+        surfaced structurally by ``has_portfolio_proposal_source_signal_
+        unique_indexes`` returning False, not by crashing the process."""
+        if not self._is_sqlite_engine:
+            return
+        inspector = inspect(self._engine)
+        for table_name, index_name in self._PORTFOLIO_PROPOSAL_SOURCE_SIGNAL_INDEX_NAMES:
+            if not inspector.has_table(table_name):
+                continue
+            try:
+                with self._engine.begin() as connection:
+                    connection.exec_driver_sql(
+                        f"CREATE UNIQUE INDEX IF NOT EXISTS {index_name} "
+                        f"ON {table_name} (source_signal_id) "
+                        "WHERE source_signal_id IS NOT NULL"
+                    )
+            except (IntegrityError, OperationalError) as exc:
+                logger.critical(
+                    "[PortfolioProposal] could not create unique index on "
+                    "%s.source_signal_id -- likely pre-existing duplicate rows "
+                    "(%s); Phase 5 batch idempotency is NOT enforced at the DB "
+                    "level until this is manually resolved. The Phase 5 batch "
+                    "will refuse to run (fail-closed) until this index exists: %s",
+                    table_name,
+                    type(exc).__name__,
+                    exc,
+                )
+
+    # `has_portfolio_proposal_source_signal_unique_indexes` (below) verifies
+    # each proposal table has a *unique* index on exactly
+    # ``["source_signal_id"]`` via SQLAlchemy's structured
+    # ``Inspector.get_indexes()`` (immune to index-name spoofing, quoting,
+    # comments, and composite-column false positives — Codex 2nd/3rd-round
+    # review B1-b), and then, narrowly, that specific candidate index's own
+    # ``WHERE`` predicate (looked up by its own name in ``sqlite_master``)
+    # is either absent or exactly ``source_signal_id IS NOT NULL`` (Codex
+    # 4th-round review B1-b: a *structurally* valid unique/single-column
+    # index can still have an arbitrary restricting predicate, e.g. ``WHERE
+    # source_signal_id > 100``, which only enforces uniqueness within the
+    # rows that predicate admits). See that method's own docstring for the
+    # full history and reasoning.
+
+    # The only WHERE-clause tail (after quote-stripping/whitespace/case
+    # normalization — see ``_normalize_index_where_clause``) that is safe:
+    # SQLite unique indexes already treat every NULL as distinct from every
+    # other NULL, so a partial index restricted to exactly this predicate
+    # (or no predicate at all — see ``_is_safe_source_signal_index_predicate``)
+    # still enforces "at most one row per non-null source_signal_id" over
+    # the *entire* table, identically to a non-partial index. Any other
+    # predicate (``source_signal_id > 100``, an extra ``AND status = ...``,
+    # etc. — Codex 4th-round review's exact counterexample) only enforces
+    # uniqueness within the rows the predicate admits, silently permitting
+    # duplicate non-null ``source_signal_id`` values outside it.
+    _SAFE_SOURCE_SIGNAL_INDEX_PREDICATE = "source_signal_id is not null"
+
+    @staticmethod
+    def _normalize_index_where_clause(sql_text: Optional[str]) -> Optional[str]:
+        """Extract and normalize the ``WHERE`` tail of one ``CREATE [UNIQUE]
+        INDEX`` statement as stored in ``sqlite_master.sql``. Returns
+        ``None`` when there is no ``WHERE`` clause (a non-partial index);
+        otherwise the lowercased, quote-stripped, whitespace-collapsed
+        predicate text.
+
+        Only looks at the text *after the first* ``)`` in the statement —
+        **not** the last one (Codex 5th-round review: a self-caught
+        fail-open re-occurrence of the same class as the 4th-round finding,
+        found before the review even ran). Splitting on the *last* ``)``
+        put the boundary *inside* the predicate whenever the predicate
+        itself contains a parenthesis — ``WHERE source_signal_id IN
+        (1,2,3)`` or ``WHERE (source_signal_id > 100)`` both left an empty
+        tail after the true last ``)``, which this method then read as "no
+        WHERE clause" (non-partial, safe) even though the predicate
+        actually only enforces uniqueness for a restricted set of values.
+        The *first* ``)`` is unambiguous here specifically because both
+        proposal table names this is ever called for
+        (``portfolio_order_proposals``/``portfolio_conditional_order_
+        proposals``) contain no parentheses, and the caller has already
+        confirmed via ``Inspector.get_indexes()`` that this index's column
+        list is the single column ``source_signal_id`` — so SQLite's own
+        ``CREATE INDEX ... ON <table> (<column-list>) [WHERE <predicate>]``
+        grammar guarantees the column list's closing paren is the *first*
+        ``)`` in the whole statement, and everything after it — parentheses
+        included — belongs to the optional ``WHERE`` predicate, never to
+        another part of the column list. This is still a narrow,
+        single-purpose extraction on an already-structurally-validated
+        index, not the 3rd-round review's whole-DDL regex search (which
+        matched a bare column-name substring anywhere in the text)."""
+        if not sql_text:
+            return None
+        head_tail = sql_text.split(")", 1)
+        if len(head_tail) != 2:
+            return None
+        remainder = head_tail[1].strip()
+        if not remainder:
+            return None
+        match = re.match(r"WHERE\s+(.*)$", remainder, re.IGNORECASE | re.DOTALL)
+        if not match:
+            return None
+        normalized = re.sub(r"\s+", " ", match.group(1).strip().lower())
+        # Strip SQLite's quoted-identifier delimiters so
+        # `"source_signal_id" IS NOT NULL` normalizes identically to the
+        # unquoted form this file's own migration issues (Codex 3rd-round
+        # review's quoted-identifier false-negative applies here too).
+        normalized = normalized.translate(str.maketrans("", "", "\"'`[]"))
+        return re.sub(r"\s+", " ", normalized).strip()
+
+    @classmethod
+    def _is_safe_source_signal_index_predicate(cls, sql_text: Optional[str]) -> bool:
+        """True when ``sql_text`` (one index's stored DDL) is either
+        non-partial or partial-but-restricted to exactly ``source_signal_id
+        IS NOT NULL`` (see ``_SAFE_SOURCE_SIGNAL_INDEX_PREDICATE``'s
+        docstring for why only that predicate is safe)."""
+        where_clause = cls._normalize_index_where_clause(sql_text)
+        return where_clause is None or where_clause == cls._SAFE_SOURCE_SIGNAL_INDEX_PREDICATE
+
+    def has_portfolio_proposal_source_signal_unique_indexes(self) -> bool:
+        """True only when **both** Phase 5 proposal tables have a *unique*
+        index whose columns are exactly ``["source_signal_id"]`` **and**
+        whose predicate (if any) is safe — the two structural properties
+        the batch's idempotency contract actually depends on (Codex review
+        B1-b — an index of the right *name* but the wrong *definition*
+        must not pass this check). This is the positive, queryable check
+        the Phase 5 batch gates on before running at all (Codex review B1)
+        — it does not rely on the migration's own try/except having logged
+        anything, and it also correctly reports False on a non-SQLite
+        engine (where ``_ensure_portfolio_proposal_source_signal_unique_
+        indexes`` is a no-op and the index was never created by any code
+        path here).
+
+        **Codex 3rd-round review B1-b**: the previous implementation
+        regex-matched the raw ``sqlite_master.sql`` DDL text over its
+        *entire* string, which Codex demonstrated is unsound in both
+        directions — fail-open (a bare-substring match accepted a comment
+        merely mentioning the column name, or a composite index whose real
+        constraint spans other columns too) and false-negative (a quoted
+        identifier, though perfectly valid SQLite, failed the regex and
+        permanently fail-closed an otherwise-healthy deployment). Both are
+        fixed by checking SQLAlchemy's *structured* ``Inspector.
+        get_indexes()`` result instead of raw text: an index only counts
+        as structurally valid when ``unique is True`` **and**
+        ``column_names == ["source_signal_id"]`` — a parsed column list,
+        immune to quoting/whitespace/comments, that automatically excludes
+        composite indexes or indexes on any other column.
+
+        **Codex 4th-round review B1-b (this method's own predecessor was
+        itself unsound)**: an earlier version of *this* fix treated the
+        ``WHERE`` predicate as irrelevant once the structural check passed
+        — reasoning that any partial index is "safe" because SQLite treats
+        NULLs as distinct. Codex demonstrated that reasoning only holds for
+        *no predicate* or *exactly* ``source_signal_id IS NOT NULL``: a
+        restricting predicate such as ``WHERE source_signal_id > 100``
+        passes the exact same structural (unique + single-column) check
+        while only enforcing uniqueness for rows the predicate admits —
+        ``source_signal_id = 1`` could then repeat freely outside that
+        range, a direct violation of the idempotency contract. This method
+        therefore also inspects, for each structurally-valid candidate
+        index, that specific index's own stored DDL in ``sqlite_master``
+        (looked up by *its own* name from ``get_indexes()``, not a fixed
+        expected name — deliberately narrow: the predicate text is only
+        ever read for an index the structured check has already confirmed
+        is unique on exactly this one column) and requires the ``WHERE``
+        tail to be either absent or exactly ``source_signal_id IS NOT
+        NULL`` (see ``_is_safe_source_signal_index_predicate``). A missing
+        ``sqlite_master`` row (e.g. an index materialized purely from a
+        table-level ``UNIQUE``/``PRIMARY KEY`` constraint rather than an
+        explicit ``CREATE INDEX``, which SQLite does not always give a
+        ``sql`` entry for) cannot have its predicate verified and is
+        treated as unsafe — not a real deployment path here, since this
+        migration always issues an explicit named ``CREATE UNIQUE INDEX``."""
+        if not self._is_sqlite_engine:
+            return False
+        try:
+            inspector = inspect(self._engine)
+            with self._engine.connect() as connection:
+                for table_name, _expected_index_name in self._PORTFOLIO_PROPOSAL_SOURCE_SIGNAL_INDEX_NAMES:
+                    if not inspector.has_table(table_name):
+                        return False
+                    indexes = inspector.get_indexes(table_name)
+                    candidate_names = [
+                        index.get("name")
+                        for index in indexes
+                        if bool(index.get("unique")) and list(index.get("column_names") or []) == ["source_signal_id"]
+                    ]
+                    if not candidate_names:
+                        return False
+                    table_has_safe_index = False
+                    for candidate_name in candidate_names:
+                        row = connection.exec_driver_sql(
+                            "SELECT sql FROM sqlite_master WHERE type = 'index' "
+                            "AND name = ? AND tbl_name = ?",
+                            (candidate_name, table_name),
+                        ).fetchone()
+                        sql_text = row[0] if row is not None else None
+                        if self._is_safe_source_signal_index_predicate(sql_text):
+                            table_has_safe_index = True
+                            break
+                    if not table_has_safe_index:
+                        return False
+            return True
+        except Exception:
+            logger.exception(
+                "[PortfolioProposal] failed to verify Phase 5 source_signal_id "
+                "unique indexes; treating as missing (fail-closed)"
+            )
+            return False
 
     def _rebuild_intelligence_items_table(self) -> None:
         temporary_table = f"intelligence_items_recreate_tmp_{int(time.time() * 1_000_000_000)}"
