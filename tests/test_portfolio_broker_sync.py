@@ -480,8 +480,15 @@ class PortfolioBrokerSyncServiceTestCase(unittest.TestCase):
         self.assertEqual(first["imported"], 1)
 
         # Advance the cursor via a sync before unlinking, to prove relink
-        # preserves *that* advanced cursor rather than resetting it.
-        advanced_cursor = datetime(2026, 7, 20, 9, 0, 0)
+        # preserves *that* advanced cursor rather than resetting it. The
+        # cursor is monotonic forward-only (update_broker_link_sync only
+        # accepts a candidate strictly greater than the stored value), so the
+        # advanced cursor must be derived relative to the link's current
+        # last_synced_at (its creation time) rather than a hardcoded date —
+        # a fixed calendar date silently stops advancing the cursor once wall
+        # time passes it, which is not what this test intends to exercise.
+        created_link = self.repo.get_broker_link_by_account(account_id, active_only=True)
+        advanced_cursor = created_link.last_synced_at + timedelta(days=1)
         self.repo.update_broker_link_sync(
             account_id=account_id, candidate_last_synced_at=advanced_cursor, last_reconciled_at=advanced_cursor
         )
