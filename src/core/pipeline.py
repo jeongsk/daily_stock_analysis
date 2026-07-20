@@ -2871,6 +2871,20 @@ class StockAnalysisPipeline:
         Returns:
             AnalysisResult 或 None
         """
+        # Entry-path choke point: restore JP/KR suffix from a bare index-matched
+        # base code (e.g. 000660 -> 000660.KS) so scheduled run()/CLI inputs route
+        # to the right market. The API/bot paths already resolve upstream; this is
+        # idempotent for already-suffixed codes (000660.KS -> 000660.KS) and leaves
+        # genuine CN/US codes untouched (600519 -> 600519, AAPL -> AAPL). Without it
+        # a bare KR code collides with the same-numbered CN A-share and gets analyzed
+        # as the wrong company.
+        from src.services.stock_code_utils import resolve_index_stock_code_for_analysis
+
+        resolved_code = resolve_index_stock_code_for_analysis(code)
+        if resolved_code and resolved_code != code:
+            logger.info(f"[{code}] 代码已解析为指数匹配形式: {resolved_code}")
+            code = resolved_code
+
         logger.info(f"========== 开始处理 {code} ==========")
 
         from src.services.history_loader import set_frozen_target_date, reset_frozen_target_date

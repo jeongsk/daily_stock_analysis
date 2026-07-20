@@ -46,6 +46,30 @@ _KOREAN_MARKET_INDEX_LABELS_BY_CODE = {
     "000300": "CSI 300",
 }
 
+# Non-CN main indices keyed by their stable provider code (alpha, not digits).
+# CN indices resolve through _KOREAN_MARKET_INDEX_LABELS_BY_CODE above; US/HK/JP/TW
+# provider labels stay Chinese in the data layer, so localize them by code here to
+# avoid leaking Chinese names — or mislabeling them as CN indices — in KR reports.
+_KOREAN_MARKET_INDEX_LABELS_BY_ALPHA_CODE = {
+    # US
+    "SPX": "S&P 500 지수",
+    "IXIC": "나스닥 종합지수",
+    "DJI": "다우존스 산업지수",
+    "VIX": "VIX 공포지수",
+    "NDX": "나스닥 100 지수",
+    "RUT": "러셀 2000 지수",
+    # HK
+    "HSI": "항셍지수",
+    "HSTECH": "항셍테크지수",
+    "HSCEI": "홍콩H지수",
+    # JP
+    "N225": "닛케이225",
+    "TOPX": "토픽스",
+    # TW
+    "TWII": "대만 가권지수",
+    "TWOII": "대만 OTC지수",
+}
+
 _HANZI_PATTERN = re.compile(r"[\u4e00-\u9fff]")
 
 _REPORT_LANGUAGE_ALIASES = {
@@ -727,6 +751,10 @@ def localize_market_review_label(
     localized_index = _KOREAN_MARKET_INDEX_LABELS_BY_CODE.get(code_digits)
     if localized_index:
         return localized_index
+
+    localized_alpha_index = _KOREAN_MARKET_INDEX_LABELS_BY_ALPHA_CODE.get(code_text)
+    if localized_alpha_index:
+        return localized_alpha_index
 
     localized_label = _KOREAN_MARKET_LABELS.get(raw_text)
     if localized_label:

@@ -202,6 +202,43 @@ class MarketAnalyzer:
             fallback=fallback_by_type.get(label_type, "중국 시장 분류"),
         )
 
+    def _localized_index_dict(self, idx: "MarketIndex") -> Dict[str, Any]:
+        """Serialize an index for the structured payload with a localized name.
+
+        The MarketIndex objects keep their provider-native (Chinese) label for the
+        data layer; the structured payload is a per-language render artifact
+        (it carries ``language`` and localizes ``title``/``market_scope``), so its
+        display name must be localized too — otherwise the web/history render the
+        raw Chinese label.
+        """
+        data = idx.to_dict()
+        data["name"] = self._localize_market_label(
+            idx.name, code=idx.code, label_type="index"
+        )
+        return data
+
+    def _localized_ranking_rows(
+        self, rows: Optional[List[Dict]], label_type: str
+    ) -> List[Dict]:
+        """Copy sector/concept ranking rows with a localized ``name``.
+
+        Rows are shallow-copied so the source overview keeps its native labels
+        (the markdown report path localizes independently from the same rows).
+        """
+        localized: List[Dict] = []
+        for row in (rows or []):
+            if not isinstance(row, dict):
+                continue
+            new_row = dict(row)
+            if "name" in new_row:
+                new_row["name"] = self._localize_market_label(
+                    new_row.get("name"),
+                    code=new_row.get("code"),
+                    label_type=label_type,
+                )
+            localized.append(new_row)
+        return localized
+
     def _get_market_scope_name(self, review_language: str | None = None) -> str:
         review_language = review_language or self._get_review_language()
         if self.region == "us":
@@ -1015,14 +1052,14 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
             "generated_at": datetime.now().isoformat(),
             "date": overview.date,
             "market_scope": self._get_market_scope_name(language),
-            "indices": [idx.to_dict() for idx in overview.indices],
+            "indices": [self._localized_index_dict(idx) for idx in overview.indices],
             "sectors": {
-                "top": list(overview.top_sectors or []),
-                "bottom": list(overview.bottom_sectors or []),
+                "top": self._localized_ranking_rows(overview.top_sectors, "sector"),
+                "bottom": self._localized_ranking_rows(overview.bottom_sectors, "sector"),
             },
             "concepts": {
-                "top": list(overview.top_concepts or []),
-                "bottom": list(overview.bottom_concepts or []),
+                "top": self._localized_ranking_rows(overview.top_concepts, "concept"),
+                "bottom": self._localized_ranking_rows(overview.bottom_concepts, "concept"),
             },
             "news": [self._normalize_news_item(item) for item in (news or [])[:8]],
             "sections": sections,

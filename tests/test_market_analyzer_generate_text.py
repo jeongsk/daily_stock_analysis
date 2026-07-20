@@ -3418,6 +3418,86 @@ Sector text.
         assert payload["breadth"]["limit_up_count"] == 12
         assert payload["breadth"]["total_amount"] == 12345.0
 
+    def test_market_review_payload_localizes_us_index_names_for_korean(self):
+        """US indices carry Chinese provider labels; the ko payload must localize them."""
+        from src.core.market_profile import US_PROFILE
+        from src.market_analyzer import MarketIndex, MarketOverview
+
+        ma = self._make_market_analyzer_with_mock_generate_text(return_value="시장 리뷰")
+        ma.region = "us"
+        ma.profile = US_PROFILE
+        ma.config.report_language = "ko"
+        payload = ma.build_market_review_payload(
+            MarketOverview(
+                date="2026-07-20",
+                indices=[
+                    MarketIndex(code="SPX", name="标普500指数", current=7509.13, change_pct=0.69),
+                    MarketIndex(code="IXIC", name="纳斯达克综合指数", current=25789.17, change_pct=1.05),
+                    MarketIndex(code="DJI", name="道琼斯工业指数", current=52294.30, change_pct=0.28),
+                    MarketIndex(code="VIX", name="VIX恐慌指数", current=18.06, change_pct=-3.78),
+                ],
+            ),
+            [],
+            "미국 시장 리뷰",
+        )
+
+        names = [idx["name"] for idx in payload["indices"]]
+        assert names == [
+            "S&P 500 지수",
+            "나스닥 종합지수",
+            "다우존스 산업지수",
+            "VIX 공포지수",
+        ]
+        # Codes stay stable for the web/history contract.
+        assert [idx["code"] for idx in payload["indices"]] == ["SPX", "IXIC", "DJI", "VIX"]
+        assert not any("一" <= ch <= "鿿" for name in names for ch in name)
+
+    def test_market_review_payload_localizes_cn_sectors_and_concepts_for_korean(self):
+        """CN sector/concept panels must not leak Chinese labels in the ko payload."""
+        from src.market_analyzer import MarketIndex, MarketOverview
+
+        ma = self._make_market_analyzer_with_mock_generate_text(return_value="시장 리뷰")
+        ma.config.report_language = "ko"
+        overview = MarketOverview(
+            date="2026-07-20",
+            indices=[
+                MarketIndex(code="000001", name="上证指数", current=3200.0, change_pct=0.6),
+            ],
+            top_sectors=[{"name": "半导体", "change_pct": 2.35}],
+            bottom_sectors=[{"name": "煤炭", "change_pct": -1.1}],
+            top_concepts=[{"name": "机器人概念", "change_pct": 4.2}],
+        )
+        payload = ma.build_market_review_payload(overview, [], "A주 시장 리뷰")
+
+        assert payload["indices"][0]["name"] == "상하이종합지수"
+        assert payload["sectors"]["top"][0]["name"] == "반도체"
+        assert payload["sectors"]["top"][0]["change_pct"] == 2.35
+        assert payload["sectors"]["bottom"][0]["name"] == "석탄"
+        assert payload["concepts"]["top"][0]["name"] == "로봇 테마"
+        # Source overview keeps its native labels (markdown path localizes independently).
+        assert overview.top_sectors[0]["name"] == "半导体"
+
+    def test_market_review_payload_keeps_native_index_names_for_chinese(self):
+        """zh reports keep the provider-native labels — localization is a no-op."""
+        from src.market_analyzer import MarketIndex, MarketOverview
+
+        ma = self._make_market_analyzer_with_mock_generate_text(return_value="复盘结果")
+        ma.config.report_language = "zh"
+        payload = ma.build_market_review_payload(
+            MarketOverview(
+                date="2026-07-20",
+                indices=[
+                    MarketIndex(code="000001", name="上证指数", current=3200.0, change_pct=0.6),
+                ],
+                top_sectors=[{"name": "半导体", "change_pct": 2.35}],
+            ),
+            [],
+            "A股复盘报告",
+        )
+
+        assert payload["indices"][0]["name"] == "上证指数"
+        assert payload["sectors"]["top"][0]["name"] == "半导体"
+
     def test_market_review_includes_concept_rankings_in_prompt_payload_and_tables(self):
         from src.market_analyzer import MarketIndex, MarketOverview
 
