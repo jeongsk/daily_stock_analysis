@@ -240,6 +240,21 @@ _MAX_PENDING_CONDITIONAL_PROPOSALS = 10  # design spec silent -> inherit Phase 3
 _EXPIRE_DATE_MAX_DAYS = 7  # design spec §3 "expireDate 상한"
 _EPS = 1e-6
 
+# Codex adversarial review F3 (accept-and-disclose): every row in this table
+# is a STOP + LIMIT-leg conditional order (this service's "타입 스코프" —
+# see PortfolioConditionalOrderProposal's docstring), so the LIMIT-only leg's
+# gap-down non-execution risk is structural, not something a slippage/collar
+# setting can remove. Defined here (not in auto_proposal_service, which
+# imports it) because this module owns the conditional-order model/service
+# and _serialize_proposal needs it to populate the additive
+# ``execution_risk_disclosure`` field on auto-generated proposals (see
+# coordinator-confirmed follow-up: expose on the approve/list payload too,
+# not just the audit trail and batch notification).
+_CONDITIONAL_STOP_EXECUTION_RISK_NOTE = (
+    "LIMIT 전용 손절 조건주문 — 갭다운 시 미체결 가능. 트리거 시 Toss가 자동 실행하며 "
+    "추가 확인 절차가 없습니다(design spec F3)."
+)
+
 # Bounded page-count cap for reconcile's OPEN/CLOSED attribute-match search
 # (this is a user-triggered search operation, not an unbounded background
 # scan) — mirrors the spirit of TossFetcher.get_closed_orders's
@@ -488,6 +503,19 @@ class PortfolioConditionalOrderService:
             "approved_at": row.approved_at.isoformat() if row.approved_at else None,
             "generation_source": row.generation_source,
             "source_signal_id": row.source_signal_id,
+            "generation_date": row.generation_date.isoformat() if row.generation_date else None,
+            # Codex adversarial review F3 follow-up (coordinator-confirmed):
+            # surface the residual gap-down non-execution risk directly on
+            # the approve/list payload, not only in the audit trail and
+            # batch notification. Populated only for Phase 5 auto-generated
+            # proposals — a human creating a manual conditional order is
+            # explicitly configuring the STOP/LIMIT leg themselves and is
+            # assumed to already understand its mechanics; additive/optional
+            # so existing (pre-v6) clients that ignore unknown keys are
+            # unaffected.
+            "execution_risk_disclosure": (
+                _CONDITIONAL_STOP_EXECUTION_RISK_NOTE if row.generation_source == "auto" else None
+            ),
         }
         if mode is not None:
             data["mode"] = mode
@@ -508,10 +536,18 @@ class PortfolioConditionalOrderService:
         expire_date: date,
         generation_source: str = "manual",
         source_signal_id: Optional[int] = None,
+        generation_date: Optional[date] = None,
+        extra_cond_proposed_audit_detail: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """``generation_source``/``source_signal_id`` (Phase 5, additive) —
-        see ``PortfolioOrderService.create_proposal``'s docstring; the same
-        contract applies here."""
+        """``generation_source``/``source_signal_id``/``generation_date``
+        (Phase 5, additive) — see ``PortfolioOrderService.create_proposal``'s
+        docstring; the same composite-unique-index idempotency contract
+        (v6, Codex adversarial review F1+F2) applies here.
+        ``extra_cond_proposed_audit_detail`` (F3, additive) is forwarded
+        verbatim to ``PortfolioRepository.create_conditional_order_proposal_
+        with_audit`` — used by the Phase 5 generator to record the
+        gap-down/non-execution-risk disclosure on a stop-loss proposal it
+        creates (design spec F3 "accept-and-disclose")."""
         side_norm = (side or "").strip().lower()
         if side_norm not in ("buy", "sell"):
             raise ValueError("side must be 'buy' or 'sell'")
@@ -586,6 +622,8 @@ class PortfolioConditionalOrderService:
                 max_pending_proposals=_MAX_PENDING_CONDITIONAL_PROPOSALS,
                 generation_source=generation_source,
                 source_signal_id=source_signal_id,
+                generation_date=generation_date,
+                extra_cond_proposed_audit_detail=extra_cond_proposed_audit_detail,
             )
         except PendingConditionalProposalCapExceededError as exc:
             raise PendingProposalLimitExceededError(str(exc)) from exc

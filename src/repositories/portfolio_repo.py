@@ -1134,13 +1134,14 @@ class PortfolioRepository:
             ).scalar_one_or_none()
             return conditional_hit is not None
 
-    def has_source_signal_unique_indexes(self) -> bool:
-        """Thin delegate to ``DatabaseManager.has_portfolio_proposal_source_
-        signal_unique_indexes`` — the Phase 5 batch's fail-closed gate
-        (Codex review B1) reads this through the repository layer like every
-        other DB fact it needs, rather than reaching into ``self.db``
-        directly."""
-        return self.db.has_portfolio_proposal_source_signal_unique_indexes()
+    def has_idempotency_unique_indexes(self) -> bool:
+        """Thin delegate to ``DatabaseManager.has_portfolio_proposal_
+        idempotency_unique_indexes`` (v6: the composite ``(account_id,
+        source_signal_id, generation_date)`` key — see that method's
+        docstring) — the Phase 5 batch's fail-closed gate (Codex review B1)
+        reads this through the repository layer like every other DB fact it
+        needs, rather than reaching into ``self.db`` directly."""
+        return self.db.has_portfolio_proposal_idempotency_unique_indexes()
 
     # ------------------------------------------------------------------
     # Snapshot / position cache
@@ -1733,6 +1734,8 @@ class PortfolioRepository:
         max_pending_proposals: int,
         generation_source: str = "manual",
         source_signal_id: Optional[int] = None,
+        generation_date: Optional[date] = None,
+        proposed_audit_detail: Optional[Dict[str, Any]] = None,
     ) -> PortfolioOrderProposal:
         """Atomically insert the proposal row and its ``proposed`` audit event
         (design spec §7: status and audit trail must never drift apart).
@@ -1745,15 +1748,27 @@ class PortfolioRepository:
         rows, closing the count-then-insert TOCTOU that let two concurrent
         creates both slip past a separately-read count.
 
-        ``generation_source``/``source_signal_id`` (Phase 5, additive,
-        default ``'manual'``/``None``) are set verbatim on the row. When the
-        caller passes a ``source_signal_id``, the partial unique index on
-        that column (``uix_portfolio_order_proposal_source_signal``) makes a
-        repeat insert for the same signal raise ``IntegrityError`` here
-        instead of silently creating a second proposal — callers doing
-        batch/idempotent creation (the Phase 5 generator) must catch that
-        explicitly rather than checking for an existing row first (design
-        spec v1.1 "중복방지 TOCTOU→source_signal_id DB unique index").
+        ``generation_source``/``source_signal_id``/``generation_date``
+        (Phase 5, additive, default ``'manual'``/``None``/``None``) are set
+        verbatim on the row. When the caller passes both a
+        ``source_signal_id`` and a ``generation_date`` (the Phase 5 batch
+        generator always does), the composite unique index on
+        ``(account_id, source_signal_id, generation_date)``
+        (``uix_portfolio_order_proposal_account_signal_date`` — v6, Codex
+        adversarial review F1+F2) makes a repeat insert for the same
+        account/signal/day raise ``IntegrityError`` here instead of silently
+        creating a second proposal — callers doing batch/idempotent creation
+        must catch that explicitly rather than checking for an existing row
+        first (design spec v1.1 "중복방지 TOCTOU→DB unique index"). A
+        different account, or the same signal on a later ``generation_date``,
+        inserts freely — see ``PortfolioOrderProposal``'s docstring for why.
+
+        ``proposed_audit_detail`` (Phase 5 F4, additive, default ``None``) is
+        merged verbatim into the ``proposed`` audit event's JSON ``detail`` —
+        used by the auto-generator's immediate-sell path to record the live
+        quote's source/timestamp/age it priced the proposal off of (design
+        spec F4b "제안에 quote source/timestamp 기록"). Manual proposals never
+        pass this.
         """
         with self.portfolio_write_session() as session:
             pending_count = int(
@@ -1790,6 +1805,7 @@ class PortfolioRepository:
                 expires_at=expires_at,
                 generation_source=generation_source,
                 source_signal_id=source_signal_id,
+                generation_date=generation_date,
             )
             session.add(row)
             session.flush()
@@ -1808,6 +1824,7 @@ class PortfolioRepository:
                     event="proposed",
                     toss_order_id=None,
                     created_at=created_at,
+                    detail=proposed_audit_detail,
                 )
             )
             session.flush()
@@ -2465,6 +2482,8 @@ class PortfolioRepository:
         max_pending_proposals: int,
         generation_source: str = "manual",
         source_signal_id: Optional[int] = None,
+        generation_date: Optional[date] = None,
+        extra_cond_proposed_audit_detail: Optional[Dict[str, Any]] = None,
     ) -> PortfolioConditionalOrderProposal:
         """Atomically insert the conditional-order proposal row and its
         ``cond_proposed`` audit event, with the pending-proposal-count cap
@@ -2474,11 +2493,20 @@ class PortfolioRepository:
         Phase 3's guardrail count of 10, per the implementation brief's
         "스펙이 침묵하는 세부는 Phase 3 구현의 기존 패턴을 따르세요").
 
-        ``generation_source``/``source_signal_id`` (Phase 5, additive) mirror
-        ``create_order_proposal_with_audit``'s own same-named parameters —
-        see that method's docstring for the partial-unique-index/
-        ``IntegrityError`` idempotency contract, which applies identically
-        here via ``uix_portfolio_conditional_order_proposal_source_signal``.
+        ``generation_source``/``source_signal_id``/``generation_date``
+        (Phase 5, additive) mirror ``create_order_proposal_with_audit``'s own
+        same-named parameters — see that method's docstring for the
+        composite-unique-index/``IntegrityError`` idempotency contract
+        (v6, Codex adversarial review F1+F2), which applies identically here
+        via ``uix_portfolio_conditional_order_proposal_account_signal_date``.
+
+        ``extra_cond_proposed_audit_detail`` (Phase 5 F3, additive, default
+        ``None``) is merged into the ``cond_proposed`` audit event's JSON
+        ``detail`` alongside the existing ``trigger_price``/``expire_date``
+        fields — used by the auto-generator to record the residual
+        gap-down/non-execution-risk disclosure for a stop-loss conditional
+        order it created (design spec F3: "accept-and-disclose", not a
+        collar-width "fix" — see ``AutoProposalService`` module docstring).
         """
         with self.portfolio_write_session() as session:
             pending_count = int(
@@ -2517,9 +2545,13 @@ class PortfolioRepository:
                 expires_at=expires_at,
                 generation_source=generation_source,
                 source_signal_id=source_signal_id,
+                generation_date=generation_date,
             )
             session.add(row)
             session.flush()
+            cond_proposed_detail = {"trigger_price": trigger_price, "expire_date": expire_date.isoformat()}
+            if extra_cond_proposed_audit_detail:
+                cond_proposed_detail.update(extra_cond_proposed_audit_detail)
             session.add(
                 self._conditional_audit_row(
                     account_id=account_id,
@@ -2534,7 +2566,7 @@ class PortfolioRepository:
                     event="cond_proposed",
                     toss_conditional_order_id=None,
                     created_at=created_at,
-                    detail={"trigger_price": trigger_price, "expire_date": expire_date.isoformat()},
+                    detail=cond_proposed_detail,
                 )
             )
             session.flush()

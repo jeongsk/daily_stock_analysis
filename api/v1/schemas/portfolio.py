@@ -408,6 +408,13 @@ class PortfolioOrderProposalItem(BaseModel):
     source_signal_id: Optional[int] = Field(
         None, description="DecisionSignalRecord.id that produced this proposal; null for manual proposals"
     )
+    generation_date: Optional[str] = Field(
+        None,
+        description=(
+            "KST calendar date the Phase 5 batch that created this proposal ran on "
+            "(v6 idempotency key component); null for manual proposals"
+        ),
+    )
     mode: Optional[str] = Field(
         None, description="'dry_run' or 'live' preview/outcome; absent for list/cancel responses"
     )
@@ -510,6 +517,24 @@ class PortfolioConditionalOrderProposalItem(BaseModel):
     )
     source_signal_id: Optional[int] = Field(
         None, description="DecisionSignalRecord.id that produced this proposal; null for manual proposals"
+    )
+    generation_date: Optional[str] = Field(
+        None,
+        description=(
+            "KST calendar date the Phase 5 batch that created this proposal ran on "
+            "(v6 idempotency key component); null for manual proposals"
+        ),
+    )
+    execution_risk_disclosure: Optional[str] = Field(
+        None,
+        description=(
+            "Codex adversarial review F3 (accept-and-disclose): residual gap-down "
+            "non-execution risk note for this STOP+LIMIT conditional order (Toss's "
+            "STOP leg is LIMIT-only, so a gap-down through the trigger and limit "
+            "price leaves it unfilled with no further approval step). Populated "
+            "only for Phase 5 auto-generated proposals (generation_source='auto'); "
+            "null for manual proposals. Additive/optional field."
+        ),
     )
     mode: Optional[str] = Field(
         None, description="'dry_run' or 'live' preview/outcome; absent for list/cancel responses"

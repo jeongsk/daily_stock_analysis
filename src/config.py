@@ -867,9 +867,33 @@ class Config:
     # both the immediate-sell LIMIT price and the stop-loss conditional
     # order's LIMIT leg (design spec v1.1 "조건주문 limit에도 slippage 적용");
     # 0 is a valid (if risky) value, only NaN/negative are rejected.
+    #
+    # PHASE5_QUOTE_MAX_AGE_SECONDS/PHASE5_EXECUTE_PRICE_DRIFT_BPS (v6, Codex
+    # adversarial review F4): both parsed with parse_env_float_finite_
+    # positive (never clamped — a bad value forces the safe default
+    # wholesale). PHASE5_QUOTE_MAX_AGE_SECONDS is the maximum age a live
+    # quote's own provider timestamp may have (design spec F4a) before it is
+    # treated as unusable/stale, both when the auto-generator prices an
+    # immediate-sell proposal and when execute_proposal reconfirms an
+    # auto-generated proposal's price at execute time (F4c) — a quote with
+    # no verifiable provider timestamp at all is always rejected regardless
+    # of this value (only some data sources ever populate one). Default
+    # 600s mirrors REALTIME_CACHE_TTL's own existing is_stale threshold, a
+    # staleness convention this codebase already uses elsewhere.
+    # PHASE5_EXECUTE_PRICE_DRIFT_BPS is the "material change" threshold
+    # execute_proposal's F4c reconfirm uses: if a fresh quote would now
+    # reprice the proposal's stored LIMIT by more than this many basis
+    # points, execution is refused and the proposal moves to 'failed'
+    # (design spec F4c "실질 변동(임계 %) 시 거부하고 재확인 요구") — the user
+    # must create a fresh proposal off the current market rather than
+    # execute a limit computed from a market that has since moved. Only ever
+    # applied to generation_source == 'auto' proposals (additive/auto-gated,
+    # Phase 3's manual-order execute path is unaffected).
     phase5_auto_proposal_enabled: bool = False
     phase5_min_confidence: float = 0.6
     phase5_sell_slippage_bps: float = 50.0
+    phase5_quote_max_age_seconds: float = 600.0
+    phase5_execute_price_drift_bps: float = 200.0
     stock_index_remote_update_enabled: bool = True
 
     # === AlphaSift optional stock screening integration ===
@@ -1806,6 +1830,16 @@ class Config:
                 field_name='PHASE5_SELL_SLIPPAGE_BPS',
                 minimum=0.0,
                 maximum=10_000.0,
+            ),
+            phase5_quote_max_age_seconds=parse_env_float_finite_positive(
+                os.getenv('PHASE5_QUOTE_MAX_AGE_SECONDS'),
+                600.0,
+                field_name='PHASE5_QUOTE_MAX_AGE_SECONDS',
+            ),
+            phase5_execute_price_drift_bps=parse_env_float_finite_positive(
+                os.getenv('PHASE5_EXECUTE_PRICE_DRIFT_BPS'),
+                200.0,
+                field_name='PHASE5_EXECUTE_PRICE_DRIFT_BPS',
             ),
             stock_index_remote_update_enabled=parse_env_bool(
                 os.getenv('STOCK_INDEX_REMOTE_UPDATE_ENABLED'),

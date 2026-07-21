@@ -96,13 +96,23 @@ state machine for "a live order POST is in flight"):
   ``reconcile_proposal`` first — design spec v2 §3); ``reconcile_proposal``
   resolves an ``executing``/``outcome_unknown`` proposal by re-POSTing its
   idempotent ``clientOrderId``.
+- Phase 5 F4c (design spec
+  docs/superpowers/specs/2026-07-20-toss-auto-proposal-phase5-design.md,
+  Codex adversarial review): ``execute_proposal`` additionally re-confirms
+  the live price for an auto-generated (``generation_source == 'auto'``)
+  LIMIT sell proposal right before the dry-run/live branch — refusing
+  (``StalePriceReconfirmationRequiredError``) when no fresh, timestamped
+  quote is obtainable or the price has drifted materially since creation.
+  Strictly additive/auto-gated: a manual proposal's execute path never
+  triggers this check. See ``_reconfirm_auto_sell_price``.
 """
 
 from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timedelta
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 from data_provider.base import DataFetchError
@@ -295,6 +305,88 @@ def _fetch_reference_price(storage_symbol: str) -> Optional[float]:
     return numeric if numeric > 0 else None
 
 
+@dataclass
+class FreshQuote:
+    """A live quote that has passed the Phase 5 freshness requirement (design
+    spec F4). See ``_fetch_fresh_reference_quote``."""
+
+    price: float
+    source: Optional[str]
+    provider_timestamp: str
+    age_seconds: int
+
+
+def _fetch_fresh_reference_quote(storage_symbol: str, *, max_age_seconds: float) -> Optional[FreshQuote]:
+    """Best-effort live quote lookup with an **enforced** freshness
+    requirement (Phase 5 Codex adversarial review F4: "즉시매도 proposals
+    execute with an unverified stale price"). Unlike ``_fetch_reference_price``
+    above (Phase 3's own helper, used only to bound a MARKET order's KRW cap
+    estimate — where any quote, even an untimed provider fallback, is
+    acceptable since price there never becomes the order's own execution
+    price), this fails closed (returns ``None``) whenever the quote carries
+    no verifiable provider timestamp at all, or when its age exceeds
+    ``max_age_seconds`` — because here the price *is* the sell order's own
+    LIMIT price. ``data_provider.base``'s ``_enrich_realtime_quote`` sets
+    ``quote.provider_timestamp``/``quote.stale_seconds`` only when the
+    underlying data source actually reported a market timestamp; a source
+    that never does (or is momentarily unable to) makes every immediate-sell
+    Phase 5 proposal skip fail-closed rather than price off an unverifiable
+    quote — an intentional, documented trade-off for an opt-in defensive
+    feature (design spec F4).
+
+    Only used by the Phase 5 auto-generated immediate-sell path
+    (``AutoProposalService``) and the auto-only execute-time price reconfirm
+    (``PortfolioOrderService._reconfirm_auto_sell_price``) — never by Phase
+    3/4's own manual price paths, which must not change behavior (additive
+    only)."""
+    try:
+        from data_provider.base import DataFetcherManager
+
+        quote = DataFetcherManager().get_realtime_quote(storage_symbol, log_final_failure=False)
+    except Exception as exc:
+        logger.warning("[TossOrder] fresh reference quote fetch failed for %s: %s", storage_symbol, exc)
+        return None
+    if quote is None:
+        return None
+    try:
+        price = float(getattr(quote, "price", None))
+    except (TypeError, ValueError):
+        return None
+    if not (price > 0):
+        return None
+    provider_timestamp = getattr(quote, "provider_timestamp", None)
+    stale_seconds = getattr(quote, "stale_seconds", None)
+    if provider_timestamp is None or stale_seconds is None:
+        # Fail-closed: no verifiable market timestamp, so freshness cannot be
+        # proven (design spec F4a "타임스탬프 없음 시 fail-closed skip").
+        return None
+    try:
+        age_seconds = float(stale_seconds)
+    except (TypeError, ValueError):
+        return None
+    if age_seconds < 0 or age_seconds > max_age_seconds:
+        return None
+    source = getattr(quote, "source", None)
+    return FreshQuote(
+        price=price,
+        source=str(source) if source else None,
+        provider_timestamp=str(provider_timestamp),
+        age_seconds=int(age_seconds),
+    )
+
+
+class StalePriceReconfirmationRequiredError(Exception):
+    """Raised when an auto-generated (Phase 5) immediate-sell proposal cannot
+    be executed because a fresh, verifiable market quote could not be
+    obtained, or the live price has drifted materially from the proposal's
+    stored LIMIT price (design spec F4c "실행 시점 가격 갱신"). This is the
+    residual protection specific to the immediate-sell path, where a human is
+    present at execute time to react and re-review; the conditional-order
+    (stop-loss) path has no equivalent control since Toss auto-executes on
+    trigger with nobody present — that path's control is the F3 disclosure
+    instead (see ``AutoProposalService`` module docstring)."""
+
+
 class PortfolioOrderService:
     """Business logic for Toss order proposals: create/execute/reconcile/
     cancel/list, limit enforcement, and the dry-run/live mode branch."""
@@ -351,6 +443,64 @@ class PortfolioOrderService:
 
     def _is_live(self) -> bool:
         return TossFetcher.is_order_live_enabled(self._config)
+
+    # ------------------------------------------------------------------
+    # Phase 5 F4 config (auto-only: quote freshness at execute-time reconfirm)
+    # ------------------------------------------------------------------
+    def _quote_max_age_seconds(self) -> float:
+        cfg = self._get_config()
+        if cfg is not None:
+            return float(getattr(cfg, "phase5_quote_max_age_seconds", 600.0))
+        return 600.0
+
+    def _execute_price_drift_bps(self) -> float:
+        cfg = self._get_config()
+        if cfg is not None:
+            return float(getattr(cfg, "phase5_execute_price_drift_bps", 200.0))
+        return 200.0
+
+    def _phase5_sell_slippage_bps(self) -> float:
+        cfg = self._get_config()
+        if cfg is not None:
+            return float(getattr(cfg, "phase5_sell_slippage_bps", 50.0))
+        return 50.0
+
+    def _reconfirm_auto_sell_price(self, proposal: PortfolioOrderProposal) -> None:
+        """F4c execute-time reconfirm for an auto-generated (Phase 5)
+        immediate-sell proposal: fetch a fresh, freshness-verified quote and
+        refuse execution — raising ``StalePriceReconfirmationRequiredError``
+        — when none is obtainable, or when the live price has drifted
+        materially from what the proposal's stored LIMIT price would be if
+        it were (re)computed off today's quote with the same slippage. This
+        is the one execution path where a human is present at execute time
+        to react (design spec F4 "경로별": the conditional/stop-loss path has
+        no equivalent — see the module-level docstring and F3's disclosure
+        for that path's control instead). Only ever called for
+        ``generation_source == 'auto'`` proposals; a manual proposal's
+        execute path is completely unchanged."""
+        max_age = self._quote_max_age_seconds()
+        fresh = _fetch_fresh_reference_quote(proposal.storage_symbol, max_age_seconds=max_age)
+        if fresh is None:
+            raise StalePriceReconfirmationRequiredError(
+                f"No fresh, timestamped market quote available for {proposal.storage_symbol} "
+                f"(required max age {max_age:.0f}s); refusing to execute this auto-generated "
+                f"sell proposal without a verifiably current price (design spec F4)"
+            )
+        if not proposal.price:
+            return
+        slippage = self._phase5_sell_slippage_bps() / 10000.0
+        recomputed_limit = fresh.price * (1.0 - slippage)
+        drift_threshold = self._execute_price_drift_bps() / 10000.0
+        drift = abs(recomputed_limit - proposal.price) / proposal.price
+        if drift >= drift_threshold:
+            raise StalePriceReconfirmationRequiredError(
+                f"Live price for {proposal.storage_symbol} would now reprice this proposal's "
+                f"LIMIT to {recomputed_limit:,.4f} (from a fresh quote of {fresh.price:,.4f}), "
+                f"which has drifted {drift * 100:.2f}% from the stored LIMIT {proposal.price:,.4f} "
+                f"(threshold {drift_threshold * 100:.2f}%); refusing to execute without "
+                f"re-review — cancel this proposal and let the next batch/manual review "
+                f"re-price it off the current market (design spec F4c)"
+            )
 
     # ------------------------------------------------------------------
     # Account eligibility (design spec §3 "계좌 자격 단일 검증"): active account
@@ -488,6 +638,7 @@ class PortfolioOrderService:
             "executed_at": row.executed_at.isoformat() if row.executed_at else None,
             "generation_source": row.generation_source,
             "source_signal_id": row.source_signal_id,
+            "generation_date": row.generation_date.isoformat() if row.generation_date else None,
         }
         if mode is not None:
             data["mode"] = mode
@@ -507,13 +658,19 @@ class PortfolioOrderService:
         price: Optional[float] = None,
         generation_source: str = "manual",
         source_signal_id: Optional[int] = None,
+        generation_date: Optional[date] = None,
+        proposed_audit_detail: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """``generation_source``/``source_signal_id`` (Phase 5, additive,
-        default ``'manual'``/``None``) are forwarded verbatim to the repo
-        insert — see ``PortfolioRepository.create_order_proposal_with_audit``
-        for the partial-unique-index idempotency contract they enable. Every
-        other validation/limit/FX/sellable-quantity check below is unchanged
-        and runs identically for auto-generated proposals; the Phase 5 batch
+        """``generation_source``/``source_signal_id``/``generation_date``
+        (Phase 5, additive, default ``'manual'``/``None``/``None``) are
+        forwarded verbatim to the repo insert — see
+        ``PortfolioRepository.create_order_proposal_with_audit`` for the
+        composite-unique-index idempotency contract they enable (v6, Codex
+        adversarial review F1+F2). ``proposed_audit_detail`` (F4b, additive)
+        is forwarded verbatim too, for recording a live quote's source/
+        timestamp/age on the ``proposed`` audit event. Every other
+        validation/limit/FX/sellable-quantity check below is unchanged and
+        runs identically for auto-generated proposals; the Phase 5 batch
         generator is just another caller of this same, unmodified path."""
         side_norm = (side or "").strip().lower()
         if side_norm not in ("buy", "sell"):
@@ -590,6 +747,8 @@ class PortfolioOrderService:
                 max_pending_proposals=_MAX_PENDING_PROPOSALS,
                 generation_source=generation_source,
                 source_signal_id=source_signal_id,
+                generation_date=generation_date,
+                proposed_audit_detail=proposed_audit_detail,
             )
         except PendingProposalCapExceededError as exc:
             raise PendingProposalLimitExceededError(str(exc)) from exc
@@ -679,6 +838,29 @@ class PortfolioOrderService:
                 raise InsufficientSellableQuantityError(
                     f"Requested quantity {proposal.quantity} exceeds sellable quantity {sellable}"
                 )
+
+            # F4c (Codex adversarial review, additive/auto-only): an
+            # auto-generated (Phase 5) LIMIT sell proposal gets one more
+            # execute-time check — a fresh-price reconfirm — right next to
+            # the sellable-quantity re-check above. Gated strictly on
+            # generation_source == 'auto' so Phase 3's existing manual-order
+            # execute behavior is completely unchanged (additive only); the
+            # conditional-order (stop-loss) approve path intentionally has
+            # no equivalent, since it auto-executes on trigger with nobody
+            # present to react (design spec F4 "경로별" — see
+            # ``AutoProposalService`` module docstring and F3's disclosure).
+            if proposal.generation_source == "auto" and proposal.order_type == "LIMIT" and proposal.price:
+                try:
+                    self._reconfirm_auto_sell_price(proposal)
+                except StalePriceReconfirmationRequiredError as exc:
+                    self._fail_proposal(
+                        proposal_uuid=proposal_uuid,
+                        account_id=account_id,
+                        now=now,
+                        error_code="stale-price-reconfirmation-required",
+                        detail={"reason": str(exc)},
+                    )
+                    raise
 
         # ---- The one branch point: dry-run vs live (design spec §7 risk
         # note — keep this the *only* place the two paths diverge). Dry-run

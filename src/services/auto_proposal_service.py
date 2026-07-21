@@ -28,13 +28,56 @@ Data flow (design spec §4):
    ``PortfolioPosition.quantity`` (design spec v1.1 "보유수량 소스 정정" — the
    reverse mapping itself carries no quantity) and routed to either a Phase 4
    conditional STOP proposal (when the signal has a ``stop_loss``) or a
-   Phase 3 plain LIMIT sell proposal (using a live quote otherwise, or
-   skipped fail-closed if no quote is available). ``alert`` signals are
-   counted but never produce a proposal.
+   Phase 3 plain LIMIT sell proposal (using a live, freshness-verified quote
+   otherwise, or skipped fail-closed if no such quote is available — design
+   spec F4a). ``alert`` signals are counted but never produce a proposal.
 4. Every ``create_proposal`` call failure (validation, cap, FX, sellable
-   quantity, or a ``source_signal_id`` uniqueness violation on same-day
-   re-run) is caught per-signal and logged — a single signal's failure never
-   aborts the batch (design spec §5 edge cases).
+   quantity, or an ``(account_id, source_signal_id, generation_date)``
+   uniqueness violation on same-day re-run) is caught per-signal and
+   logged — a single signal's failure never aborts the batch (design spec §5
+   edge cases).
+
+Idempotency (v6, Codex adversarial review F1+F2): every proposal this module
+creates carries ``generation_date`` (this batch run's KST calendar date, see
+``_now_kst_naive().date()`` below) alongside ``source_signal_id``. The DB
+enforces uniqueness on the composite ``(account_id, source_signal_id,
+generation_date)`` — not a global/permanent single-column key — so (F1) two
+different Toss-linked accounts holding the same symbol both get their own
+proposal for the same signal, and (F2) a signal that produced a
+since-expired-or-canceled proposal is free to produce a new one on any
+*later* day's batch (only a same-day re-run is suppressed). See
+``PortfolioOrderProposal``'s docstring in ``src/storage.py`` for the full
+rationale.
+
+Residual execution risk (Codex adversarial review F3+F4) — this module never
+claims to eliminate either of these, only to disclose/mitigate them:
+
+- **F3 (conditional stop-loss orders)**: Toss's server-side conditional-order
+  STOP leg is LIMIT-only (no MARKET option). A gap-down through both the
+  trigger and the slippage-adjusted limit price on the day it triggers — with
+  nobody present to react, since the trigger fires unattended — can leave the
+  order unfilled exactly when the stop-loss was supposed to protect the
+  position. Widening/narrowing ``PHASE5_SELL_SLIPPAGE_BPS`` only trades
+  fill-certainty for fill-price; it does not and cannot eliminate this gap
+  risk. This module's posture is **accept-and-disclose**: every
+  auto-generated conditional stop proposal's audit detail
+  (``PortfolioConditionalOrderProposal`` -> ``cond_proposed`` event) and the
+  batch-summary notification both carry an explicit note to this effect (see
+  ``_CONDITIONAL_STOP_EXECUTION_RISK_NOTE`` and ``format_batch_summary``).
+- **F4 (immediate-sell proposals, path-specific controls)**: the *generator*
+  (this module) only prices an immediate-sell LIMIT off a freshness-verified
+  quote (``_fetch_fresh_reference_quote`` — a timestamped quote no older
+  than ``PHASE5_QUOTE_MAX_AGE_SECONDS``, fail-closed skip otherwise) and
+  records that quote's source/timestamp/age in the proposal's audit detail.
+  The *execute-time* re-check — re-fetching a fresh quote and refusing
+  execution if the price has drifted materially — lives in
+  ``PortfolioOrderService.execute_proposal``/``_reconfirm_auto_sell_price``,
+  gated on ``generation_source == 'auto'``, since that is the one path where
+  a human is present at execute time to react. The conditional/stop-loss
+  path has **no** equivalent execute-time control (Toss auto-executes on
+  trigger with nobody present) — F3's disclosure is that path's control
+  instead. Which control covers which path is intentionally asymmetric, not
+  an oversight.
 """
 
 from __future__ import annotations
@@ -49,14 +92,17 @@ from src.config import Config, get_config
 from src.repositories.portfolio_repo import PortfolioRepository
 from src.services.decision_signal_service import DecisionSignalService
 from src.services.portfolio_broker_sync_service import PortfolioBrokerSyncService
-from src.services.portfolio_conditional_order_service import PortfolioConditionalOrderService
+from src.services.portfolio_conditional_order_service import (
+    PortfolioConditionalOrderService,
+    _CONDITIONAL_STOP_EXECUTION_RISK_NOTE,
+)
 from src.services.portfolio_defensive_signals import (
     held_position_identities,
     resolve_defensive_signal_matches,
 )
 from src.services.portfolio_order_service import (
     PortfolioOrderService,
-    _fetch_reference_price,
+    _fetch_fresh_reference_quote,
     _now_kst_naive,
     _resolve_order_symbol,
 )
@@ -84,6 +130,20 @@ _TOSS_MARKETS: FrozenSet[str] = frozenset({"kr", "us"})
 _INVALID_PLAN_QUALITIES = frozenset({"unknown", "minimal"})
 
 _CONDITIONAL_EXPIRE_DAYS = 7
+
+# design spec F3 "accept-and-disclose": the residual gap-down/non-execution
+# risk every auto-generated conditional stop proposal carries (Toss's STOP
+# leg is LIMIT-only, so a gap-down through both the trigger and the
+# slippage-adjusted limit price leaves the order unfilled, with nobody
+# present at trigger time to react). Recorded verbatim on the proposal's own
+# ``cond_proposed`` audit event, folded into the batch-summary notification
+# (see ``format_batch_summary``), and (coordinator-confirmed F3 follow-up)
+# surfaced on the approve/list payload itself via
+# ``PortfolioConditionalOrderService._serialize_proposal`` — never presented
+# as "solved" by the slippage collar, only disclosed. Defined in
+# ``portfolio_conditional_order_service`` (the module that owns the
+# conditional-order model/service and needs it for serialization) and
+# imported here to avoid a duplicate string living in two places.
 
 
 @dataclass
@@ -172,33 +232,35 @@ class AutoProposalService:
     # ------------------------------------------------------------------
     def run_batch(self) -> AutoProposalBatchResult:
         """Run one Phase 5 batch pass. Safe to call repeatedly (same-day
-        re-runs are idempotent via the ``source_signal_id`` partial unique
-        index + the active-proposal dedup check — design spec §5 "배치
-        재실행"). Never raises for an individual signal's failure; only
-        raises for something that prevents reading input at all (e.g. the
-        portfolio snapshot itself failing), matching every other
-        ``PortfolioService``/``PortfolioRiskService`` read path's
+        re-runs are idempotent via the composite ``(account_id,
+        source_signal_id, generation_date)`` unique index + the
+        active-proposal dedup check — design spec §5 "배치 재실행"; v6, Codex
+        adversarial review F1+F2). Never raises for an individual signal's
+        failure; only raises for something that prevents reading input at
+        all (e.g. the portfolio snapshot itself failing), matching every
+        other ``PortfolioService``/``PortfolioRiskService`` read path's
         fail-loud-on-input-error convention."""
         result = AutoProposalBatchResult()
 
-        # Codex review B1: the source_signal_id partial unique index is what
+        # Codex review B1: the composite idempotency unique index is what
         # makes the insert-then-catch-IntegrityError idempotency contract
-        # below actually true. Its own creation (DatabaseManager._ensure_
-        # portfolio_proposal_source_signal_unique_indexes) is deliberately
-        # fail-open at DB-init time (a pre-existing duplicate must not crash
-        # every process boot) — which means "the index doesn't exist" would
-        # otherwise be silently invisible to this batch. Checking here turns
-        # that into a structural fail-closed no-op instead: without the
-        # index, two concurrent/overlapping batch runs could both pass the
-        # active-proposal pre-check and insert duplicate auto-proposals for
-        # the same signal, and a later index-creation retry would then fail
-        # forever against the duplicate rows it created.
-        if not self.repo.has_source_signal_unique_indexes():
+        # below actually true. Its own creation
+        # (DatabaseManager._ensure_portfolio_proposal_idempotency_unique_
+        # indexes) is deliberately fail-open at DB-init time (a pre-existing
+        # duplicate must not crash every process boot) — which means "the
+        # index doesn't exist" would otherwise be silently invisible to this
+        # batch. Checking here turns that into a structural fail-closed
+        # no-op instead: without the index, two concurrent/overlapping batch
+        # runs could both pass the active-proposal pre-check and insert
+        # duplicate auto-proposals for the same signal, and a later
+        # index-creation retry would then fail forever against the duplicate
+        # rows it created.
+        if not self.repo.has_idempotency_unique_indexes():
             reason = (
-                "source_signal_id partial unique index absent or invalid on one or "
-                "both proposal tables — check DatabaseManager init logs for a "
-                "critical 'could not create unique index' entry, or this deployment "
-                "may be on a non-SQLite engine where the index is never created"
+                "composite (account_id, source_signal_id, generation_date) unique index "
+                "absent or invalid on one or both proposal tables — check DatabaseManager "
+                "init logs for a critical 'could not create unique index' entry, or this "
+                "deployment may be on a non-SQLite engine where the index is never created"
             )
             logger.error("[AutoProposal] Phase 5 idempotency index missing, refusing to run (%s)", reason)
             result.refused = True
@@ -249,6 +311,11 @@ class AutoProposalService:
 
         min_confidence = float(getattr(self.config, "phase5_min_confidence", 0.6))
         slippage = float(getattr(self.config, "phase5_sell_slippage_bps", 50.0)) / 10000.0
+        # v6 (Codex adversarial review F1+F2): every proposal this batch run
+        # creates carries this same generation_date — the second half of the
+        # composite (account_id, source_signal_id, generation_date)
+        # idempotency key (see module docstring).
+        generation_date = now.date()
 
         for match in matches:
             # Codex review M1: the previous version only wrapped the
@@ -262,7 +329,12 @@ class AutoProposalService:
             # than a bare exception repr.
             try:
                 self._process_match(
-                    match, min_confidence=min_confidence, slippage=slippage, now=now, result=result
+                    match,
+                    min_confidence=min_confidence,
+                    slippage=slippage,
+                    now=now,
+                    generation_date=generation_date,
+                    result=result,
                 )
             except Exception as exc:
                 signal = match.get("signal") or {}
@@ -311,6 +383,7 @@ class AutoProposalService:
         min_confidence: float,
         slippage: float,
         now: datetime,
+        generation_date: date,
         result: AutoProposalBatchResult,
     ) -> None:
         signal = match["signal"]
@@ -401,6 +474,7 @@ class AutoProposalService:
                     stop_loss=stop_loss,
                     slippage=slippage,
                     now=now,
+                    generation_date=generation_date,
                     signal_id=signal_id,
                     result=result,
                 )
@@ -411,6 +485,7 @@ class AutoProposalService:
                     storage_symbol=storage_symbol,
                     quantity=quantity,
                     slippage=slippage,
+                    generation_date=generation_date,
                     signal_id=signal_id,
                     result=result,
                 )
@@ -418,9 +493,9 @@ class AutoProposalService:
             # design spec §5: create_proposal validation failures (limit
             # caps, insufficient sellable quantity, FX fail-closed, the
             # 100M KRW hard reject, PendingProposalLimitExceededError, and a
-            # source_signal_id partial-unique-index IntegrityError on a
-            # same-day re-run) all skip only this signal — the batch itself
-            # never aborts.
+            # composite (account_id, source_signal_id, generation_date)
+            # unique-index IntegrityError on a same-day re-run) all skip only
+            # this signal — the batch itself never aborts.
             skip(f"create_proposal failed: {type(exc).__name__}: {exc}")
 
     def _create_conditional_proposal(
@@ -432,6 +507,7 @@ class AutoProposalService:
         stop_loss: float,
         slippage: float,
         now: datetime,
+        generation_date: date,
         signal_id: int,
         result: AutoProposalBatchResult,
     ) -> None:
@@ -439,7 +515,10 @@ class AutoProposalService:
         # on Toss, so limit == trigger would leave the order unfilled on a
         # gap-down through the trigger price — apply the same slippage the
         # immediate-sell path uses so the stop-loss route is never *less*
-        # protective than the immediate one.
+        # protective than the immediate one. F3 (Codex adversarial review):
+        # this slippage is a fill-certainty/fill-price trade-off knob, not a
+        # "fix" for the gap risk — see module docstring and the disclosure
+        # note below.
         limit_price = stop_loss * (1.0 - slippage)
         expire_date: date = (now + timedelta(days=_CONDITIONAL_EXPIRE_DAYS)).date()
         data = self.conditional_order_service.create_proposal(
@@ -452,6 +531,14 @@ class AutoProposalService:
             expire_date=expire_date,
             generation_source="auto",
             source_signal_id=signal_id,
+            generation_date=generation_date,
+            # F3 "accept-and-disclose": record the residual gap-down/
+            # non-execution risk on this proposal's own audit trail, not
+            # just in the batch summary — the disclosure must survive past
+            # the one notification that mentioned it.
+            extra_cond_proposed_audit_detail={
+                "execution_risk_disclosure": _CONDITIONAL_STOP_EXECUTION_RISK_NOTE
+            },
         )
         result.generated.append({
             "account_id": account_id,
@@ -471,18 +558,28 @@ class AutoProposalService:
         storage_symbol: str,
         quantity: float,
         slippage: float,
+        generation_date: date,
         signal_id: int,
         result: AutoProposalBatchResult,
     ) -> None:
-        # design spec v1.1 "즉시매도 현재가": derive the LIMIT price from a
-        # live quote (get_realtime_quote, via the same reused helper Phase 3
-        # itself uses for MARKET-order KRW estimation) rather than any
-        # regex-parsed signal field. Fail-closed (skip) when no quote is
-        # obtainable instead of proposing an unbounded/stale-priced order.
-        current_price = _fetch_reference_price(storage_symbol)
-        if current_price is None or current_price <= 0:
-            raise ValueError(f"no realtime quote available for {storage_symbol}")
-        limit_price = current_price * (1.0 - slippage)
+        # design spec v1.1 "즉시매도 현재가", F4a (Codex adversarial review):
+        # derive the LIMIT price from a *freshness-verified* live quote
+        # (_fetch_fresh_reference_quote — a timestamped quote no older than
+        # PHASE5_QUOTE_MAX_AGE_SECONDS) rather than any regex-parsed signal
+        # field, and rather than Phase 3's own _fetch_reference_price (which
+        # accepts any quote, even an untimed one, since it only bounds a
+        # MARKET-order cap estimate there — not appropriate here, where the
+        # quote *is* this sell order's own execution price). Fail-closed
+        # (skip) when no such quote is obtainable instead of proposing an
+        # unbounded/stale-priced order.
+        max_age_seconds = float(getattr(self.config, "phase5_quote_max_age_seconds", 600.0))
+        fresh_quote = _fetch_fresh_reference_quote(storage_symbol, max_age_seconds=max_age_seconds)
+        if fresh_quote is None:
+            raise ValueError(
+                f"no fresh, timestamped realtime quote available for {storage_symbol} "
+                f"(required max age {max_age_seconds:.0f}s)"
+            )
+        limit_price = fresh_quote.price * (1.0 - slippage)
         data = self.order_service.create_proposal(
             account_id=account_id,
             symbol=symbol,
@@ -492,6 +589,16 @@ class AutoProposalService:
             price=limit_price,
             generation_source="auto",
             source_signal_id=signal_id,
+            generation_date=generation_date,
+            # F4b: record the quote this proposal was priced off of on the
+            # proposal's own audit trail (source/timestamp/age), so a human
+            # reviewing the proposal later can see how current the price was
+            # at generation time.
+            proposed_audit_detail={
+                "quote_source": fresh_quote.source,
+                "quote_provider_timestamp": fresh_quote.provider_timestamp,
+                "quote_age_seconds": fresh_quote.age_seconds,
+            },
         )
         result.generated.append({
             "account_id": account_id,
@@ -506,7 +613,12 @@ class AutoProposalService:
 
 def format_batch_summary(result: AutoProposalBatchResult) -> str:
     """Format the batch-end notification body (design spec §3 "노출":
-    "승인 대기 자동 제안 N건: ..., alert K건 수동 검토")."""
+    "승인 대기 자동 제안 N건: ..., alert K건 수동 검토"). F3 (Codex adversarial
+    review, additive): when this run generated at least one conditional
+    stop-loss proposal, the summary also carries the gap-down/non-execution
+    residual-risk disclosure once — "prominent" per the review means both
+    this batch-summary notification and the per-proposal audit detail (see
+    ``_create_conditional_proposal``), not the collar width alone."""
     lines = [
         f"Phase 5 자동 주문 제안 배치: 승인 대기 {result.generated_count}건 생성, "
         f"alert {result.alert_count}건 수동 검토, skip {result.skipped_count}건"
@@ -517,6 +629,8 @@ def format_batch_summary(result: AutoProposalBatchResult) -> str:
         )
     if result.generated_count > 20:
         lines.append(f"...외 {result.generated_count - 20}건")
+    if any(item.get("order_kind") == "conditional" for item in result.generated):
+        lines.append(f"⚠️ {_CONDITIONAL_STOP_EXECUTION_RISK_NOTE}")
     return "\n".join(lines)
 
 

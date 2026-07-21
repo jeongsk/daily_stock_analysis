@@ -19,15 +19,26 @@ Highest-priority coverage (design spec §6 "검증 계획"):
   slippage applied to both trigger legs; stop_loss absent -> Phase 3 LIMIT
   sell priced off a live quote, slippage applied; quote unavailable -> skip
   (fail-closed, not a fabricated price).
-- Idempotency: a same-day batch re-run produces zero new proposals via BOTH
-  distinct paths — the active-proposal dedup short-circuit (still-pending
-  first proposal) AND, separately, the actual DB-level source_signal_id
-  unique-index IntegrityError path (first proposal moved to a terminal state
-  so the dedup check no longer short-circuits) — Codex review M4: these are
-  not the same code path and must both be exercised.
+- Idempotency (v6, Codex adversarial review F1+F2): the DB key is the
+  composite ``(account_id, source_signal_id, generation_date)`` — a same-day
+  batch re-run produces zero new proposals via BOTH distinct paths (the
+  active-proposal dedup short-circuit, and separately the actual DB-level
+  composite-unique-index IntegrityError path once the first proposal reaches
+  a terminal state so the dedup check no longer short-circuits — Codex
+  review M4). Two different accounts holding the same signal (F1) both get a
+  proposal in the *same* run. A signal whose earlier proposal genuinely
+  TTL-expired (real elapsed time, not a hand-set 'expired' status — F2's own
+  reviewed counterexample) is free to produce a new proposal on the *next*
+  day's ``generation_date``, but a same-day retry after expiry/cancellation
+  is still suppressed (intended: a canceled/expired proposal today does not
+  silently reappear hours later within the same batch day).
+- Migration swap: a DB carrying the pre-v6 single-column
+  ``uix_..._source_signal`` index (a real upgrade path, not a fresh DB) has
+  that index replaced — dropped, not left in place — by the v6 composite
+  index on the next ``DatabaseManager.get_instance()``.
 - Activation gating: PHASE5_AUTO_PROPOSAL_ENABLED unset, zero Toss-linked
-  accounts, and (Codex review B1) a missing source_signal_id unique index are
-  all a fail-closed no-op.
+  accounts, and (Codex review B1) a missing/invalid idempotency unique index
+  are all a fail-closed no-op.
 - Per-signal isolation (Codex review M1): any exception anywhere in
   per-signal processing (not just create_proposal) skips only that signal.
 - Pre-batch sync (Codex review M2): sync_linked_account is attempted for
@@ -35,6 +46,18 @@ Highest-priority coverage (design spec §6 "검증 계획"):
   account never blocks the batch.
 - TTL parity (Codex review M3): a TTL-expired pending proposal nobody polled
   does not count as "active" for the dedup check.
+- F4 (Codex adversarial review): an immediate-sell proposal is priced off a
+  freshness-verified quote (timestamped, within
+  PHASE5_QUOTE_MAX_AGE_SECONDS) — stale/untimed quotes skip fail-closed, not
+  a fabricated price. ``execute_proposal`` additionally re-confirms an
+  auto-generated proposal's price at execute time, gated strictly on
+  ``generation_source == 'auto'`` (a manual proposal's execute path is
+  unaffected) — refusing execution on a materially drifted price.
+- Real over-sell backstop: ``execute_proposal``'s existing sellable-quantity
+  re-check (unmodified, generic to every proposal regardless of
+  ``generation_source``) is pinned here for an auto-generated proposal
+  specifically, since the idempotency key above is an accuracy/UX property,
+  not the actual paranoia backstop against over-selling.
 
 TossFetcher and the realtime-quote provider are always faked here — this
 suite makes no real HTTP/network calls. ``sync_linked_account`` is exercised
@@ -44,19 +67,21 @@ the test env), which fails before any network call — also offline.
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import sys
 import tempfile
 import unittest
 from contextlib import contextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy import inspect as sa_inspect
 
 try:
     import litellm  # noqa: F401
@@ -68,6 +93,7 @@ from fastapi.testclient import TestClient
 from src.config import Config
 from src.repositories.portfolio_repo import PortfolioRepository
 from src.services.auto_proposal_service import (
+    _CONDITIONAL_STOP_EXECUTION_RISK_NOTE,
     AutoProposalService,
     format_batch_summary,
     run_phase5_auto_proposal_batch,
@@ -75,7 +101,11 @@ from src.services.auto_proposal_service import (
 from src.services.decision_signal_service import DecisionSignalService
 from src.services.portfolio_broker_sync_service import PortfolioBrokerSyncService
 from src.services.portfolio_conditional_order_service import PortfolioConditionalOrderService
-from src.services.portfolio_order_service import PortfolioOrderService
+from src.services.portfolio_order_service import (
+    InsufficientSellableQuantityError,
+    PortfolioOrderService,
+    StalePriceReconfirmationRequiredError,
+)
 from src.services.portfolio_service import PortfolioService
 from src.storage import DatabaseManager, PortfolioOrderProposal
 
@@ -166,6 +196,7 @@ class AutoProposalServiceTestCase(unittest.TestCase):
         os.environ.pop("PHASE5_AUTO_PROPOSAL_ENABLED", None)
         os.environ.pop("PHASE5_MIN_CONFIDENCE", None)
         os.environ.pop("PHASE5_SELL_SLIPPAGE_BPS", None)
+        os.environ.pop("PHASE5_EXECUTE_PRICE_DRIFT_BPS", None)
         self.temp_dir.cleanup()
 
     def _write_env(self, extra_lines: Optional[List[str]] = None) -> None:
@@ -183,7 +214,16 @@ class AutoProposalServiceTestCase(unittest.TestCase):
     def _epoch() -> datetime:
         return datetime(2026, 1, 1, 0, 0, 0)
 
-    def _set_quote_price(self, price: Optional[float]) -> None:
+    def _set_quote_price(self, price: Optional[float], *, age_seconds: float = 5.0) -> None:
+        """``age_seconds`` (F4, Codex adversarial review): explicitly sets
+        ``provider_timestamp``/``stale_seconds`` (not left to MagicMock's
+        auto-vivified attributes, whose default ``__float__``/``__str__``
+        magic-method behavior would otherwise make
+        ``_fetch_fresh_reference_quote`` accidentally "work" without ever
+        exercising the real freshness check) — default 5s is comfortably
+        under ``PHASE5_QUOTE_MAX_AGE_SECONDS``'s default 600s. Use
+        ``_set_quote_price_stale``/``_set_quote_price_no_timestamp`` for the
+        fail-closed cases."""
         if price is None:
             self._mock_fetcher_manager_cls.return_value.get_realtime_quote.return_value = None
         else:
@@ -194,8 +234,25 @@ class AutoProposalServiceTestCase(unittest.TestCase):
             # smuggle a non-JSON-serializable MagicMock into the snapshot
             # payload (get_portfolio_snapshot persists it via json.dumps).
             self._mock_fetcher_manager_cls.return_value.get_realtime_quote.return_value = MagicMock(
-                price=price, source=None
+                price=price,
+                source=None,
+                provider_timestamp="2026-01-01T00:00:00+00:00",
+                stale_seconds=age_seconds,
             )
+
+    def _set_quote_price_stale(self, price: float, *, age_seconds: float) -> None:
+        """A quote with a real timestamp, but older than
+        PHASE5_QUOTE_MAX_AGE_SECONDS — must fail closed, not "the last known
+        price"."""
+        self._set_quote_price(price, age_seconds=age_seconds)
+
+    def _set_quote_price_no_timestamp(self, price: float) -> None:
+        """A quote whose provider never reported a market timestamp at all —
+        must fail closed regardless of PHASE5_QUOTE_MAX_AGE_SECONDS (design
+        spec F4a "타임스탬프 없음 시 fail-closed skip")."""
+        self._mock_fetcher_manager_cls.return_value.get_realtime_quote.return_value = MagicMock(
+            price=price, source=None, provider_timestamp=None, stale_seconds=None
+        )
 
     def _make_auto_service(self) -> AutoProposalService:
         return AutoProposalService(
@@ -207,9 +264,11 @@ class AutoProposalServiceTestCase(unittest.TestCase):
             config=Config.get_instance(),
         )
 
-    def _create_position(self, symbol: str, *, quantity: float = 10, price: float = 100.0) -> None:
+    def _create_position(
+        self, symbol: str, *, quantity: float = 10, price: float = 100.0, account_id: Optional[int] = None
+    ) -> None:
         self.portfolio_service.record_trade(
-            account_id=self.account_id,
+            account_id=account_id if account_id is not None else self.account_id,
             symbol=symbol,
             trade_date=date(2026, 1, 1),
             side="buy",
@@ -412,11 +471,289 @@ class AutoProposalServiceTestCase(unittest.TestCase):
         }
         batch_result = mod.AutoProposalBatchResult()
         service._process_match(
-            match, min_confidence=0.6, slippage=0.0, now=self._epoch(), result=batch_result
+            match,
+            min_confidence=0.6,
+            slippage=0.0,
+            now=self._epoch(),
+            generation_date=self._epoch().date(),
+            result=batch_result,
         )
         self.assertEqual(batch_result.generated_count, 0)
         self.assertEqual(len(batch_result.skipped), 1)
         self.assertIn("not numeric", batch_result.skipped[0]["reason"])
+
+    # ------------------------------------------------------------------
+    # F4a — quote freshness at generation time (Codex adversarial review)
+    # ------------------------------------------------------------------
+    def test_stale_quote_beyond_max_age_is_skipped_fail_closed(self) -> None:
+        self._create_position("005930", quantity=10)
+        self._set_quote_price_stale(100.0, age_seconds=900.0)  # default max age is 600s
+        self._create_signal("005930", "sell")
+
+        result = self._make_auto_service().run_batch()
+        self.assertEqual(result.generated_count, 0)
+        self.assertEqual(len(result.skipped), 1)
+
+    def test_quote_without_provider_timestamp_is_skipped_fail_closed(self) -> None:
+        self._create_position("005930", quantity=10)
+        self._set_quote_price_no_timestamp(100.0)
+        self._create_signal("005930", "sell")
+
+        result = self._make_auto_service().run_batch()
+        self.assertEqual(result.generated_count, 0)
+        self.assertEqual(len(result.skipped), 1)
+
+    def test_plain_proposal_audit_detail_records_quote_metadata(self) -> None:
+        """F4b: the proposal's own 'proposed' audit event records the quote
+        it was priced off of (source/timestamp/age), not just the batch
+        summary — a human reviewing the proposal later can see how current
+        the price was at generation time."""
+        self._create_position("005930", quantity=10)
+        self._set_quote_price(71000.0, age_seconds=12.0)
+        self._create_signal("005930", "sell")
+
+        result = self._make_auto_service().run_batch()
+        proposal_uuid = result.generated[0]["proposal_uuid"]
+
+        audits = self.repo.list_order_audits(self.account_id, proposal_uuid=proposal_uuid)
+        proposed = next(a for a in audits if a.event == "proposed")
+        detail = json.loads(proposed.detail)
+        self.assertEqual(detail["quote_age_seconds"], 12)
+        self.assertIn("quote_provider_timestamp", detail)
+
+    # ------------------------------------------------------------------
+    # F3 — conditional stop-loss "accept-and-disclose" (Codex adversarial
+    # review): the gap-down/non-execution residual risk is never claimed to
+    # be solved by the slippage collar, only disclosed on the proposal's own
+    # audit trail and the batch summary.
+    # ------------------------------------------------------------------
+    def test_conditional_stop_proposal_audit_detail_carries_risk_disclosure(self) -> None:
+        self._create_position("005930", quantity=10)
+        self._create_signal("005930", "sell", stop_loss=90.0)
+
+        result = self._make_auto_service().run_batch()
+        proposal_uuid = result.generated[0]["proposal_uuid"]
+
+        audits = self.repo.list_order_audits(self.account_id, proposal_uuid=proposal_uuid)
+        proposed = next(a for a in audits if a.event == "cond_proposed")
+        detail = json.loads(proposed.detail)
+        self.assertIn("execution_risk_disclosure", detail)
+        self.assertEqual(detail["execution_risk_disclosure"], _CONDITIONAL_STOP_EXECUTION_RISK_NOTE)
+
+    def test_batch_summary_includes_conditional_stop_risk_disclosure_when_generated(self) -> None:
+        self._create_position("005930", quantity=10)
+        self._create_signal("005930", "sell", stop_loss=90.0)
+
+        result = self._make_auto_service().run_batch()
+        summary = format_batch_summary(result)
+        self.assertIn(_CONDITIONAL_STOP_EXECUTION_RISK_NOTE, summary)
+
+    def test_batch_summary_omits_risk_disclosure_when_no_conditional_generated(self) -> None:
+        self._create_position("005930", quantity=10)
+        self._create_signal("005930", "sell")  # no stop_loss -> plain path only
+
+        result = self._make_auto_service().run_batch()
+        summary = format_batch_summary(result)
+        self.assertNotIn(_CONDITIONAL_STOP_EXECUTION_RISK_NOTE, summary)
+
+    def test_conditional_proposal_payload_exposes_risk_disclosure_for_auto_generated(self) -> None:
+        """F3 follow-up (coordinator-confirmed, second review round): the
+        risk disclosure must be visible on the same serialized payload the
+        approve/list API returns inline — not only in the audit trail and
+        batch notification — since the moment of approval is when the human
+        actually accepts the residual risk."""
+        self._create_position("005930", quantity=10)
+        self._create_signal("005930", "sell", stop_loss=90.0)
+
+        self._make_auto_service().run_batch()
+
+        rows = self.conditional_order_service.list_proposals(account_id=self.account_id)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["generation_source"], "auto")
+        self.assertEqual(rows[0]["execution_risk_disclosure"], _CONDITIONAL_STOP_EXECUTION_RISK_NOTE)
+
+    def test_conditional_proposal_approve_payload_exposes_risk_disclosure_for_auto_generated(self) -> None:
+        """F3 follow-up: the disclosure must survive the actual approve call
+        (the moment the human accepts the residual risk), not just be
+        visible on a pre-approval list/get read."""
+        self._create_position("005930", quantity=10)
+        self._create_signal("005930", "sell", stop_loss=90.0)
+        result = self._make_auto_service().run_batch()
+        proposal_uuid = result.generated[0]["proposal_uuid"]
+
+        approved = self.conditional_order_service.approve_proposal(
+            account_id=self.account_id, proposal_uuid=proposal_uuid, confirm=True
+        )
+        self.assertEqual(approved["generation_source"], "auto")
+        self.assertEqual(approved["execution_risk_disclosure"], _CONDITIONAL_STOP_EXECUTION_RISK_NOTE)
+
+    def test_manual_conditional_proposal_payload_omits_risk_disclosure(self) -> None:
+        """A human creating a conditional order manually is explicitly
+        configuring the STOP/LIMIT leg themselves; the disclosure field
+        stays null so it's clear this note was not injected for this
+        proposal (distinguishing it from an auto-generated one)."""
+        self._create_position("005930", quantity=10)
+
+        created = self.conditional_order_service.create_proposal(
+            account_id=self.account_id,
+            symbol="005930",
+            side="sell",
+            trigger_price=90.0,
+            limit_price=89.0,
+            quantity=5,
+            expire_date=date.today() + timedelta(days=1),
+        )
+        self.assertEqual(created["generation_source"], "manual")
+        self.assertIsNone(created["execution_risk_disclosure"])
+
+        fetched = self.conditional_order_service.get_proposal(
+            account_id=self.account_id, proposal_uuid=created["proposal_uuid"]
+        )
+        self.assertIsNone(fetched["execution_risk_disclosure"])
+
+    def test_plain_order_proposal_payload_has_no_risk_disclosure_key(self) -> None:
+        """Plain (Phase 3) order proposals are a structurally different
+        model/schema and must not carry the conditional-order-only
+        disclosure field at all."""
+        self._create_position("005930", quantity=10)
+        self._create_signal("005930", "sell")  # no stop_loss -> plain path only
+
+        result = self._make_auto_service().run_batch()
+        self.assertNotIn("execution_risk_disclosure", result.generated[0])
+
+    # ------------------------------------------------------------------
+    # F4c — execute-time price reconfirm, auto-only (Codex adversarial
+    # review): the immediate-sell path's residual control, since a human is
+    # present at execute time to react. Never applies to a manual proposal.
+    # ------------------------------------------------------------------
+    def test_execute_time_reconfirm_no_fresh_quote_refuses_execution(self) -> None:
+        self._create_position("005930", quantity=10)
+        self._set_quote_price(100.0)
+        self._create_signal("005930", "sell")
+        result = self._make_auto_service().run_batch()
+        proposal_uuid = result.generated[0]["proposal_uuid"]
+
+        self._set_quote_price(None)  # quote now unobtainable at execute time
+        with self.assertRaises(StalePriceReconfirmationRequiredError):
+            self.order_service.execute_proposal(account_id=self.account_id, proposal_uuid=proposal_uuid, confirm=True)
+
+        proposals = self.order_service.list_proposals(account_id=self.account_id)
+        self.assertEqual(proposals[0]["status"], "failed")
+
+    def test_execute_time_reconfirm_drifted_price_refuses_execution(self) -> None:
+        self._create_position("005930", quantity=10)
+        self._set_quote_price(100.0)
+        self._create_signal("005930", "sell")
+        result = self._make_auto_service().run_batch()
+        proposal_uuid = result.generated[0]["proposal_uuid"]
+
+        # Market cratered since generation -> drift far exceeds the default
+        # 200bps PHASE5_EXECUTE_PRICE_DRIFT_BPS threshold.
+        self._set_quote_price(50.0)
+        with self.assertRaises(StalePriceReconfirmationRequiredError):
+            self.order_service.execute_proposal(account_id=self.account_id, proposal_uuid=proposal_uuid, confirm=True)
+
+        proposals = self.order_service.list_proposals(account_id=self.account_id)
+        self.assertEqual(proposals[0]["status"], "failed")
+
+    def test_execute_time_reconfirm_passes_with_fresh_stable_quote(self) -> None:
+        self._create_position("005930", quantity=10)
+        self._set_quote_price(100.0)
+        self._create_signal("005930", "sell")
+        result = self._make_auto_service().run_batch()
+        proposal_uuid = result.generated[0]["proposal_uuid"]
+
+        # Quote unchanged at execute time -> reconfirm passes, execution proceeds (dry-run).
+        executed = self.order_service.execute_proposal(
+            account_id=self.account_id, proposal_uuid=proposal_uuid, confirm=True
+        )
+        self.assertEqual(executed["status"], "dry_run_executed")
+
+    def test_execute_time_reconfirm_boundary_drift_exactly_at_threshold_refuses_execution(self) -> None:
+        """Codex re-review R3: the design spec and .env.example document
+        ``PHASE5_EXECUTE_PRICE_DRIFT_BPS`` as an 'at least' (이상) threshold
+        — a drift exactly equal to it must still refuse execution. A plain
+        `>` comparison would silently let this exact-boundary case through
+        (the bug Codex flagged). Slippage is pinned to 0 and the threshold
+        to a power-of-two-friendly 2500bps (25%) so the arithmetic lands on
+        the boundary with bit-for-bit precision rather than an epsilon that
+        could round to either side of it (an arbitrary bps value like the
+        200bps default does not reproduce reliably in binary floating
+        point)."""
+        os.environ["PHASE5_SELL_SLIPPAGE_BPS"] = "0"
+        os.environ["PHASE5_EXECUTE_PRICE_DRIFT_BPS"] = "2500"
+        Config.reset_instance()
+        self._create_position("005930", quantity=10)
+        self._set_quote_price(100.0)
+        self._create_signal("005930", "sell")
+        result = self._make_auto_service().run_batch()
+        proposal_uuid = result.generated[0]["proposal_uuid"]
+        stored_price = self.order_service.list_proposals(account_id=self.account_id)[0]["price"]
+        self.assertEqual(stored_price, 100.0)  # slippage=0 -> stored price == quote price exactly
+
+        slippage = self.order_service._phase5_sell_slippage_bps() / 10000.0
+        threshold = self.order_service._execute_price_drift_bps() / 10000.0
+        self.assertEqual(slippage, 0.0)
+        self.assertEqual(threshold, 0.25)
+
+        # recomputed_limit = 125.0 * (1 - 0) = 125.0; drift = |125-100|/100 = 0.25 exactly.
+        self._set_quote_price(125.0)
+
+        with self.assertRaises(StalePriceReconfirmationRequiredError):
+            self.order_service.execute_proposal(account_id=self.account_id, proposal_uuid=proposal_uuid, confirm=True)
+
+        proposals = self.order_service.list_proposals(account_id=self.account_id)
+        self.assertEqual(proposals[0]["status"], "failed")
+
+    def test_execute_time_reconfirm_only_applies_to_auto_generated_proposals(self) -> None:
+        self._create_position("005930", quantity=10)
+        self._set_quote_price(100.0)
+        manual = self.order_service.create_proposal(
+            account_id=self.account_id, symbol="005930", side="sell", quantity=1, order_type="LIMIT", price=95.0
+        )
+        # If the auto-only reconfirm ran for a manual proposal, this would
+        # raise StalePriceReconfirmationRequiredError instead of executing.
+        self._set_quote_price(None)
+        executed = self.order_service.execute_proposal(
+            account_id=self.account_id, proposal_uuid=manual["proposal_uuid"], confirm=True
+        )
+        self.assertEqual(executed["status"], "dry_run_executed")
+
+    # ------------------------------------------------------------------
+    # Real over-sell backstop (advisor): the idempotency key above is an
+    # accuracy/UX property, not the actual paranoia guard against
+    # over-selling — execute_proposal's/approve_proposal's existing
+    # sellable-quantity re-check (unmodified, generic to every proposal) is
+    # what protects against that, and it must apply identically to an
+    # auto-generated proposal.
+    # ------------------------------------------------------------------
+    def test_execute_time_sellable_recheck_applies_to_auto_generated_plain_proposal(self) -> None:
+        self._create_position("005930", quantity=10)
+        self._set_quote_price(100.0)
+        self._create_signal("005930", "sell")
+        result = self._make_auto_service().run_batch()
+        proposal_uuid = result.generated[0]["proposal_uuid"]
+
+        # Position sold elsewhere (e.g. manually on the Toss app) since the
+        # proposal was generated.
+        self.fetcher.sellable_quantity = 0.0
+        with self.assertRaises(InsufficientSellableQuantityError):
+            self.order_service.execute_proposal(account_id=self.account_id, proposal_uuid=proposal_uuid, confirm=True)
+
+        proposals = self.order_service.list_proposals(account_id=self.account_id)
+        self.assertEqual(proposals[0]["status"], "failed")
+
+    def test_approve_time_sellable_recheck_applies_to_auto_generated_conditional_proposal(self) -> None:
+        self._create_position("005930", quantity=10)
+        self._create_signal("005930", "sell", stop_loss=90.0)
+        result = self._make_auto_service().run_batch()
+        proposal_uuid = result.generated[0]["proposal_uuid"]
+
+        self.fetcher.sellable_quantity = 0.0
+        with self.assertRaises(InsufficientSellableQuantityError):
+            self.conditional_order_service.approve_proposal(
+                account_id=self.account_id, proposal_uuid=proposal_uuid, confirm=True
+            )
 
     # ------------------------------------------------------------------
     # Idempotency / dedup
@@ -449,6 +786,90 @@ class AutoProposalServiceTestCase(unittest.TestCase):
         self.assertEqual(result.generated_count, 0)
         self.assertEqual(len(result.skipped), 1)
         self.assertIn("active proposal", result.skipped[0]["reason"])
+
+    def _create_second_toss_account(self) -> int:
+        created = self.portfolio_service.create_account(
+            name="Toss KR 2", broker="toss", market="kr", base_currency="KRW"
+        )
+        account_id = int(created["id"])
+        self.repo.create_broker_link(
+            account_id=account_id,
+            provider="toss",
+            external_account_seq="556",
+            external_account_no="9876543210",
+            linked_at=self._epoch(),
+            snapshot_boundary_at=self._epoch(),
+            last_synced_at=self._epoch(),
+            active=True,
+        )
+        return account_id
+
+    def test_two_toss_linked_accounts_holding_same_signal_both_get_proposals(self) -> None:
+        """F1 (Codex adversarial review): the old global source_signal_id key
+        let only the first account's insert succeed for the same signal
+        identity, silently dropping the second account's defensive proposal.
+        The v6 composite (account_id, source_signal_id, generation_date) key
+        must let every account with a matching held position get its own
+        proposal in the same batch run."""
+        second_account_id = self._create_second_toss_account()
+        self._create_position("005930", quantity=10)  # self.account_id
+        self._create_position("005930", quantity=6, account_id=second_account_id)
+        self._create_signal("005930", "sell")  # one shared signal identity
+
+        result = self._make_auto_service().run_batch()
+
+        self.assertEqual(result.generated_count, 2)
+        self.assertEqual(len(result.skipped), 0)
+        account_ids = {item["account_id"] for item in result.generated}
+        self.assertEqual(account_ids, {self.account_id, second_account_id})
+        quantities_by_account = {item["account_id"]: item["quantity"] for item in result.generated}
+        self.assertEqual(quantities_by_account[self.account_id], 10.0)
+        self.assertEqual(quantities_by_account[second_account_id], 6.0)
+
+        self.assertEqual(len(self.order_service.list_proposals(account_id=self.account_id)), 1)
+        self.assertEqual(len(self.order_service.list_proposals(account_id=second_account_id)), 1)
+
+    def test_next_day_regeneration_after_real_ttl_expiry_is_allowed(self) -> None:
+        """F2 (Codex adversarial review) — the exact reviewed counterexample:
+        genuine TTL elapse (``expires_at`` moved to the past), ``status``
+        left ``'pending'`` (never hand-set to ``'expired'`` — a status-based
+        partial index would have incorrectly kept blocking this forever,
+        which is precisely why the architect's convergence contract rejected
+        that design). A later batch computing a *different*
+        ``generation_date`` must be free to produce a new proposal for the
+        same still-active signal; a same-day retry (already covered by
+        ``test_batch_rerun_same_day_is_idempotent`` and the
+        dedup-bypass/IntegrityError tests below) stays suppressed."""
+        self._create_position("005930", quantity=10)
+        self._create_signal("005930", "sell")
+
+        service = self._make_auto_service()
+        first = service.run_batch()
+        self.assertEqual(first.generated_count, 1)
+        first_proposal_uuid = first.generated[0]["proposal_uuid"]
+
+        with self.db.get_session() as session:
+            row = session.execute(
+                select(PortfolioOrderProposal).where(PortfolioOrderProposal.proposal_uuid == first_proposal_uuid)
+            ).scalar_one()
+            self.assertEqual(row.status, "pending")  # never hand-set to 'expired'
+            first_generation_date = row.generation_date
+            row.expires_at = datetime(2020, 1, 1)  # genuine TTL elapse, real time in the past
+            session.commit()
+
+        next_day = datetime.combine(first_generation_date, datetime.min.time()) + timedelta(days=1, hours=9)
+        with patch("src.services.auto_proposal_service._now_kst_naive", return_value=next_day):
+            second = service.run_batch()
+
+        self.assertEqual(second.generated_count, 1)
+        self.assertEqual(len(second.skipped), 0)
+
+        rows = self.order_service.list_proposals(account_id=self.account_id)
+        self.assertEqual(len(rows), 2)
+        generation_dates = {row["generation_date"] for row in rows}
+        self.assertEqual(len(generation_dates), 2)
+        self.assertIn(first_generation_date.isoformat(), generation_dates)
+        self.assertIn(next_day.date().isoformat(), generation_dates)
 
     # ------------------------------------------------------------------
     # generation_source additive columns / API filter plumbing
@@ -489,7 +910,7 @@ class AutoProposalServiceTestCase(unittest.TestCase):
         self._create_position("005930", quantity=10)
         self._create_signal("005930", "sell")
 
-        with patch.object(PortfolioRepository, "has_source_signal_unique_indexes", return_value=False):
+        with patch.object(PortfolioRepository, "has_idempotency_unique_indexes", return_value=False):
             result = self._make_auto_service().run_batch()
 
         self.assertEqual(result.generated_count, 0)
@@ -505,7 +926,7 @@ class AutoProposalServiceTestCase(unittest.TestCase):
         notifier = MagicMock()
         notifier.is_available.return_value = True
 
-        with patch.object(PortfolioRepository, "has_source_signal_unique_indexes", return_value=False):
+        with patch.object(PortfolioRepository, "has_idempotency_unique_indexes", return_value=False):
             result = run_phase5_auto_proposal_batch(
                 notifier=notifier, config=Config.get_instance(), service=self._make_auto_service()
             )
@@ -523,7 +944,7 @@ class AutoProposalServiceTestCase(unittest.TestCase):
         setUp, which runs the full Phase 3/4 migration chain) always has
         both indexes, so the batch is not permanently fail-closed in the
         common case."""
-        self.assertTrue(self.repo.has_source_signal_unique_indexes())
+        self.assertTrue(self.repo.has_idempotency_unique_indexes())
 
     # ------------------------------------------------------------------
     # Codex 2nd-round review M4 — real on-disk DB scenarios, not mocks,
@@ -574,12 +995,22 @@ class AutoProposalServiceTestCase(unittest.TestCase):
         )
     """
 
+    # v1.1-v5 columns (no generation_date yet) — used to simulate a DB that
+    # already ran the pre-v6 migration.
+    _V5_EXTRA_COLUMNS = (
+        ",\n          generation_source VARCHAR(16) NOT NULL DEFAULT 'manual',"
+        "\n          source_signal_id INTEGER"
+    )
+    # v6 columns (this upgrade's own target shape).
+    _V6_EXTRA_COLUMNS = _V5_EXTRA_COLUMNS + ",\n          generation_date DATE"
+
     def test_legacy_pre_phase5_db_migration_creates_both_indexes(self) -> None:
         """A pre-Phase-5 DB (the two proposal tables exist without
-        generation_source/source_signal_id) must gain both columns and both
-        indexes on the next DatabaseManager.get_instance() — this is the
-        actual upgrade path a real deployment goes through, not just a
-        freshly-created test DB that never lacked the columns."""
+        generation_source/source_signal_id/generation_date at all) must gain
+        all three columns and the v6 composite index on the next
+        DatabaseManager.get_instance() — this is the actual upgrade path a
+        real deployment from *before* Phase 5 shipped goes through, not just
+        a freshly-created test DB that never lacked the columns."""
         legacy_db_path = Path(self.temp_dir.name) / "legacy_pre_phase5.db"
         conn = sqlite3.connect(str(legacy_db_path))
         conn.execute(self._LEGACY_ORDER_PROPOSAL_TABLE_SQL.format(extra_columns=""))
@@ -588,254 +1019,315 @@ class AutoProposalServiceTestCase(unittest.TestCase):
 
         with self._temporary_database(legacy_db_path) as legacy_db:
             inspector_repo = PortfolioRepository(db_manager=legacy_db)
-            self.assertTrue(legacy_db.has_portfolio_proposal_source_signal_unique_indexes())
-            self.assertTrue(inspector_repo.has_source_signal_unique_indexes())
+            self.assertTrue(legacy_db.has_portfolio_proposal_idempotency_unique_indexes())
+            self.assertTrue(inspector_repo.has_idempotency_unique_indexes())
+
+    def test_v5_single_column_index_migration_swap_drops_old_creates_composite(self) -> None:
+        """advisor-flagged blind spot: a real deployment that already ran the
+        v1.1-v5 code has the *old* single-column partial-unique
+        ``uix_portfolio_order_proposal_source_signal`` index in place — not
+        just a DB that never had any Phase 5 index at all (the legacy test
+        above). The v6 migration must actually replace it: the old index is
+        gone (``DROP INDEX``, not left dangling underneath the new one) and
+        the new composite ``(account_id, source_signal_id,
+        generation_date)`` index exists and passes the gate. Also asserts
+        the swap is non-destructive: the pre-existing row (which only ever
+        satisfied the *stricter* old single-column key) survives untouched
+        and does not trip an IntegrityError on the new, strictly looser
+        composite key."""
+        v5_db_path = Path(self.temp_dir.name) / "v5_single_column_index.db"
+        conn = sqlite3.connect(str(v5_db_path))
+        conn.execute(self._LEGACY_ORDER_PROPOSAL_TABLE_SQL.format(extra_columns=self._V5_EXTRA_COLUMNS))
+        conn.execute(
+            "CREATE UNIQUE INDEX uix_portfolio_order_proposal_source_signal "
+            "ON portfolio_order_proposals (source_signal_id) WHERE source_signal_id IS NOT NULL"
+        )
+        conn.execute(
+            "INSERT INTO portfolio_order_proposals (account_id, proposal_uuid, symbol, "
+            "storage_symbol, market, currency, side, order_type, price, quantity, "
+            "est_amount_krw, status, created_at, expires_at, source_signal_id) VALUES "
+            "(1, 'pre-existing-uuid', '005930', '005930.KS', 'kr', 'KRW', 'sell', 'LIMIT', "
+            "90.0, 5, 450.0, 'pending', '2026-01-01', '2026-01-01', 42)"
+        )
+        conn.commit()
+        conn.close()
+
+        with self._temporary_database(v5_db_path) as v5_db:
+            inspector = sa_inspect(v5_db._engine)
+            index_names = {index["name"] for index in inspector.get_indexes("portfolio_order_proposals")}
+            self.assertNotIn(
+                "uix_portfolio_order_proposal_source_signal", index_names,
+                "old v1.1-v5 single-column index must be dropped, not left in place",
+            )
+            self.assertIn("uix_portfolio_order_proposal_account_signal_date", index_names)
+            self.assertTrue(v5_db.has_portfolio_proposal_idempotency_unique_indexes())
+
+            # The pre-existing row survived the swap untouched.
+            with v5_db.get_session() as session:
+                row = session.execute(
+                    select(PortfolioOrderProposal).where(
+                        PortfolioOrderProposal.proposal_uuid == "pre-existing-uuid"
+                    )
+                ).scalar_one()
+                self.assertEqual(row.source_signal_id, 42)
+                self.assertIsNone(row.generation_date)
 
     def test_same_named_non_unique_index_bypass_is_detected_as_invalid(self) -> None:
-        """Codex 2nd-round review M4-b: seed a same-named but non-unique,
-        non-partial index (the exact B1-b bypass — ``CREATE UNIQUE INDEX IF
-        NOT EXISTS`` is a no-op against it since SQLite's ``IF NOT EXISTS``
-        only checks the name) BEFORE Phase 5's own migration runs, then
-        verify the checker reports it as missing/invalid using the real
-        on-disk index definition — not a mocked return value."""
+        """Codex 2nd-round review M4-b (carried forward to the v6 composite
+        index name): seed a same-named-as-the-v6-index but non-unique index
+        (the exact B1-b bypass — ``CREATE UNIQUE INDEX IF NOT EXISTS`` is a
+        no-op against it since SQLite's ``IF NOT EXISTS`` only checks the
+        name) BEFORE Phase 5's own migration runs, then verify the checker
+        reports it as missing/invalid using the real on-disk index
+        definition — not a mocked return value."""
         bypass_db_path = Path(self.temp_dir.name) / "bypass_index.db"
         conn = sqlite3.connect(str(bypass_db_path))
-        conn.execute(
-            self._LEGACY_ORDER_PROPOSAL_TABLE_SQL.format(
-                extra_columns=(
-                    ",\n          generation_source VARCHAR(16) NOT NULL DEFAULT 'manual',"
-                    "\n          source_signal_id INTEGER"
-                )
-            )
-        )
+        conn.execute(self._LEGACY_ORDER_PROPOSAL_TABLE_SQL.format(extra_columns=self._V6_EXTRA_COLUMNS))
         # The bypass: an index with the exact name DatabaseManager will try
-        # to create, but plain (no UNIQUE) and with no partial predicate.
+        # to create, but plain (no UNIQUE).
         conn.execute(
-            "CREATE INDEX uix_portfolio_order_proposal_source_signal "
-            "ON portfolio_order_proposals (source_signal_id)"
+            "CREATE INDEX uix_portfolio_order_proposal_account_signal_date "
+            "ON portfolio_order_proposals (account_id, source_signal_id, generation_date)"
         )
         conn.commit()
         conn.close()
 
         with self._temporary_database(bypass_db_path) as bypass_db:
-            self.assertFalse(bypass_db.has_portfolio_proposal_source_signal_unique_indexes())
+            self.assertFalse(bypass_db.has_portfolio_proposal_idempotency_unique_indexes())
             inspector_repo = PortfolioRepository(db_manager=bypass_db)
-            self.assertFalse(inspector_repo.has_source_signal_unique_indexes())
+            self.assertFalse(inspector_repo.has_idempotency_unique_indexes())
+
+    def test_partial_composite_index_bypass_is_detected_as_invalid(self) -> None:
+        """Codex adversarial re-review R1 (2026-07-21): the exact bypass it
+        reproduced in-memory. Seed a *partial* unique index — same three
+        columns, same order, same name the v6 migration itself would use —
+        but restricted to ``WHERE status='approved'``, BEFORE Phase 5's own
+        migration runs. ``CREATE UNIQUE INDEX IF NOT EXISTS`` then no-ops
+        against it (name-only match, same bypass class as B1-b/M4-b above,
+        one level up: this time on the composite index itself). A `pending`
+        row sits outside that predicate, so two `pending` rows sharing the
+        same (account_id, source_signal_id, generation_date) could insert
+        without ever hitting an IntegrityError — the exact same-day
+        duplicate this index exists to prevent. The gate must reject this:
+        unique+column_names alone is not enough, the matching index must
+        also be non-partial."""
+        db_path = Path(self.temp_dir.name) / "partial_composite_bypass.db"
+        self._seed_order_proposal_table_with_index(
+            db_path,
+            "CREATE UNIQUE INDEX uix_portfolio_order_proposal_account_signal_date "
+            "ON portfolio_order_proposals (account_id, source_signal_id, generation_date) "
+            "WHERE status='approved'",
+        )
+        with self._temporary_database(db_path) as db:
+            # The migration's CREATE ... IF NOT EXISTS no-ops against the
+            # pre-seeded same-named partial index (proving this is the same
+            # silent-no-op bypass class as the name-only bugs above, not a
+            # hypothetical).
+            inspector = sa_inspect(db._engine)
+            matching = [
+                index
+                for index in inspector.get_indexes("portfolio_order_proposals")
+                if index["name"] == "uix_portfolio_order_proposal_account_signal_date"
+            ]
+            self.assertEqual(len(matching), 1)
+            self.assertTrue(db._sqlite_index_is_partial("portfolio_order_proposals", matching[0]))
+
+            self.assertFalse(db.has_portfolio_proposal_idempotency_unique_indexes())
+            inspector_repo = PortfolioRepository(db_manager=db)
+            self.assertFalse(inspector_repo.has_idempotency_unique_indexes())
+
+    def test_non_partial_composite_index_alongside_partial_one_is_still_accepted(self) -> None:
+        """Positive counterpart: if a non-partial composite index with the
+        right shape exists (the actual v6 migration outcome) alongside an
+        unrelated partial index someone else created under a different
+        name, the gate must still pass — the fix rejects partial *matches*,
+        not the mere presence of any partial index anywhere on the table."""
+        db_path = Path(self.temp_dir.name) / "partial_and_non_partial_composite.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(self._LEGACY_ORDER_PROPOSAL_TABLE_SQL.format(extra_columns=self._V6_EXTRA_COLUMNS))
+        conn.execute(
+            "CREATE UNIQUE INDEX uix_portfolio_order_proposal_account_signal_date "
+            "ON portfolio_order_proposals (account_id, source_signal_id, generation_date)"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX some_other_partial_index "
+            "ON portfolio_order_proposals (account_id, source_signal_id, generation_date) "
+            "WHERE status='approved'"
+        )
+        conn.commit()
+        conn.close()
+        with self._temporary_database(db_path) as db:
+            self.assertTrue(db.has_portfolio_proposal_idempotency_unique_indexes())
+
+    # ------------------------------------------------------------------
+    # L1 (Codex final re-review, on top of R1): the coordinator's own fix to
+    # ``_sqlite_index_is_partial``'s DDL-text fallback (only reachable on a
+    # SQLAlchemy version that does not reflect ``dialect_options
+    # ['sqlite_where']``) — the fallback's ``\bwhere\b`` search was
+    # originally run against the *whole* index DDL, so an index whose own
+    # *name* happened to contain the substring "where" (before the column
+    # list) was misclassified as partial and fail-closed rejected even
+    # though it has no WHERE clause at all. The fix now searches only the
+    # tail after the column list's closing ``)``. These tests call
+    # ``_sqlite_index_is_partial`` directly with a hand-built index dict
+    # whose ``dialect_options`` omits the ``sqlite_where`` key entirely
+    # (simulating an older SQLAlchemy that never reflects it), forcing the
+    # DDL-fallback branch regardless of which SQLAlchemy version this
+    # environment actually runs (2.0.51 here does reflect it, so the
+    # fallback is otherwise unreachable through ``get_indexes()`` alone).
+    # ------------------------------------------------------------------
+    def test_sqlite_index_is_partial_fallback_does_not_false_block_on_where_in_name(self) -> None:
+        """(a) A non-partial composite index whose *name* contains the
+        standalone word "where" (no actual WHERE clause) must be classified
+        non-partial by the fallback — a false positive here would
+        fail-closed-reject a perfectly valid migration outcome for no
+        reason other than its name. The name uses a quoted identifier with
+        "where" as its own space-delimited token (``"legacy where
+        index"``) specifically because SQLite/regex word-boundary rules
+        mean an underscore-joined name like ``..._where_check`` can never
+        trigger the bug being regression-tested here at all (``_`` is a
+        word character, so ``\\bwhere\\b`` never matches across an
+        underscore) — this is the actual repro shape, not an approximation
+        of it."""
+        db_path = Path(self.temp_dir.name) / "fallback_where_in_name.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(self._LEGACY_ORDER_PROPOSAL_TABLE_SQL.format(extra_columns=self._V6_EXTRA_COLUMNS))
+        conn.execute(
+            'CREATE UNIQUE INDEX "legacy where index" '
+            "ON portfolio_order_proposals (account_id, source_signal_id, generation_date)"
+        )
+        conn.commit()
+        conn.close()
+
+        with self._temporary_database(db_path) as db:
+            synthetic_index = {
+                "name": "legacy where index",
+                "unique": True,
+                "column_names": ["account_id", "source_signal_id", "generation_date"],
+                "dialect_options": {},  # no "sqlite_where" key -> forces the DDL fallback
+            }
+            self.assertFalse(db._sqlite_index_is_partial("portfolio_order_proposals", synthetic_index))
+            # And the full gate (which discovers dialect_options via the
+            # real Inspector, not this synthetic dict) also passes, since
+            # this SQLAlchemy version's preferred path agrees.
+            self.assertTrue(db.has_portfolio_proposal_idempotency_unique_indexes())
+
+    def test_sqlite_index_is_partial_fallback_still_detects_real_partial_predicate(self) -> None:
+        """(b) Positive control for the same fallback branch: a genuinely
+        partial index (real ``WHERE`` clause after the column list) must
+        still be reported as partial — the name-substring fix must not
+        have also broken detection of an actual predicate."""
+        db_path = Path(self.temp_dir.name) / "fallback_real_partial.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(self._LEGACY_ORDER_PROPOSAL_TABLE_SQL.format(extra_columns=self._V6_EXTRA_COLUMNS))
+        conn.execute(
+            "CREATE UNIQUE INDEX uix_portfolio_order_proposal_account_signal_date "
+            "ON portfolio_order_proposals (account_id, source_signal_id, generation_date) "
+            "WHERE status='approved'"
+        )
+        conn.commit()
+        conn.close()
+
+        with self._temporary_database(db_path) as db:
+            synthetic_index = {
+                "name": "uix_portfolio_order_proposal_account_signal_date",
+                "unique": True,
+                "column_names": ["account_id", "source_signal_id", "generation_date"],
+                "dialect_options": {},  # no "sqlite_where" key -> forces the DDL fallback
+            }
+            self.assertTrue(db._sqlite_index_is_partial("portfolio_order_proposals", synthetic_index))
+            self.assertFalse(db.has_portfolio_proposal_idempotency_unique_indexes())
 
     def _seed_order_proposal_table_with_index(self, db_path: Path, index_sql: str) -> None:
         conn = sqlite3.connect(str(db_path))
-        conn.execute(
-            self._LEGACY_ORDER_PROPOSAL_TABLE_SQL.format(
-                extra_columns=(
-                    ",\n          generation_source VARCHAR(16) NOT NULL DEFAULT 'manual',"
-                    "\n          source_signal_id INTEGER"
-                )
-            )
-        )
+        conn.execute(self._LEGACY_ORDER_PROPOSAL_TABLE_SQL.format(extra_columns=self._V6_EXTRA_COLUMNS))
         conn.execute(index_sql)
         conn.commit()
         conn.close()
 
-    def test_regex_bypass_comment_containing_column_name_is_detected_as_invalid(self) -> None:
-        """Codex 3rd-round review M4: the previous DDL-regex checker matched
-        ``(source_signal_id)`` anywhere in the raw ``sqlite_master.sql``
-        text — including inside a SQL comment — so an index that is
-        actually UNIQUE on an unrelated column (``quantity``) but merely
-        *mentions* ``source_signal_id`` in a trailing comment would have
-        been wrongly accepted (fail-open: no real per-signal uniqueness
-        constraint in effect). The introspection-based checker uses
-        ``get_indexes()``'s parsed ``column_names``, which is immune to
-        this — it must reject this index."""
-        db_path = Path(self.temp_dir.name) / "comment_bypass.db"
+    def test_wrong_column_set_is_detected_as_invalid(self) -> None:
+        """A unique index on just ``(source_signal_id, generation_date)``
+        (missing ``account_id`` — the exact F1 account-scoping gap this
+        composite key exists to close) passes a naive "contains the right
+        columns" check but not the exact-list check the gate actually uses.
+        Must be rejected."""
+        db_path = Path(self.temp_dir.name) / "missing_account_id.db"
         self._seed_order_proposal_table_with_index(
             db_path,
-            "CREATE UNIQUE INDEX uix_portfolio_order_proposal_source_signal "
-            "ON portfolio_order_proposals (quantity) /* (source_signal_id) */",
+            "CREATE UNIQUE INDEX uix_portfolio_order_proposal_account_signal_date "
+            "ON portfolio_order_proposals (source_signal_id, generation_date)",
         )
         with self._temporary_database(db_path) as db:
-            self.assertFalse(db.has_portfolio_proposal_source_signal_unique_indexes())
+            self.assertFalse(db.has_portfolio_proposal_idempotency_unique_indexes())
 
-    def test_composite_unique_index_including_source_signal_id_is_detected_as_invalid(self) -> None:
-        """Codex 3rd-round review M4: a composite unique index
-        ``(quantity, source_signal_id)`` does not enforce "at most one row
-        per source_signal_id" on its own (the actual constraint is on the
-        pair) — the old regex, which only checked that
-        ``(source_signal_id)`` appeared somewhere in the DDL text, would
-        have accepted this. ``column_names`` must be exactly
-        ``["source_signal_id"]``, so this composite index must be
-        rejected."""
-        db_path = Path(self.temp_dir.name) / "composite_index.db"
+    def test_wrong_column_order_is_detected_as_invalid(self) -> None:
+        """``Inspector.get_indexes()`` returns columns in index-definition
+        order — an index built with the same three columns but a different
+        order is a structurally different (and, for SQLite, differently
+        query-optimized) index, not interchangeable with the one this
+        migration creates. Pinning this documents that the gate's column
+        list is order-sensitive, not just set-equal."""
+        db_path = Path(self.temp_dir.name) / "wrong_column_order.db"
         self._seed_order_proposal_table_with_index(
             db_path,
-            "CREATE UNIQUE INDEX uix_portfolio_order_proposal_source_signal "
-            "ON portfolio_order_proposals (quantity, source_signal_id)",
+            "CREATE UNIQUE INDEX uix_portfolio_order_proposal_account_signal_date "
+            "ON portfolio_order_proposals (source_signal_id, account_id, generation_date)",
         )
         with self._temporary_database(db_path) as db:
-            self.assertFalse(db.has_portfolio_proposal_source_signal_unique_indexes())
+            self.assertFalse(db.has_portfolio_proposal_idempotency_unique_indexes())
 
-    def test_quoted_identifier_unique_index_is_accepted_no_false_negative(self) -> None:
-        """Codex 3rd-round review M4: a unique index using SQLite's quoted-
-        identifier syntax (``"source_signal_id"``) is a perfectly valid,
-        fully-enforcing constraint, but the old regex (which matched the
-        bare token ``source_signal_id`` inside unquoted parens) rejected it
-        — permanently fail-closing an otherwise-healthy deployment. The
-        introspection-based checker must accept it: SQLAlchemy's
-        get_indexes() parses the column name independent of quoting."""
-        db_path = Path(self.temp_dir.name) / "quoted_identifier.db"
+    def test_quoted_identifier_composite_unique_index_is_accepted(self) -> None:
+        """A unique index using SQLite's quoted-identifier syntax for every
+        column is a perfectly valid, fully-enforcing composite constraint —
+        the structural ``get_indexes()`` check (immune to quoting) must
+        accept it, mirroring the v3-round quoted-identifier false-negative
+        finding that originally motivated moving off DDL-text parsing."""
+        db_path = Path(self.temp_dir.name) / "quoted_identifier_composite.db"
         self._seed_order_proposal_table_with_index(
             db_path,
-            'CREATE UNIQUE INDEX uix_portfolio_order_proposal_source_signal '
-            'ON portfolio_order_proposals ("source_signal_id") '
-            'WHERE "source_signal_id" IS NOT NULL',
+            'CREATE UNIQUE INDEX uix_portfolio_order_proposal_account_signal_date '
+            'ON portfolio_order_proposals ("account_id", "source_signal_id", "generation_date")',
         )
         with self._temporary_database(db_path) as db:
-            self.assertTrue(db.has_portfolio_proposal_source_signal_unique_indexes())
+            self.assertTrue(db.has_portfolio_proposal_idempotency_unique_indexes())
 
-    def test_restrictive_partial_predicate_is_detected_as_invalid(self) -> None:
-        """Codex 4th-round review B1-b (the exact counterexample Codex
-        reproduced against the 3rd-round fix): a unique index on exactly
-        ``(source_signal_id)`` passes the structural unique+column check,
-        but if its partial predicate is ``source_signal_id > 100`` (or any
-        other restriction beyond ``IS NOT NULL``), the constraint only
-        applies to rows the predicate admits — ``source_signal_id = 1``
-        could repeat freely since it falls outside ``> 100``, violating the
-        idempotency contract despite passing a unique+column-only check.
-        The checker must inspect the predicate itself and reject this."""
-        db_path = Path(self.temp_dir.name) / "restrictive_predicate.db"
+    def test_correctly_shaped_composite_index_under_a_different_name_is_accepted(self) -> None:
+        """The gate is name-independent by design (Codex review history:
+        name-only checks are exactly what let a same-named wrong-definition
+        index bypass ``CREATE ... IF NOT EXISTS`` in earlier rounds) — any
+        unique index with the right column list in the right order counts,
+        regardless of what it is named."""
+        db_path = Path(self.temp_dir.name) / "differently_named_composite.db"
         self._seed_order_proposal_table_with_index(
             db_path,
-            "CREATE UNIQUE INDEX uix_portfolio_order_proposal_source_signal "
-            "ON portfolio_order_proposals (source_signal_id) "
-            "WHERE source_signal_id > 100",
+            "CREATE UNIQUE INDEX some_other_index_name "
+            "ON portfolio_order_proposals (account_id, source_signal_id, generation_date)",
         )
         with self._temporary_database(db_path) as db:
-            self.assertFalse(db.has_portfolio_proposal_source_signal_unique_indexes())
+            self.assertTrue(db.has_portfolio_proposal_idempotency_unique_indexes())
 
-    def test_restrictive_predicate_with_in_list_parens_is_detected_as_invalid(self) -> None:
-        """Codex 5th-round review: a self-caught fail-open re-occurrence of
-        the same class as the 4th-round finding, in a different DDL shape.
-        The 5th-round fix (WHERE-tail extraction via the *first* ``)`` in
-        the statement, not the *last* one) must still reject a restrictive
-        predicate when the predicate itself contains a parenthesis — an
-        ``IN (...)`` list here means only source_signal_id 1/2/3 are
-        constrained; 5 (or any other non-null value) could repeat freely.
-        A last-``)``-based split would have found an empty tail after the
-        real last ``)`` and misjudged this as non-partial (safe)."""
-        db_path = Path(self.temp_dir.name) / "restrictive_predicate_in_list.db"
-        self._seed_order_proposal_table_with_index(
-            db_path,
-            "CREATE UNIQUE INDEX uix_portfolio_order_proposal_source_signal "
-            "ON portfolio_order_proposals (source_signal_id) "
-            "WHERE source_signal_id IN (1,2,3)",
-        )
-        with self._temporary_database(db_path) as db:
-            self.assertFalse(db.has_portfolio_proposal_source_signal_unique_indexes())
-
-    def test_restrictive_predicate_wrapped_in_parens_is_detected_as_invalid(self) -> None:
-        """Codex 5th-round review: same fail-open class, predicate wrapped
-        in its own parentheses (``WHERE (source_signal_id > 100)``) — also
-        must be rejected, not misread as non-partial via a last-``)`` split
-        landing inside the predicate's own wrapping parens."""
-        db_path = Path(self.temp_dir.name) / "restrictive_predicate_wrapped.db"
-        self._seed_order_proposal_table_with_index(
-            db_path,
-            "CREATE UNIQUE INDEX uix_portfolio_order_proposal_source_signal "
-            "ON portfolio_order_proposals (source_signal_id) "
-            "WHERE (source_signal_id > 100)",
-        )
-        with self._temporary_database(db_path) as db:
-            self.assertFalse(db.has_portfolio_proposal_source_signal_unique_indexes())
-
-    def test_restrictive_predicate_with_trailing_paren_clause_is_detected_as_invalid(self) -> None:
-        """Codex 5th-round review: restrictive predicate followed by an
-        additional parenthesized clause at the very end of the statement
-        (``... AND (1=1)``) — the true last ``)`` in the DDL belongs to
-        this trailing clause, not the column list, so a last-``)``-based
-        split would again find an empty (falsely "non-partial") tail."""
-        db_path = Path(self.temp_dir.name) / "restrictive_predicate_trailing_paren.db"
-        self._seed_order_proposal_table_with_index(
-            db_path,
-            "CREATE UNIQUE INDEX uix_portfolio_order_proposal_source_signal "
-            "ON portfolio_order_proposals (source_signal_id) "
-            "WHERE source_signal_id > 100 AND (1=1)",
-        )
-        with self._temporary_database(db_path) as db:
-            self.assertFalse(db.has_portfolio_proposal_source_signal_unique_indexes())
-
-    def test_safe_partial_predicate_is_accepted(self) -> None:
-        """Codex 4th-round review: the one partial predicate that IS safe
-        — ``source_signal_id IS NOT NULL`` — must still pass (this is
-        exactly what this file's own migration creates)."""
-        db_path = Path(self.temp_dir.name) / "safe_partial_predicate.db"
-        self._seed_order_proposal_table_with_index(
-            db_path,
-            "CREATE UNIQUE INDEX uix_portfolio_order_proposal_source_signal "
-            "ON portfolio_order_proposals (source_signal_id) "
-            "WHERE source_signal_id IS NOT NULL",
-        )
-        with self._temporary_database(db_path) as db:
-            self.assertTrue(db.has_portfolio_proposal_source_signal_unique_indexes())
-
-    def test_safe_predicate_written_with_extra_parens_is_pinned_fail_closed(self) -> None:
-        """Codex 5th-round review: a semantically-safe predicate written in
-        an unusual parenthesized shape (``WHERE (source_signal_id) IS NOT
-        NULL``) is not a form this file's own migration ever produces —
-        pinning this to False (rather than asserting a specific direction
-        is "required") documents the actual current behavior so a future
-        change to the normalization logic doesn't silently flip it without
-        a test noticing. Fail-closed here is safe by construction (never
-        wrongly accepts an unenforced constraint); it just isn't the most
-        permissive possible reading of an equivalent predicate."""
-        db_path = Path(self.temp_dir.name) / "safe_predicate_extra_parens.db"
-        self._seed_order_proposal_table_with_index(
-            db_path,
-            "CREATE UNIQUE INDEX uix_portfolio_order_proposal_source_signal "
-            "ON portfolio_order_proposals (source_signal_id) "
-            "WHERE (source_signal_id) IS NOT NULL",
-        )
-        with self._temporary_database(db_path) as db:
-            self.assertFalse(db.has_portfolio_proposal_source_signal_unique_indexes())
-
-    def test_non_partial_unique_index_is_accepted(self) -> None:
-        """Codex 4th-round review: a plain (non-partial, no WHERE clause at
-        all) unique index on exactly source_signal_id is also safe — SQLite
-        already treats every NULL as distinct from every other NULL, so
-        this already guarantees "at most one row per non-null value, NULLs
-        unlimited" without needing a predicate at all."""
-        db_path = Path(self.temp_dir.name) / "non_partial.db"
-        self._seed_order_proposal_table_with_index(
-            db_path,
-            "CREATE UNIQUE INDEX uix_portfolio_order_proposal_source_signal "
-            "ON portfolio_order_proposals (source_signal_id)",
-        )
-        with self._temporary_database(db_path) as db:
-            self.assertTrue(db.has_portfolio_proposal_source_signal_unique_indexes())
-
-    def test_duplicate_source_signal_id_db_survives_init_and_batch_refuses(self) -> None:
-        """Codex 2nd-round review M4-c: a DB with two rows sharing the same
-        source_signal_id (the exact precondition that makes SQLite's CREATE
-        UNIQUE INDEX raise IntegrityError, per B1-a) must not crash
-        DatabaseManager.get_instance() — reaching the assertions below at
-        all is itself proof init survived — and the Phase 5 batch must then
-        refuse to run against it end-to-end (B1-a and B1-b/the fail-closed
-        gate composing safely)."""
-        dup_db_path = Path(self.temp_dir.name) / "duplicate_source_signal.db"
+    def test_duplicate_composite_key_db_survives_init_and_batch_refuses(self) -> None:
+        """Codex 2nd-round review M4-c, adapted to the v6 composite key: a DB
+        with two rows sharing the same ``(account_id, source_signal_id,
+        generation_date)`` triple (all three equal, not just
+        source_signal_id — a genuine composite duplicate is only reachable
+        with a matching non-null generation_date on both rows, since NULL
+        generation_date rows never collide) is the exact precondition that
+        makes SQLite's CREATE UNIQUE INDEX raise IntegrityError (B1-a). Must
+        not crash DatabaseManager.get_instance() — reaching the assertions
+        below at all is itself proof init survived — and the Phase 5 batch
+        must then refuse to run against it end-to-end."""
+        dup_db_path = Path(self.temp_dir.name) / "duplicate_composite_key.db"
         conn = sqlite3.connect(str(dup_db_path))
-        conn.execute(
-            self._LEGACY_ORDER_PROPOSAL_TABLE_SQL.format(
-                extra_columns=(
-                    ",\n          generation_source VARCHAR(16) NOT NULL DEFAULT 'manual',"
-                    "\n          source_signal_id INTEGER"
-                )
-            )
-        )
+        conn.execute(self._LEGACY_ORDER_PROPOSAL_TABLE_SQL.format(extra_columns=self._V6_EXTRA_COLUMNS))
         for uid in ("dup-uuid-1", "dup-uuid-2"):
             conn.execute(
                 "INSERT INTO portfolio_order_proposals (account_id, proposal_uuid, symbol, "
                 "storage_symbol, market, currency, side, order_type, price, quantity, "
-                "est_amount_krw, status, created_at, expires_at, source_signal_id) VALUES "
+                "est_amount_krw, status, created_at, expires_at, source_signal_id, "
+                "generation_date) VALUES "
                 "(1, ?, '005930', '005930.KS', 'kr', 'KRW', 'sell', 'LIMIT', 90.0, 5, 450.0, "
-                "'pending', '2026-01-01', '2026-01-01', 99)",
+                "'pending', '2026-01-01', '2026-01-01', 99, '2026-01-01')",
                 (uid,),
             )
         conn.commit()
@@ -844,7 +1336,7 @@ class AutoProposalServiceTestCase(unittest.TestCase):
         with self._temporary_database(dup_db_path) as dup_db:
             # Reaching this line proves DatabaseManager.get_instance() did
             # not raise despite the duplicate rows (B1-a).
-            self.assertFalse(dup_db.has_portfolio_proposal_source_signal_unique_indexes())
+            self.assertFalse(dup_db.has_portfolio_proposal_idempotency_unique_indexes())
             repo = PortfolioRepository(db_manager=dup_db)
             auto_service = AutoProposalService(repo=repo, config=Config.get_instance())
             result = auto_service.run_batch()
