@@ -332,6 +332,65 @@ def test_regressing_markets_baseline_equals_self_always_passes() -> None:
     assert service.regressing_markets(dict(baseline), baseline, 0.8) == {}
 
 
+# The autouse ``default_regression_baseline`` fixture patches
+# ``get_stock_index_baseline_path`` to a fixture value; these tests exercise
+# the real path-resolution logic, so they call the function captured at import
+# (before the fixture patches it) while still patching the module-level
+# candidate tuple it reads.
+_REAL_GET_BASELINE_PATH = service.get_stock_index_baseline_path
+
+
+def test_get_stock_index_baseline_path_falls_back_to_static_when_public_missing(
+    tmp_path: Path,
+) -> None:
+    # Deployed backend image ships only static/ (apps/dsa-web/public is not
+    # copied in); the baseline must resolve to the first bundled candidate that
+    # actually exists rather than a hardcoded (and, in-container, missing) path.
+    missing_public = tmp_path / "apps" / "dsa-web" / "public" / "stocks.index.json"
+    static_baseline = tmp_path / "static" / "stocks.index.json"
+    static_baseline.parent.mkdir(parents=True)
+    static_baseline.write_text("[]", encoding="utf-8")
+
+    with patch.object(
+        service,
+        "STOCK_INDEX_BASELINE_CANDIDATE_PATHS",
+        (missing_public, static_baseline),
+    ):
+        assert _REAL_GET_BASELINE_PATH() == static_baseline
+
+
+def test_get_stock_index_baseline_path_prefers_public_when_present(
+    tmp_path: Path,
+) -> None:
+    public_baseline = tmp_path / "apps" / "dsa-web" / "public" / "stocks.index.json"
+    public_baseline.parent.mkdir(parents=True)
+    public_baseline.write_text("[]", encoding="utf-8")
+    static_baseline = tmp_path / "static" / "stocks.index.json"
+    static_baseline.parent.mkdir(parents=True)
+    static_baseline.write_text("[]", encoding="utf-8")
+
+    with patch.object(
+        service,
+        "STOCK_INDEX_BASELINE_CANDIDATE_PATHS",
+        (public_baseline, static_baseline),
+    ):
+        assert _REAL_GET_BASELINE_PATH() == public_baseline
+
+
+def test_get_stock_index_baseline_path_returns_default_when_none_exist(
+    tmp_path: Path,
+) -> None:
+    missing_public = tmp_path / "apps" / "dsa-web" / "public" / "stocks.index.json"
+    missing_static = tmp_path / "static" / "stocks.index.json"
+
+    with patch.object(
+        service,
+        "STOCK_INDEX_BASELINE_CANDIDATE_PATHS",
+        (missing_public, missing_static),
+    ):
+        assert _REAL_GET_BASELINE_PATH() == service.DEFAULT_STOCK_INDEX_BASELINE_PATH
+
+
 def test_assert_no_market_regression_raises_with_before_after_counts() -> None:
     payload = [item[:] for item in _stock_index_payload(size=100)]
     baseline_counts = {"CN": 1000}

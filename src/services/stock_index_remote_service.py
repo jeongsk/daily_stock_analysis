@@ -27,6 +27,18 @@ DEFAULT_STOCK_INDEX_CACHE_PATH = REPO_ROOT / "data" / "cache" / "stocks.index.js
 # docs/superpowers/specs/2026-07-22-stock-index-remote-regression-guard-design.md
 # §2). Read-only: this module never writes to it.
 DEFAULT_STOCK_INDEX_BASELINE_PATH = REPO_ROOT / "apps" / "dsa-web" / "public" / "stocks.index.json"
+# The committed index ships in two possible bundled locations, in preference
+# order, and the regression-guard baseline must resolve to whichever one
+# actually exists — never the remote cache. A dev checkout has
+# apps/dsa-web/public/; the deployed analyzer image copies only static/
+# (apps/dsa-web is a web-frontend source dir, not shipped into the backend
+# image), so hardcoding apps/dsa-web/public alone makes the baseline "missing"
+# in the container and degrades the guard to a permanent conservative-reject
+# plus a noisy ERROR on every load.
+STOCK_INDEX_BASELINE_CANDIDATE_PATHS = (
+    REPO_ROOT / "apps" / "dsa-web" / "public" / "stocks.index.json",
+    REPO_ROOT / "static" / "stocks.index.json",
+)
 DEFAULT_STOCK_INDEX_REMOTE_TTL_HOURS = 48
 DEFAULT_STOCK_INDEX_REMOTE_TIMEOUT_SECONDS = 10
 DEFAULT_STOCK_INDEX_REMOTE_MAX_FAILURES = 3
@@ -91,12 +103,19 @@ def get_remote_stock_index_cache_path() -> Path:
 
 
 def get_stock_index_baseline_path() -> Path:
-    """Return the canonical on-disk path for the committed baseline index.
+    """Return the on-disk path for the committed baseline index used as the
+    regression-guard floor — never the (possibly polluted) remote cache.
 
-    This is the curated, git-tracked ``apps/dsa-web/public/stocks.index.json``
-    used as the regression-guard floor — never the (possibly polluted) remote
-    cache. Read-only from this module's perspective.
+    Resolves to the first **existing** bundled candidate
+    (``STOCK_INDEX_BASELINE_CANDIDATE_PATHS``): ``apps/dsa-web/public/`` in a
+    dev checkout, ``static/`` in the deployed backend image. If none exist,
+    returns the canonical default so the caller's "missing baseline -> reject
+    conservatively" path (and its ERROR log) still identifies a concrete path.
+    Read-only from this module's perspective.
     """
+    for candidate in STOCK_INDEX_BASELINE_CANDIDATE_PATHS:
+        if candidate.is_file():
+            return candidate
     return DEFAULT_STOCK_INDEX_BASELINE_PATH
 
 
