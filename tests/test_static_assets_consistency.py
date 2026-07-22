@@ -317,13 +317,19 @@ def _write_stock_index(path: Path, name: str = "平安银行", size: int = 1) ->
 def test_stock_index_route_serves_newer_remote_cache(tmp_path: Path) -> None:
     from api import app as app_module
     from api.app import create_app
+    from src.data import stock_index_loader
 
     static_dir = tmp_path / "static"
     cache_path = tmp_path / "cache" / "stocks.index.json"
     bundled_path = tmp_path / "bundled" / "stocks.index.json"
+    baseline_path = tmp_path / "baseline" / "stocks.index.json"
     _write_stock_index(static_dir / "stocks.index.json", "内置静态")
     _write_stock_index(cache_path, "远程缓存", size=100)
     _write_stock_index(bundled_path, "源码内置")
+    # Regression-guard baseline: same CN-only shape as the remote cache, so
+    # this freshness-ordering test isn't coupled to the real committed
+    # apps/dsa-web/public/stocks.index.json's actual per-market counts.
+    _write_stock_index(baseline_path, "基线", size=100)
     os.utime(static_dir / "stocks.index.json", (1_000, 1_000))
     os.utime(cache_path, (2_000, 2_000))
     os.utime(bundled_path, (1_000, 1_000))
@@ -332,6 +338,7 @@ def test_stock_index_route_serves_newer_remote_cache(tmp_path: Path) -> None:
 
     with patch.object(app_module, "get_remote_stock_index_cache_path", return_value=cache_path), \
          patch.object(app_module, "_bundled_stock_index_path", return_value=bundled_path), \
+         patch.object(stock_index_loader, "get_stock_index_baseline_path", return_value=baseline_path), \
          patch.object(app_module, "_schedule_stock_index_background_refresh") as schedule:
         response = client.get("/stocks.index.json")
 

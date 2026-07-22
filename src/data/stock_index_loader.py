@@ -11,7 +11,11 @@ from src.data.stock_mapping import is_meaningful_stock_name
 from src.services.market_symbol_utils import get_suffix_market, suffix_base_lookup_allowed
 from src.services.stock_index_remote_service import (
     get_remote_stock_index_cache_path,
+    get_stock_index_baseline_path,
+    get_stock_index_min_market_ratio,
     is_valid_remote_stock_index_file,
+    per_market_counts,
+    regressing_markets,
     validate_stock_index_payload,
 )
 
@@ -23,6 +27,7 @@ _STOCK_INDEX_RECORD_CACHE: Dict[str, dict[str, str]] | None = None
 _STOCK_CODE_LOOKUP_CACHE: Dict[str, str] | None = None
 _KR_NAME_TO_CODE_CACHE: Dict[str, str] | None = None
 _REMOTE_INDEX_VALIDITY_CACHE: tuple[Path, float, int, bool] | None = None
+_BASELINE_MARKET_COUNTS_CACHE: tuple[Path, float, int, Dict[str, int]] | None = None
 _STOCK_INDEX_CACHE_LOCK = RLock()
 
 
@@ -228,6 +233,91 @@ def _get_fresh_stock_index_candidates(
     return tuple(path for _sort_key, path in sorted(candidates, reverse=True))
 
 
+def _get_baseline_market_counts() -> Dict[str, int] | None:
+    """Per-market item counts for the committed baseline index.
+
+    Memoized by baseline-file signature (mtime, size) so the hot read path
+    (every ``get_stock_name_index_map``/``get_kr_name_to_code_map``/etc. call
+    that hits an unresolved remote-cache candidate) doesn't re-parse the full
+    committed index (~34k items) on every lookup — mirrors the existing
+    ``_REMOTE_INDEX_VALIDITY_CACHE`` signature-caching pattern.
+
+    Returns ``None`` if the baseline is missing or unparsable, which the
+    caller must treat as "can't verify -> reject conservatively" (design spec
+    §4).
+    """
+    global _BASELINE_MARKET_COUNTS_CACHE
+
+    baseline_path = get_stock_index_baseline_path()
+    signature = _get_stock_index_signature(baseline_path)
+    if signature is None:
+        logger.error(
+            "[股票索引] committed baseline index missing at %s; remote cache candidates are "
+            "rejected conservatively until it is restored",
+            baseline_path,
+        )
+        return None
+
+    mtime, size = signature
+    cached = _BASELINE_MARKET_COUNTS_CACHE
+    if cached is not None and cached[:3] == (baseline_path, mtime, size):
+        return cached[3]
+
+    try:
+        payload = _load_stock_index_payload(baseline_path)
+    except (OSError, TypeError, ValueError) as exc:
+        logger.error(
+            "[股票索引] failed to parse committed baseline index %s; remote cache candidates are "
+            "rejected conservatively: %s",
+            baseline_path,
+            exc,
+        )
+        return None
+
+    counts = per_market_counts(payload)
+    _BASELINE_MARKET_COUNTS_CACHE = (baseline_path, mtime, size, counts)
+    return counts
+
+
+def _remote_stock_index_market_regression(index_path: Path) -> bool:
+    """Return True if the remote-cache candidate regresses any baseline
+    market below the configured ratio (design spec §2, Task 2 — the loader
+    read-path completeness gate). Callers must already have confirmed the
+    candidate passes the format-validity check before calling this.
+    """
+    baseline_counts = _get_baseline_market_counts()
+    if baseline_counts is None:
+        return True  # conservative: baseline unavailable -> treat as regression
+
+    try:
+        payload = _load_stock_index_payload(index_path)
+    except (OSError, TypeError, ValueError) as exc:
+        logger.warning(
+            "[股票索引] failed to re-read remote cache %s for regression check: %s",
+            index_path,
+            exc,
+        )
+        return True
+
+    incoming_counts = per_market_counts(payload)
+    ratio = get_stock_index_min_market_ratio()
+    offending = regressing_markets(incoming_counts, baseline_counts, ratio)
+    if offending:
+        details = ", ".join(
+            f"{market}: incoming={incoming} baseline={baseline}"
+            for market, (incoming, baseline) in sorted(offending.items())
+        )
+        logger.error(
+            "[股票索引] remote stock index cache %s regresses market(s) below %.2fx the committed "
+            "baseline (%s); falling back to the next candidate index",
+            index_path,
+            ratio,
+            details,
+        )
+        return True
+    return False
+
+
 def _is_remote_stock_index_cache_usable(
     index_path: Path,
     remote_cache_path: Path,
@@ -243,9 +333,34 @@ def _is_remote_stock_index_cache_usable(
     if cached is not None and cached[:3] == (index_path, mtime, size):
         return cached[3]
 
-    is_valid = is_valid_remote_stock_index_file(index_path)
+    is_valid = is_valid_remote_stock_index_file(index_path) and not _remote_stock_index_market_regression(
+        index_path
+    )
     _REMOTE_INDEX_VALIDITY_CACHE = (index_path, mtime, size, is_valid)
     return is_valid
+
+
+def _iter_usable_stock_index_candidates(
+    candidate_paths: Iterable[Path],
+    remote_cache_path: Path,
+) -> Iterable[Path]:
+    """Yield candidates (newest first) that pass the usability gate.
+
+    Every loader entry point that consumes the candidate list must go
+    through this — not just ``find_existing_stock_index_path`` — so a
+    polluted/regressing remote cache is skipped by every read path
+    consistently (design spec §2/§4 "두 로더 경로 모두 적용" /
+    "두 로더 경로 동기화"). The committed-index candidate itself is never
+    the remote-cache path, so ``_is_remote_stock_index_cache_usable``
+    short-circuits it to always-usable — no self-comparison cycle.
+    """
+    for candidate_path in _get_fresh_stock_index_candidates(candidate_paths, remote_cache_path):
+        signature = _get_stock_index_signature(candidate_path)
+        if signature is None:
+            continue
+        if not _is_remote_stock_index_cache_usable(candidate_path, remote_cache_path, signature):
+            continue
+        yield candidate_path
 
 
 def find_existing_stock_index_path(
@@ -257,13 +372,7 @@ def find_existing_stock_index_path(
     paths = tuple(candidate_paths) if candidate_paths is not None else get_stock_index_candidate_paths()
     remote_path = remote_cache_path or get_remote_stock_index_cache_path()
 
-    for candidate_path in _get_fresh_stock_index_candidates(paths, remote_path):
-        signature = _get_stock_index_signature(candidate_path)
-        if signature is None:
-            continue
-        if not _is_remote_stock_index_cache_usable(candidate_path, remote_path, signature):
-            continue
-
+    for candidate_path in _iter_usable_stock_index_candidates(paths, remote_path):
         return candidate_path
 
     return None
@@ -281,7 +390,7 @@ def get_stock_name_index_map() -> Dict[str, str]:
             return _STOCK_INDEX_CACHE
 
         remote_path = get_remote_stock_index_cache_path()
-        for index_path in _get_fresh_stock_index_candidates(get_stock_index_candidate_paths(), remote_path):
+        for index_path in _iter_usable_stock_index_candidates(get_stock_index_candidate_paths(), remote_path):
             try:
                 if _same_path(index_path, remote_path):
                     _STOCK_INDEX_CACHE = _load_remote_stock_index_file(index_path)
@@ -312,7 +421,7 @@ def get_stock_name_index_record_map() -> Dict[str, dict[str, str]]:
             return _STOCK_INDEX_RECORD_CACHE
 
         remote_path = get_remote_stock_index_cache_path()
-        for index_path in _get_fresh_stock_index_candidates(get_stock_index_candidate_paths(), remote_path):
+        for index_path in _iter_usable_stock_index_candidates(get_stock_index_candidate_paths(), remote_path):
             try:
                 raw_items = _load_stock_index_payload(index_path)
                 if _same_path(index_path, remote_path):
@@ -384,7 +493,7 @@ def get_stock_code_index_map() -> Dict[str, str]:
 
         merged_lookup: Dict[str, str] = {}
         remote_path = get_remote_stock_index_cache_path()
-        for index_path in _get_fresh_stock_index_candidates(get_stock_index_candidate_paths(), remote_path):
+        for index_path in _iter_usable_stock_index_candidates(get_stock_index_candidate_paths(), remote_path):
             try:
                 raw_items = _load_stock_index_payload(index_path)
                 if _same_path(index_path, remote_path):
@@ -426,7 +535,7 @@ def get_kr_name_to_code_map() -> Dict[str, str]:
             return _KR_NAME_TO_CODE_CACHE
 
         remote_path = get_remote_stock_index_cache_path()
-        for index_path in _get_fresh_stock_index_candidates(get_stock_index_candidate_paths(), remote_path):
+        for index_path in _iter_usable_stock_index_candidates(get_stock_index_candidate_paths(), remote_path):
             try:
                 raw_items = _load_stock_index_payload(index_path)
                 if _same_path(index_path, remote_path):
@@ -446,7 +555,7 @@ def _resolve_index_stock_code_uncached(query: str) -> str | None:
         return None
 
     remote_path = get_remote_stock_index_cache_path()
-    for index_path in _get_fresh_stock_index_candidates(get_stock_index_candidate_paths(), remote_path):
+    for index_path in _iter_usable_stock_index_candidates(get_stock_index_candidate_paths(), remote_path):
         try:
             raw_items = _load_stock_index_payload(index_path)
             if _same_path(index_path, remote_path):
@@ -463,13 +572,14 @@ def _resolve_index_stock_code_uncached(query: str) -> str | None:
 def clear_stock_index_cache() -> None:
     """Clear the in-process stock index lookup cache."""
     global _REMOTE_INDEX_VALIDITY_CACHE, _STOCK_INDEX_CACHE, _STOCK_INDEX_RECORD_CACHE
-    global _STOCK_CODE_LOOKUP_CACHE, _KR_NAME_TO_CODE_CACHE
+    global _STOCK_CODE_LOOKUP_CACHE, _KR_NAME_TO_CODE_CACHE, _BASELINE_MARKET_COUNTS_CACHE
     with _STOCK_INDEX_CACHE_LOCK:
         _STOCK_INDEX_CACHE = None
         _STOCK_INDEX_RECORD_CACHE = None
         _STOCK_CODE_LOOKUP_CACHE = None
         _KR_NAME_TO_CODE_CACHE = None
         _REMOTE_INDEX_VALIDITY_CACHE = None
+        _BASELINE_MARKET_COUNTS_CACHE = None
 
 
 def _clear_stock_index_cache_for_tests() -> None:

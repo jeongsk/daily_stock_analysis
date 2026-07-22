@@ -133,13 +133,19 @@ python3 scripts/generate_index_from_csv.py         # 确认后生成
 
 新版客户端默认会从项目 GitHub `main` 分支读取最新的 `apps/dsa-web/public/stocks.index.json`，并缓存到本地 `data/cache/stocks.index.json`。前端仍访问本地 `/stocks.index.json`，不需要直接跨域请求 GitHub。
 
-远程索引地址、检查频率和网络超时时间为系统内置值，不提供用户配置项；用户只需要决定是否启用：
+检查频率和网络超时时间为系统内置值；用户可以决定是否启用、可选择跟踪的远程索引地址，以及市场级回归防护的容忍比例：
 
 ```bash
 STOCK_INDEX_REMOTE_UPDATE_ENABLED=true
+# 可选：跟踪其他 fork（默认指向本项目上游仓库）
+# STOCK_INDEX_REMOTE_URL=https://raw.githubusercontent.com/<owner>/<repo>/main/apps/dsa-web/public/stocks.index.json
+# 可选：市场级回归防护比例，默认 0.8
+# STOCK_INDEX_REMOTE_MIN_MARKET_RATIO=0.8
 ```
 
 默认开启时，系统最多每 48 小时检查一次更新。若运行环境无法访问 GitHub raw、请求超时、返回内容不是合法股票索引，应用会保留已有缓存；如果没有远程缓存，则继续使用随应用打包的内置索引。远程更新失败不会阻断 WebUI 启动、股票自动补全或分析流程；连续失败达到系统内置阈值后，会在本进程内暂停重试直到下一轮 48 小时窗口。
+
+**市场级回归防护**：无论 `STOCK_INDEX_REMOTE_URL` 指向哪里，系统都会将下载到的索引与已提交的 `apps/dsa-web/public/stocks.index.json` 按市场（CN/HK/US/BSE/JP/KR）逐一比较条目数。如果任一市场的条目数低于已提交基线该市场条目数的 `STOCK_INDEX_REMOTE_MIN_MARKET_RATIO`（默认 80%），则视为该来源发生回归：远程刷新会拒绝写入缓存（保留旧缓存不变），本地加载器在读取候选索引时也会跳过发生回归的缓存并回退到已提交索引 —— 即使缓存文件已经落盘且被后续进程重复读取，也会在读取时自动识别并回退，不需要手动清理。这可以防止（并修复）一个已知问题：上游仓库的索引 KR 市场覆盖较少，如果被错误地当作权威来源写入本地缓存，会导致本地 KR 股票名称/代码解析能力被静默削弱。
 
 ## 注意事项
 

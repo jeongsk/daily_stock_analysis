@@ -38,6 +38,11 @@ from src.notification_contracts import (
     is_feishu_static_configured,
 )
 from src.services.stock_list_parser import split_stock_list
+from src.services.stock_index_remote_service import (
+    DEFAULT_STOCK_INDEX_REMOTE_MIN_MARKET_RATIO,
+    DEFAULT_STOCK_INDEX_REMOTE_URL,
+    parse_stock_index_remote_min_market_ratio,
+)
 from src.llm.backend_registry import (
     AUTO_AGENT_BACKEND_ID,
     GENERATION_ONLY_BACKEND_IDS,
@@ -895,6 +900,16 @@ class Config:
     phase5_quote_max_age_seconds: float = 600.0
     phase5_execute_price_drift_bps: float = 200.0
     stock_index_remote_update_enabled: bool = True
+    # STOCK_INDEX_REMOTE_URL lets a deployment point the remote refresh at a
+    # fork (e.g. this repo's own apps/dsa-web/public/stocks.index.json) instead
+    # of the built-in upstream default; the regression guard below protects
+    # against a misconfigured/stale URL regardless of this setting (design
+    # spec docs/superpowers/specs/2026-07-22-stock-index-remote-regression-guard-design.md).
+    stock_index_remote_url: str = DEFAULT_STOCK_INDEX_REMOTE_URL
+    # STOCK_INDEX_REMOTE_MIN_MARKET_RATIO: a candidate index is rejected as a
+    # regression if any market's item count falls below this fraction of the
+    # committed baseline's count for that market (same spec, §2).
+    stock_index_remote_min_market_ratio: float = DEFAULT_STOCK_INDEX_REMOTE_MIN_MARKET_RATIO
 
     # === AlphaSift optional stock screening integration ===
     alphasift_enabled: bool = False
@@ -1844,6 +1859,11 @@ class Config:
             stock_index_remote_update_enabled=parse_env_bool(
                 os.getenv('STOCK_INDEX_REMOTE_UPDATE_ENABLED'),
                 default=True,
+            ),
+            stock_index_remote_url=(os.getenv('STOCK_INDEX_REMOTE_URL') or '').strip()
+            or DEFAULT_STOCK_INDEX_REMOTE_URL,
+            stock_index_remote_min_market_ratio=parse_stock_index_remote_min_market_ratio(
+                os.getenv('STOCK_INDEX_REMOTE_MIN_MARKET_RATIO')
             ),
             generation_backend=generation_backend,
             generation_fallback_backend=generation_fallback_backend,

@@ -23,9 +23,16 @@ DEFAULT_STOCK_INDEX_REMOTE_URL = (
     "main/apps/dsa-web/public/stocks.index.json"
 )
 DEFAULT_STOCK_INDEX_CACHE_PATH = REPO_ROOT / "data" / "cache" / "stocks.index.json"
+# Committed, curated index — the regression-guard floor (design spec
+# docs/superpowers/specs/2026-07-22-stock-index-remote-regression-guard-design.md
+# §2). Read-only: this module never writes to it.
+DEFAULT_STOCK_INDEX_BASELINE_PATH = REPO_ROOT / "apps" / "dsa-web" / "public" / "stocks.index.json"
 DEFAULT_STOCK_INDEX_REMOTE_TTL_HOURS = 48
 DEFAULT_STOCK_INDEX_REMOTE_TIMEOUT_SECONDS = 10
 DEFAULT_STOCK_INDEX_REMOTE_MAX_FAILURES = 3
+# Below this fraction of the committed baseline's per-market item count, a
+# candidate index is considered a regression for that market (design spec §2).
+DEFAULT_STOCK_INDEX_REMOTE_MIN_MARKET_RATIO = 0.8
 SUPPORTED_STOCK_INDEX_MARKETS = {"CN", "HK", "US", "BSE", "JP", "KR"}
 
 _REMOTE_REFRESH_LOCK = Lock()
@@ -43,6 +50,7 @@ class RemoteStockIndexSettings:
     ttl_hours: int = DEFAULT_STOCK_INDEX_REMOTE_TTL_HOURS
     timeout_seconds: int = DEFAULT_STOCK_INDEX_REMOTE_TIMEOUT_SECONDS
     cache_path: Path = DEFAULT_STOCK_INDEX_CACHE_PATH
+    min_market_ratio: float = DEFAULT_STOCK_INDEX_REMOTE_MIN_MARKET_RATIO
 
 
 @dataclass(frozen=True)
@@ -57,17 +65,173 @@ class RemoteStockIndexResult:
 
 def settings_from_config(config: Any) -> RemoteStockIndexSettings:
     """Build remote stock-index settings from the application config object."""
+    configured_url = str(getattr(config, "stock_index_remote_url", "") or "").strip()
+    configured_ratio = getattr(config, "stock_index_remote_min_market_ratio", None)
+    try:
+        min_market_ratio = (
+            float(configured_ratio)
+            if configured_ratio is not None
+            else DEFAULT_STOCK_INDEX_REMOTE_MIN_MARKET_RATIO
+        )
+    except (TypeError, ValueError):
+        min_market_ratio = DEFAULT_STOCK_INDEX_REMOTE_MIN_MARKET_RATIO
+
     return RemoteStockIndexSettings(
         enabled=bool(getattr(config, "stock_index_remote_update_enabled", True)),
-        url=DEFAULT_STOCK_INDEX_REMOTE_URL,
+        url=configured_url or DEFAULT_STOCK_INDEX_REMOTE_URL,
         ttl_hours=DEFAULT_STOCK_INDEX_REMOTE_TTL_HOURS,
         timeout_seconds=DEFAULT_STOCK_INDEX_REMOTE_TIMEOUT_SECONDS,
+        min_market_ratio=min_market_ratio,
     )
 
 
 def get_remote_stock_index_cache_path() -> Path:
     """Return the canonical on-disk cache path for remote stock index data."""
     return DEFAULT_STOCK_INDEX_CACHE_PATH
+
+
+def get_stock_index_baseline_path() -> Path:
+    """Return the canonical on-disk path for the committed baseline index.
+
+    This is the curated, git-tracked ``apps/dsa-web/public/stocks.index.json``
+    used as the regression-guard floor — never the (possibly polluted) remote
+    cache. Read-only from this module's perspective.
+    """
+    return DEFAULT_STOCK_INDEX_BASELINE_PATH
+
+
+def parse_stock_index_remote_min_market_ratio(value: Optional[str]) -> float:
+    """Parse ``STOCK_INDEX_REMOTE_MIN_MARKET_RATIO``: must be finite and in
+    ``(0, 1]`` (design spec §2/§4). Unlike a clamp, any invalid value (blank
+    aside, which just means "unset") is an ERROR-logged misconfiguration that
+    forces the safe default wholesale — a ratio of exactly ``0`` would make
+    the regression check never trigger (``incoming < 0`` is never true for a
+    non-negative count), silently defeating the guard, so ``0`` is rejected
+    just like negative/NaN/>1 values.
+    """
+    if value is None or not str(value).strip():
+        return DEFAULT_STOCK_INDEX_REMOTE_MIN_MARKET_RATIO
+    try:
+        parsed = float(str(value).strip())
+    except (TypeError, ValueError):
+        logger.error(
+            "STOCK_INDEX_REMOTE_MIN_MARKET_RATIO=%r is not a valid number; forcing default %s",
+            value,
+            DEFAULT_STOCK_INDEX_REMOTE_MIN_MARKET_RATIO,
+        )
+        return DEFAULT_STOCK_INDEX_REMOTE_MIN_MARKET_RATIO
+    if not math.isfinite(parsed) or parsed <= 0 or parsed > 1:
+        logger.error(
+            "STOCK_INDEX_REMOTE_MIN_MARKET_RATIO=%r must be a finite number within (0, 1]; forcing default %s",
+            value,
+            DEFAULT_STOCK_INDEX_REMOTE_MIN_MARKET_RATIO,
+        )
+        return DEFAULT_STOCK_INDEX_REMOTE_MIN_MARKET_RATIO
+    return parsed
+
+
+def get_stock_index_min_market_ratio() -> float:
+    """Resolve the min-market-ratio directly from the environment.
+
+    Used independently by the loader's read-path regression gate (which has
+    no ``Config`` object threaded through its module-level lazy caches) and by
+    ``settings_from_config``'s write-path guard, so a single parsing/
+    validation implementation governs both.
+    """
+    return parse_stock_index_remote_min_market_ratio(os.getenv("STOCK_INDEX_REMOTE_MIN_MARKET_RATIO"))
+
+
+def per_market_counts(payload: list) -> dict[str, int]:
+    """Return the number of items per ``market`` field in a stock-index payload.
+
+    Tolerant of malformed rows (skips them) since this is used both on
+    already-validated payloads and on best-effort regression checks.
+    """
+    counts: dict[str, int] = {}
+    for item in payload:
+        if not isinstance(item, list) or len(item) < 7:
+            continue
+        market = str(item[6] or "").strip().upper()
+        if not market:
+            continue
+        counts[market] = counts.get(market, 0) + 1
+    return counts
+
+
+def regressing_markets(
+    incoming_counts: dict[str, int],
+    baseline_counts: dict[str, int],
+    ratio: float,
+) -> dict[str, tuple[int, int]]:
+    """Return ``{market: (incoming, baseline)}`` for every baseline market
+    where ``incoming < ratio * baseline`` (design spec §2/§4).
+
+    A market present in ``incoming`` but absent from ``baseline`` is a new
+    market addition, never a regression. A market absent from ``incoming``
+    (count 0) but present in ``baseline`` is the most severe regression case
+    (a whole market silently dropped).
+    """
+    offending: dict[str, tuple[int, int]] = {}
+    for market, baseline_count in baseline_counts.items():
+        if baseline_count <= 0:
+            continue
+        incoming_count = incoming_counts.get(market, 0)
+        if incoming_count < ratio * baseline_count:
+            offending[market] = (incoming_count, baseline_count)
+    return offending
+
+
+def payload_regresses_market(
+    incoming_counts: dict[str, int],
+    baseline_counts: dict[str, int],
+    ratio: float,
+) -> bool:
+    """Convenience boolean wrapper around :func:`regressing_markets`."""
+    return bool(regressing_markets(incoming_counts, baseline_counts, ratio))
+
+
+def assert_no_market_regression(
+    payload: list,
+    baseline_counts: dict[str, int],
+    ratio: float,
+) -> None:
+    """Raise ``ValueError`` if ``payload`` regresses any baseline market
+    below ``ratio`` (write-path guard, design spec §2/§3). The message
+    embeds per-market before/after counts so the caller's failure-log line
+    surfaces them without a second log call.
+    """
+    incoming_counts = per_market_counts(payload)
+    offending = regressing_markets(incoming_counts, baseline_counts, ratio)
+    if offending:
+        details = ", ".join(
+            f"{market}: incoming={incoming} baseline={baseline}"
+            for market, (incoming, baseline) in sorted(offending.items())
+        )
+        raise ValueError(
+            f"remote stock index regresses market(s) below {ratio:.2f}x committed baseline: {details}"
+        )
+
+
+def _load_baseline_market_counts_for_write(baseline_path: Path) -> dict[str, int]:
+    """Load and count the committed baseline for the write-path guard.
+
+    Any failure to read/parse the baseline is a conservative rejection
+    (design spec §4 "커밋 기준선 파일 부재/파싱 실패 → 보수적으로 원격 거부"),
+    ERROR-logged distinctly from the generic best-effort WARNING the caller
+    already emits for refresh failures.
+    """
+    try:
+        baseline_payload = json.loads(baseline_path.read_text(encoding="utf-8"))
+        validate_stock_index_payload(baseline_payload)
+    except (OSError, json.JSONDecodeError, ValueError, TypeError) as exc:
+        logger.error(
+            "[stock-index] committed baseline index unavailable/invalid at %s; "
+            "rejecting remote refresh conservatively: %s",
+            baseline_path,
+            exc,
+        )
+        raise ValueError(f"committed baseline index unavailable at {baseline_path}: {exc}") from exc
+    return per_market_counts(baseline_payload)
 
 
 def is_remote_stock_index_cache_fresh(
@@ -148,14 +312,14 @@ def is_valid_remote_stock_index_file(cache_path: Path = DEFAULT_STOCK_INDEX_CACH
         return False
 
 
-def _download_remote_stock_index(settings: RemoteStockIndexSettings) -> bytes:
+def _download_remote_stock_index(settings: RemoteStockIndexSettings) -> tuple[bytes, list]:
     response = requests.get(settings.url, timeout=settings.timeout_seconds)
     response.raise_for_status()
 
     content = response.content
     payload = json.loads(content.decode("utf-8"))
     validate_stock_index_payload(payload)
-    return content
+    return content, payload
 
 
 def _atomic_write(cache_path: Path, content: bytes) -> None:
@@ -239,7 +403,9 @@ def refresh_remote_stock_index_cache(settings: RemoteStockIndexSettings) -> Remo
                 _reset_remote_failure_state()
                 return RemoteStockIndexResult(cache_path=cache_path, skipped=True)
 
-        content = _download_remote_stock_index(settings)
+        content, payload = _download_remote_stock_index(settings)
+        baseline_counts = _load_baseline_market_counts_for_write(get_stock_index_baseline_path())
+        assert_no_market_regression(payload, baseline_counts, settings.min_market_ratio)
         _atomic_write(cache_path, content)
         _clear_backend_stock_index_cache()
         _reset_remote_failure_state()

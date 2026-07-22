@@ -17,6 +17,10 @@ from src.config import (
 )
 from src.notification_noise import NOTIFICATION_SEVERITIES
 from src.notification_routing import ROUTABLE_NOTIFICATION_CHANNELS
+from src.services.stock_index_remote_service import (
+    DEFAULT_STOCK_INDEX_REMOTE_MIN_MARKET_RATIO,
+    DEFAULT_STOCK_INDEX_REMOTE_URL,
+)
 
 SCHEMA_VERSION = "2026-06-29-claude-code-cli-backend"
 
@@ -868,6 +872,69 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "examples": [
             "STOCK_INDEX_REMOTE_UPDATE_ENABLED=true",
             "STOCK_INDEX_REMOTE_UPDATE_ENABLED=false",
+        ],
+        "docs": [
+            {
+                "label": "Tushare 股票列表指南",
+                "href": "https://github.com/ZhuLinsen/daily_stock_analysis/blob/main/docs/TUSHARE_STOCK_LIST_GUIDE.md",
+            },
+        ],
+        "warning_codes": [],
+    },
+    "STOCK_INDEX_REMOTE_URL": {
+        "title": "Remote Stock Index URL",
+        "description": (
+            "Source URL for the remote stock autocomplete index refresh. Defaults to the "
+            "built-in upstream repo; a deployment tracking a fork with a more complete index "
+            "(e.g. an expanded KR listing) can point this at that fork's stocks.index.json "
+            "instead. The per-market regression guard rejects any URL's payload that regresses "
+            "a market below the configured ratio, so misconfiguring this is safe."
+        ),
+        "category": "data_source",
+        "data_type": "string",
+        "ui_control": "text",
+        "is_sensitive": False,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": DEFAULT_STOCK_INDEX_REMOTE_URL,
+        "options": [],
+        "validation": {},
+        "display_order": 20,
+        "help_key": "settings.data_source.stock_index_remote_url",
+        "examples": [
+            "STOCK_INDEX_REMOTE_URL=https://raw.githubusercontent.com/<owner>/<repo>/main/apps/dsa-web/public/stocks.index.json",
+        ],
+        "docs": [
+            {
+                "label": "Tushare 股票列表指南",
+                "href": "https://github.com/ZhuLinsen/daily_stock_analysis/blob/main/docs/TUSHARE_STOCK_LIST_GUIDE.md",
+            },
+        ],
+        "warning_codes": [],
+    },
+    "STOCK_INDEX_REMOTE_MIN_MARKET_RATIO": {
+        "title": "Remote Stock Index Regression Ratio",
+        "description": (
+            "Minimum fraction (0, 1] of the committed baseline's per-market item count a "
+            "remote/cached stock index must retain to be considered usable. A market falling "
+            "below this ratio vs the committed apps/dsa-web/public/stocks.index.json is treated "
+            "as a regression: the remote refresh rejects the payload and the loader falls back "
+            "to the committed index. Invalid values (<=0, >1, non-finite) are ignored and the "
+            "default 0.8 is enforced."
+        ),
+        "category": "data_source",
+        "data_type": "number",
+        "ui_control": "number",
+        "is_sensitive": False,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": str(DEFAULT_STOCK_INDEX_REMOTE_MIN_MARKET_RATIO),
+        "options": [],
+        "validation": {"min": 0.01, "max": 1},
+        "display_order": 21,
+        "help_key": "settings.data_source.stock_index_remote_min_market_ratio",
+        "examples": [
+            "STOCK_INDEX_REMOTE_MIN_MARKET_RATIO=0.8",
         ],
         "docs": [
             {
