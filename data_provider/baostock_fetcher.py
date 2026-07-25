@@ -45,13 +45,89 @@ logger = logging.getLogger(__name__)
 def _is_us_code(stock_code: str) -> bool:
     """
     判断代码是否为美股
-    
+
     美股代码规则：
     - 1-5个大写字母，如 'AAPL', 'TSLA'
     - 可能包含 '.'，如 'BRK.B'
     """
     code = stock_code.strip().upper()
     return bool(re.match(r'^[A-Z]{1,5}(\.[A-Z])?$', code))
+
+
+# Baostock 的 socketutil.send_msg 以「收到结束分隔符」为唯一循环出口：
+#     while True:
+#         recv = default_socket.recv(8192)
+#         receive += recv
+#         if receive[-13:] == b"<![CDATA[]]>\n":
+#             break
+# 对端断开连接时 recv() 并不抛异常，而是立刻且永远返回 b""，于是循环退化成
+# 100% CPU 的死循环。2026-07-24 这一路径把整个调度线程 wedge 了 14 小时。
+# 注意：socket 超时对 EOF 无效（EOF 不是超时），必须把「读到 EOF」升级成异常，
+# baostock 自己的 except 分支才会收敛成登录失败，交回我们的 fallback 链。
+_SOCKET_RECV_TIMEOUT_SECONDS = 30.0
+_SOCKET_GUARD_FLAG = "_dsa_eof_socket_guard_installed"
+
+
+class _EofRaisingSocket:
+    """代理 Baostock 共享 socket，把对端 EOF 从「空 bytes」升级为异常。
+
+    只覆写 recv()，其余属性（send/close/settimeout 等）全部委托给真实 socket，
+    以免改变 baostock 对连接对象的其他用法。
+    """
+
+    def __init__(self, sock):
+        self._sock = sock
+
+    def recv(self, *args, **kwargs):
+        chunk = self._sock.recv(*args, **kwargs)
+        if not chunk:
+            raise ConnectionError("Baostock 服务端已关闭连接（recv 返回空数据）")
+        return chunk
+
+    def __getattr__(self, item):
+        return getattr(self._sock, item)
+
+
+def _install_baostock_socket_guard(socketutil=None, context=None) -> bool:
+    """给 Baostock 的 socket 工厂打上 EOF 保护，防止 send_msg 空转。
+
+    幂等：重复调用只安装一次。参数仅供测试注入替身，正常调用不传参。
+
+    Returns:
+        保护是否处于生效状态（本次安装或先前已安装均为 True）。
+    """
+    if socketutil is None and context is None:
+        try:
+            from baostock.util import socketutil as socketutil_module
+            from baostock.common import context as context_module
+        except Exception as exc:  # pragma: no cover - baostock 未安装时的防御分支
+            logger.debug(f"Baostock socket 保护未安装（导入失败）: {exc}")
+            return False
+        socketutil = socketutil_module
+        context = context_module
+    elif socketutil is None or context is None:
+        raise ValueError("socketutil 与 context 必须同时提供或同时省略")
+
+    if getattr(socketutil, _SOCKET_GUARD_FLAG, False):
+        return True
+
+    original_connect = socketutil.SocketUtil.connect
+
+    def _guarded_connect(self):
+        result = original_connect(self)
+        sock = getattr(context, "default_socket", None)
+        if sock is not None and not isinstance(sock, _EofRaisingSocket):
+            try:
+                sock.settimeout(_SOCKET_RECV_TIMEOUT_SECONDS)
+            except Exception as exc:
+                logger.debug(f"Baostock socket 超时设置失败，继续使用 EOF 保护: {exc}")
+            setattr(context, "default_socket", _EofRaisingSocket(sock))
+        return result
+
+    socketutil.SocketUtil.connect = _guarded_connect
+    setattr(socketutil, _SOCKET_GUARD_FLAG, True)
+    logger.debug("Baostock socket EOF 保护已安装")
+    return True
 
 
 class BaostockFetcher(BaseFetcher):
@@ -87,6 +163,8 @@ class BaostockFetcher(BaseFetcher):
         """
         if self._bs_module is None:
             import baostock as bs
+            # 必须在任何 login() 之前安装：死循环就发生在 login 的首次 send_msg 里。
+            _install_baostock_socket_guard()
             self._bs_module = bs
         return self._bs_module
     

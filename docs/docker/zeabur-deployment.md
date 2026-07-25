@@ -206,19 +206,29 @@ Zeabur 服务建议从 `1G` 内存起步；`512M` 仅适合轻量 Web/API、单�
 
 ## 7. 健康检查
 
-系统内置了健康检查机制，默认检查：
+系统内置了健康检查机制，判定对象是**本容器的调度循环是否停摆**：
 
-- WebUI 模式：检查 `http://localhost:8000/health` 端点
-- FastAPI 模式：检查 `http://localhost:8000/api/health` 端点
-- 非服务模式：始终返回健康状态
+- 定时任务模式（`--schedule`）：调度循环每轮（30s）刷新一次存活标记，健康检查检查该标记是否过期
+- 纯服务模式（`--serve-only`）：容器内没有调度循环，不会写存活标记，健康检查直接通过
+- 存活标记写在容器本地临时目录，不使用跨容器共享的 bind mount，因此一个容器停摆不会波及另一个容器
 
 健康检查配置如下：
 
 ```dockerfile
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8000/api/health || curl -f http://localhost:8000/health \
-    || python -c "import sys; sys.exit(0)"
+    CMD python -m src.services.scheduler_heartbeat
 ```
+
+阈值由 `SCHEDULER_HEARTBEAT_MAX_AGE_SECONDS` 控制（默认 3600 秒）。调度循环执行定时分析时是
+同步阻塞的，正常一轮分析也会让存活标记停顿数分钟，所以该阈值必须显著大于一次完整分析的耗时；
+自选股很多或 LLM 较慢时请相应调大，否则正常的长时间分析会被误判为停摆。
+
+> 注意：Docker 只会把结果标记为 `unhealthy`，**不会**据此重启容器（`restart` 策略只响应进程退出）。
+> 需要自动恢复时，请配合外部看护（如 autoheal 容器）或编排平台的存活探针。
+
+> 历史背景：旧配置以 `python -c "import sys; sys.exit(0)"` 收尾，等于永远返回健康；且它探测的
+> HTTP 服务运行在独立线程中，调度线程卡死时依然返回 200。2026-07-24 调度线程被数据源死循环
+> 卡住 14.5 小时未被发现，正是这个假信号造成的。
 
 ## 8. 常见问题
 

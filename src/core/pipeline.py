@@ -2951,6 +2951,31 @@ class StockAnalysisPipeline:
             reset_run_diagnostic_context(diag_token)
             reset_frozen_target_date(token)
     
+    def _resolve_entry_stock_codes(self, stock_codes: List[str]) -> List[str]:
+        """把入口列表中的裸 JP/KR 代码解析成带后缀形式，其余代码原样返回。
+
+        与 process_single_stock 使用同一个解析器，但必须在预取之前完成：
+        prefetch_daily_klines / prefetch_realtime_quotes / prefetch_stock_names
+        都直接消费这份列表，裸 KR/JP 代码（如 005930）会被 A 股数据源当成同号
+        A 股处理——既会把错误的公司名写进名称缓存，也会把请求打到不该走的数据源。
+        """
+        from src.services.stock_code_utils import resolve_index_stock_code_for_analysis
+
+        resolved_codes: List[str] = []
+        changed: List[str] = []
+        for code in stock_codes:
+            resolved = resolve_index_stock_code_for_analysis(code)
+            if resolved and resolved != code:
+                changed.append(f"{code} -> {resolved}")
+                resolved_codes.append(resolved)
+            else:
+                resolved_codes.append(code)
+
+        if changed:
+            logger.info(f"入口代码已解析为指数匹配形式: {', '.join(changed)}")
+
+        return resolved_codes
+
     def run(
         self,
         stock_codes: Optional[List[str]] = None,
@@ -2988,7 +3013,10 @@ class StockAnalysisPipeline:
         if not stock_codes:
             logger.error("未配置自选股列表，请在 .env 文件中设置 STOCK_LIST")
             return []
-        
+
+        # 预取之前先解析裸 JP/KR 代码，避免它们流入 A 股专用数据源。
+        stock_codes = self._resolve_entry_stock_codes(stock_codes)
+
         logger.info(f"===== 开始分析 {len(stock_codes)} 只股票 =====")
         logger.info(f"股票列表: {', '.join(stock_codes)}")
         logger.info(f"并发数: {self.max_workers}, 模式: {'仅获取数据' if dry_run else '完整分析'}")

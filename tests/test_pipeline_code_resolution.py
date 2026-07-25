@@ -14,6 +14,10 @@ from unittest.mock import MagicMock, patch
 from src.core.pipeline import StockAnalysisPipeline
 
 
+class _StopRun(Exception):
+    """Sentinel used to abort run() right at the observation point."""
+
+
 class PipelineCodeResolutionTestCase(unittest.TestCase):
     def _make_pipeline(self):
         pipeline = StockAnalysisPipeline.__new__(StockAnalysisPipeline)
@@ -60,6 +64,68 @@ class PipelineCodeResolutionTestCase(unittest.TestCase):
 
         dispatched = pipeline.fetch_and_save_stock_data.call_args.args[0]
         self.assertEqual(dispatched, "600519")
+
+
+class RunEntryPrefetchResolutionTestCase(unittest.TestCase):
+    """run() 的三条预取路径必须先拿到解析后的代码。
+
+    process_single_stock 的解析发生在预取之后，所以只有它是不够的：裸 KR 代码
+    仍会被 prefetch_* 送进 A 股专用数据源（2026-07-24 调度线程 wedge 的触发路径），
+    并把同号 A 股的名称写进名称缓存。
+    """
+
+    def _make_pipeline(self):
+        pipeline = StockAnalysisPipeline.__new__(StockAnalysisPipeline)
+        pipeline.max_workers = 1
+        pipeline.fetcher_manager = MagicMock()
+        return pipeline
+
+    def test_resolve_entry_stock_codes_handles_kr_cn_and_suffixed_inputs(self):
+        pipeline = self._make_pipeline()
+
+        resolved = StockAnalysisPipeline._resolve_entry_stock_codes(
+            pipeline, ["000660", "000660.KS", "600519", "AAPL"]
+        )
+
+        self.assertEqual(resolved, ["000660.KS", "000660.KS", "600519", "AAPL"])
+
+    def test_stock_name_prefetch_receives_resolved_codes(self):
+        pipeline = self._make_pipeline()
+        pipeline.fetcher_manager.prefetch_stock_names.side_effect = _StopRun
+
+        with self.assertRaises(_StopRun):
+            StockAnalysisPipeline.run(pipeline, stock_codes=["000660", "600519"])
+
+        called = pipeline.fetcher_manager.prefetch_stock_names.call_args.args[0]
+        self.assertEqual(called, ["000660.KS", "600519"])
+
+    def test_daily_kline_prefetch_receives_resolved_codes(self):
+        """5 只以上才会走批量预取分支，这里覆盖该分支的入参。"""
+        pipeline = self._make_pipeline()
+        pipeline.fetcher_manager.prefetch_daily_klines.side_effect = _StopRun
+
+        with self.assertRaises(_StopRun):
+            StockAnalysisPipeline.run(
+                pipeline,
+                stock_codes=["000660", "005930", "600519", "AAPL", "TSLA"],
+            )
+
+        called = pipeline.fetcher_manager.prefetch_daily_klines.call_args.args[0]
+        self.assertEqual(called, ["000660.KS", "005930.KS", "600519", "AAPL", "TSLA"])
+
+    def test_realtime_prefetch_receives_resolved_codes(self):
+        pipeline = self._make_pipeline()
+        pipeline.fetcher_manager.prefetch_daily_klines.return_value = 0
+        pipeline.fetcher_manager.prefetch_realtime_quotes.side_effect = _StopRun
+
+        with self.assertRaises(_StopRun):
+            StockAnalysisPipeline.run(
+                pipeline,
+                stock_codes=["000660", "005930", "600519", "AAPL", "TSLA"],
+            )
+
+        called = pipeline.fetcher_manager.prefetch_realtime_quotes.call_args.args[0]
+        self.assertEqual(called, ["000660.KS", "005930.KS", "600519", "AAPL", "TSLA"])
 
 
 if __name__ == "__main__":

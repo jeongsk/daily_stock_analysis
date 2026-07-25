@@ -97,10 +97,14 @@ EXPOSE 8000
 # 数据卷（持久化数据）
 VOLUME ["/app/data", "/app/logs", "/app/reports"]
 
-# 健康检查（FastAPI 模式）
+# 健康检查：判定本容器的调度循环是否停摆。
+# 旧实现以 `python -c "import sys; sys.exit(0)"` 收尾，等于永远 healthy；而且它探测的
+# HTTP 服务活在独立线程里，调度线程卡死时依旧返回 200 —— 2026-07-24 调度线程被数据源
+# 死循环卡住 14.5 小时正是被这个假信号掩盖的。
+# 没有调度循环的容器（例如 --serve-only）不写心跳文件，检查直接通过。
+# 注意：Docker 只把结果标成 unhealthy，并不会据此重启容器（restart 策略只响应进程退出）。
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8000/api/health || curl -f http://localhost:8000/health \
-    || python -c "import sys; sys.exit(0)"
+    CMD python -m src.services.scheduler_heartbeat
 
 # 启动入口先修复 bind mount 目录权限，再降权为 dsa 执行应用；
 # 文档化 docker-compose exec 命令需显式使用 -u dsa，避免手动进程写入 root-owned 文件。

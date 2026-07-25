@@ -920,7 +920,9 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
             "below this ratio vs the committed apps/dsa-web/public/stocks.index.json is treated "
             "as a regression: the remote refresh rejects the payload and the loader falls back "
             "to the committed index. Invalid values (<=0, >1, non-finite) are ignored and the "
-            "default 0.8 is enforced."
+            "default 0.8 is enforced. The settings UI additionally enforces a practical floor of "
+            "0.01, since an inclusive minimum cannot express the exclusive lower bound; values "
+            "between 0 and 0.01 remain valid when set directly via the environment variable."
         ),
         "category": "data_source",
         "data_type": "number",

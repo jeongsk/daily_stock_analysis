@@ -21,6 +21,8 @@ import time
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 
+from src.services.scheduler_heartbeat import touch_heartbeat
+
 logger = logging.getLogger(__name__)
 
 
@@ -388,10 +390,16 @@ class Scheduler:
         logger.info("调度器开始运行...")
         logger.info(f"下次执行时间: {self._get_next_run_time()}")
 
+        # 存活标记：本循环同步执行定时任务，一旦任务在底层阻塞，整个循环（含后续所有
+        # 排期）都会停摆。心跳文件让容器健康检查能看见这种停摆，详见
+        # src/services/scheduler_heartbeat.py。
+        touch_heartbeat()
+
         while self._running and not self.shutdown_handler.should_shutdown:
             self._refresh_daily_schedule_if_needed()
             self.schedule.run_pending()
             self._run_background_tasks()
+            touch_heartbeat()
             time.sleep(30)  # 每30秒检查一次
 
             # 每小时打印一次心跳
