@@ -129,5 +129,37 @@ class SchedulerLoopHeartbeatTestCase(unittest.TestCase):
         self.assertEqual(touch.call_count, 3)
 
 
+class AnalysisProgressHeartbeatTestCase(unittest.TestCase):
+    """分析进度也要刷新存活标记。
+
+    调度循环同步执行定时任务，只靠循环打点的话，「一轮正常但很慢的分析」和「循环卡死」
+    在健康检查看来一模一样；接上 autoheal 后前者会被误杀。按进度打点后，判据变成
+    「多久没有任何分析进展」。
+    """
+
+    def test_emit_progress_touches_heartbeat_without_a_callback(self):
+        """定时任务通常没有 progress_callback，打点必须在判空之前发生。"""
+        from src.core.pipeline import StockAnalysisPipeline
+
+        pipeline = StockAnalysisPipeline.__new__(StockAnalysisPipeline)
+        pipeline.progress_callback = None
+
+        with patch("src.core.pipeline.touch_heartbeat") as touch:
+            StockAnalysisPipeline._emit_progress(pipeline, 12, "分析中")
+
+        touch.assert_called_once()
+
+    def test_emit_progress_touches_heartbeat_when_callback_raises(self):
+        from src.core.pipeline import StockAnalysisPipeline
+
+        pipeline = StockAnalysisPipeline.__new__(StockAnalysisPipeline)
+        pipeline.progress_callback = MagicMock(side_effect=RuntimeError("boom"))
+
+        with patch("src.core.pipeline.touch_heartbeat") as touch:
+            StockAnalysisPipeline._emit_progress(pipeline, 42, "分析中")
+
+        touch.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

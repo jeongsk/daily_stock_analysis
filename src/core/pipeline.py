@@ -56,6 +56,7 @@ from src.services.daily_market_context import (
     DailyMarketContextService,
     format_daily_market_context_prompt_section,
 )
+from src.services.scheduler_heartbeat import touch_heartbeat
 from src.services.social_sentiment_service import SocialSentimentService
 from src.services.intelligence_service import IntelligenceService
 from src.services.market_hotspot_service import MarketHotspotService
@@ -290,6 +291,12 @@ class StockAnalysisPipeline:
 
     def _emit_progress(self, progress: int, message: str) -> None:
         """Best-effort bridge from pipeline stages to task SSE progress."""
+        # 分析阶段也刷新调度存活标记：调度循环是同步执行定时任务的，只靠循环本身打点的话，
+        # 「一轮正常但耗时很久的分析」和「循环卡死」在健康检查看来完全一样。这里按分析进度
+        # 打点后，判据就从「一轮分析的总耗时」变成「多久没有任何分析进展」——正常长跑不会被
+        # 误判，而卡死时进度同样会停住。必须放在 callback 判空之前：定时任务通常没有回调。
+        touch_heartbeat()
+
         callback = getattr(self, "progress_callback", None)
         if callback is None:
             return

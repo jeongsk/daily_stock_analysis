@@ -62,6 +62,9 @@ services:
   analyzer:
     <<: *common
     container_name: stock-analyzer
+    # 供下方 autoheal 识别；未启用 autoheal 时该标签无任何作用。
+    labels:
+      autoheal: "true"
 
   # FastAPI 模式
   server:
@@ -71,3 +74,37 @@ services:
     # 若使用 network_mode: host，则以下 ports 映射无效，端口由 command 中的 --port 指定
     ports:
       - "${WEBUI_DOCKER_PORT:-8001}:8000"
+
+  # 自动恢复（可选，opt-in）
+  #
+  # Docker 只会把健康检查失败的容器标记为 unhealthy，并不会据此重启它
+  # （restart 策略只响应进程退出）。analyzer 的调度线程一旦卡死，进程仍然活着，
+  # 所以没有外部看护就只能靠人工发现——2026-07-24 就这样静默了 14.5 小时。
+  # 本服务监听带 autoheal 标签的容器，持续 unhealthy 时将其重启。
+  #
+  # 默认不启动（profiles）：它需要挂载 docker.sock，等同于宿主机 root 权限，
+  # 不应强加给所有部署。启用方式（显式点名该服务即可）：
+  #   docker-compose -f ./docker/docker-compose.yml up -d analyzer autoheal
+  #
+  # 注意：启用后 SCHEDULER_HEARTBEAT_MAX_AGE_SECONDS 就从「告警阈值」变成了
+  # 「硬性重启期限」。该阈值按分析进度刷新（不是按整轮耗时），所以正常长跑不会被误杀；
+  # 但若某轮分析真的长时间没有任何进展，容器会被重启并丢失该轮结果。
+  autoheal:
+    image: willfarrell/autoheal:1.2.0
+    container_name: stock-autoheal
+    restart: unless-stopped
+    profiles: ["autoheal"]
+    environment:
+      - AUTOHEAL_CONTAINER_LABEL=autoheal
+      # 每 10s 巡检一次；容器启动后 300s 内不介入，避免冷启动期误重启。
+      - AUTOHEAL_INTERVAL=10
+      - AUTOHEAL_START_PERIOD=300
+      - DOCKER_SOCK=/var/run/docker.sock
+      - TZ=${TZ:-Asia/Seoul}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

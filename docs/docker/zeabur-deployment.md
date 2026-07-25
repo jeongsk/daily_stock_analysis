@@ -219,12 +219,28 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD python -m src.services.scheduler_heartbeat
 ```
 
-阈值由 `SCHEDULER_HEARTBEAT_MAX_AGE_SECONDS` 控制（默认 3600 秒）。调度循环执行定时分析时是
-同步阻塞的，正常一轮分析也会让存活标记停顿数分钟，所以该阈值必须显著大于一次完整分析的耗时；
-自选股很多或 LLM 较慢时请相应调大，否则正常的长时间分析会被误判为停摆。
+阈值由 `SCHEDULER_HEARTBEAT_MAX_AGE_SECONDS` 控制（默认 3600 秒）。存活标记由调度循环每轮
+（30s）刷新，分析过程中也随分析进度刷新，因此判据是「多久没有任何进展」而非「一轮分析的总耗时」，
+正常的长时间分析不会被误判为停摆。
 
 > 注意：Docker 只会把结果标记为 `unhealthy`，**不会**据此重启容器（`restart` 策略只响应进程退出）。
-> 需要自动恢复时，请配合外部看护（如 autoheal 容器）或编排平台的存活探针。
+> 需要自动恢复时，请启用下面的 autoheal 服务，或使用编排平台的存活探针。
+
+### 7.1 自动恢复（可选）
+
+`docker/docker-compose.yml` 内置了一个 opt-in 的 `autoheal` 服务：它监听带 `autoheal` 标签的容器
+（当前为 `analyzer`），发现持续 `unhealthy` 时将其重启。
+
+```bash
+docker-compose -f ./docker/docker-compose.yml up -d analyzer autoheal
+```
+
+默认不随 `up` 启动（使用 compose `profiles`），因为它需要挂载 `docker.sock`，等同于宿主机 root 权限，
+不应强加给所有部署。
+
+> 启用后，`SCHEDULER_HEARTBEAT_MAX_AGE_SECONDS` 就从「告警阈值」变成了「硬性重启期限」：
+> 若某轮分析长时间没有任何进展，容器会被重启，该轮结果丢失。`AUTOHEAL_START_PERIOD=300`
+> 保证容器冷启动的前 5 分钟内不会被介入。
 
 > 历史背景：旧配置以 `python -c "import sys; sys.exit(0)"` 收尾，等于永远返回健康；且它探测的
 > HTTP 服务运行在独立线程中，调度线程卡死时依然返回 200。2026-07-24 调度线程被数据源死循环
