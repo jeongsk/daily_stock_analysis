@@ -10,10 +10,29 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple
 
 logger = logging.getLogger(__name__)
+
+FreshnessState = Literal["fresh", "stale", "unavailable", "unverified"]
+
+
+@dataclass(frozen=True)
+class CategoryFreshness:
+    """某个类别在提示词里可以声称到什么程度。
+
+    ``can_claim_no_events`` 与 ``state`` 分开，是因为"同步成功"并不等于"这个类别
+    真的能产出事件"（设计 §7.1）。
+    """
+
+    category: str
+    state: FreshnessState
+    last_success_at: Optional[datetime] = None
+    last_nonempty_at: Optional[datetime] = None
+    can_claim_no_events: bool = False
+    detail: Optional[str] = None
 
 CATEGORY_CONFLICT = "geopolitical_conflict"
 CATEGORY_OUTAGE = "infrastructure_outage"
@@ -274,6 +293,131 @@ def _from_iso(value: Any) -> Optional[datetime]:
     if parsed.tzinfo is not None:
         parsed = parsed.replace(tzinfo=None)
     return parsed
+
+
+# ---------------------------------------------------------------------------
+# 提示词渲染（设计 §9）
+# ---------------------------------------------------------------------------
+
+# 每种语言的固定文案。刻意把"无事件"与"无法确认"写成完全不同的句子：
+# 两者若共用措辞，采集管线挂掉就会被读成"一切正常"（设计 §3.1）。
+_PROMPT_TEXT: Dict[str, Dict[str, str]] = {
+    "ko": {
+        "heading": "## 글로벌 리스크 이벤트",
+        "intro": "아래는 외부 모니터링에서 수집한 이벤트입니다. 각 항목의 확인 상태를 함께 확인하세요.",
+        CATEGORY_CONFLICT: "지정학 분쟁",
+        CATEGORY_OUTAGE: "인프라 장애",
+        CATEGORY_ENERGY: "공급망·에너지",
+        "no_events": "해당 없음",
+        "unverified": "확인할 수 없습니다. 이 표기는 이상 없음을 뜻하지 않습니다.",
+        "stale": "최신 확인 실패. 아래는 마지막으로 확인된 시점의 데이터입니다.",
+        "fresh_label": "최신",
+        "ongoing": "진행 중",
+        "ended": "종료",
+        "guidance": (
+            "- 확인할 수 없는 항목을 위험이 없다는 근거로 사용하지 마세요.\n"
+            "- 위 이벤트는 참고 맥락이며, 개별 종목 판단의 직접 근거로 삼지 마세요."
+        ),
+    },
+    "en": {
+        "heading": "## Global Risk Events",
+        "intro": "Events collected from external monitoring. Check the verification state of each section.",
+        CATEGORY_CONFLICT: "Geopolitical conflict",
+        CATEGORY_OUTAGE: "Infrastructure outage",
+        CATEGORY_ENERGY: "Supply chain and energy",
+        "no_events": "None in this window",
+        "unverified": "Could not be verified. This does not mean nothing happened.",
+        "stale": "Not freshly confirmed. The entries below are from the last confirmed check.",
+        "fresh_label": "current",
+        "ongoing": "ongoing",
+        "ended": "ended",
+        "guidance": (
+            "- Do not treat an unverified section as evidence that no risk exists.\n"
+            "- These events are background context; do not use them as direct grounds for single-stock calls."
+        ),
+    },
+    "zh": {
+        "heading": "## 全球风险事件",
+        "intro": "以下事件来自外部监测，请同时关注每个板块的确认状态。",
+        CATEGORY_CONFLICT: "地缘冲突",
+        CATEGORY_OUTAGE: "基础设施中断",
+        CATEGORY_ENERGY: "供应链与能源",
+        "no_events": "本窗口内无事件",
+        "unverified": "无法确认。该标记不代表没有发生事件。",
+        "stale": "未能刷新确认，以下为最后一次确认时的数据。",
+        "fresh_label": "最新",
+        "ongoing": "进行中",
+        "ended": "已结束",
+        "guidance": (
+            "- 不要把无法确认的板块当作没有风险的依据。\n"
+            "- 上述事件仅作背景参考，不要作为个股判断的直接依据。"
+        ),
+    },
+}
+
+
+def render_worldmonitor_prompt_block(
+    *,
+    events_by_category: Dict[str, Sequence[Any]],
+    freshness: Dict[str, CategoryFreshness],
+    language: str,
+    now: datetime,
+) -> str:
+    """渲染注入市场复盘提示词的全球风险事件区块。
+
+    每个类别都会出现，即使为空 —— 悄悄省略一个类别会让模型默认它已被检查过。
+    """
+    text = _PROMPT_TEXT.get(language) or _PROMPT_TEXT["en"]
+
+    sections: List[str] = [text["heading"], "", text["intro"], ""]
+    for category in CATEGORIES:
+        state = freshness.get(category)
+        rows = list(events_by_category.get(category) or [])
+        sections.append(f"### {text[category]} ({_state_label(state, text)})")
+
+        if rows:
+            if state is not None and state.state == "stale":
+                sections.append(text["stale"])
+            for row in rows:
+                sections.append(_render_row(row, text))
+        elif state is not None and state.can_claim_no_events:
+            sections.append(text["no_events"])
+        else:
+            sections.append(text["unverified"])
+        sections.append("")
+
+    sections.append(text["guidance"])
+    return "\n".join(sections).strip() + "\n"
+
+
+def _state_label(state: Optional[CategoryFreshness], text: Dict[str, str]) -> str:
+    if state is None:
+        return text["unverified"].split(".")[0]
+    if state.state == "fresh":
+        return text["fresh_label"]
+    return {
+        "stale": text["stale"].split(".")[0],
+        "unavailable": text["unverified"].split(".")[0],
+        "unverified": text["unverified"].split(".")[0],
+    }.get(state.state, text["fresh_label"])
+
+
+def _render_row(row: Any, text: Dict[str, str]) -> str:
+    occurred = getattr(row, "occurred_at", None)
+    occurred_label = occurred.strftime("%Y-%m-%d") if isinstance(occurred, datetime) else "-"
+    status = text["ongoing"] if getattr(row, "is_ongoing", False) else text["ended"]
+    title = getattr(row, "title", "") or ""
+
+    parts = [f"- [{status}] {title} ({occurred_label}"]
+    countries = getattr(row, "country_list", None) or []
+    if countries:
+        parts.append(f", {'/'.join(str(c) for c in countries[:5])}")
+    parts.append(")")
+
+    summary = getattr(row, "summary", None)
+    if summary:
+        parts.append(f" {_truncate(str(summary), 160)}")
+    return "".join(parts)
 
 
 def _clean_str(value: Any) -> str:

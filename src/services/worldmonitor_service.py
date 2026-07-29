@@ -29,9 +29,12 @@ from src.services.worldmonitor_events import (
     CATEGORY_ENDPOINTS,
     CATEGORY_ENERGY,
     CATEGORY_OUTAGE,
+    CategoryFreshness,
+    FreshnessState,
     normalize_acled_event,
     normalize_energy_disruption,
     normalize_internet_outage,
+    render_worldmonitor_prompt_block,
 )
 from src.storage import WorldEvent
 
@@ -41,7 +44,12 @@ WorldMonitorStatusName = Literal[
     "disabled", "healthy", "degraded", "unreachable", "misconfigured"
 ]
 
-FreshnessState = Literal["fresh", "stale", "unavailable", "unverified"]
+__all__ = [
+    "CategoryFreshness",
+    "FreshnessState",
+    "WorldMonitorService",
+    "WorldMonitorStatus",
+]
 
 # 每个类别的响应数组字段名与归一化函数。
 _CATEGORY_SPECS = {
@@ -81,22 +89,6 @@ class SyncResult:
     performed: bool
     outcomes: Dict[str, CategorySyncOutcome] = field(default_factory=dict)
     budget_exhausted: bool = False
-
-
-@dataclass(frozen=True)
-class CategoryFreshness:
-    """某个类别在提示词里可以声称到什么程度。
-
-    ``can_claim_no_events`` 与 ``state`` 分开，是因为"同步成功"并不等于"这个类别
-    真的能产出事件"（设计 §7.1）。
-    """
-
-    category: str
-    state: FreshnessState
-    last_success_at: Optional[datetime] = None
-    last_nonempty_at: Optional[datetime] = None
-    can_claim_no_events: bool = False
-    detail: Optional[str] = None
 
 
 class WorldMonitorService:

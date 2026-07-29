@@ -35,6 +35,7 @@ from src.services.run_diagnostics import (
     record_history_run,
     record_notification_run,
 )
+from src.services.worldmonitor_service import WorldMonitorService
 from src.schemas.market_light import MARKET_LIGHT_REGIONS
 
 
@@ -237,6 +238,9 @@ def run_market_review(
         history_query_id,
         persist_region,
     )
+
+    # 在构建任何分析器之前同步一次，保证所有市场看到同一批事件快照。
+    _sync_worldmonitor_events(runtime_config)
 
     try:
         if len(run_markets) > 1:
@@ -895,6 +899,41 @@ def _persist_market_review_history(
         )
         logger.warning("大盘复盘历史记录保存异常，报告文件与推送流程继续: %s", exc, exc_info=True)
         return 0
+
+
+def _sync_worldmonitor_events(runtime_config: Any) -> None:
+    """复盘开始前同步一次 World Monitor 事件。
+
+    设计 §6：不另起后台调度线程 —— 三个上游里有两个本身就是 30 分钟周期的
+    seeder 快照，DSA 侧更频繁地轮询拿不到更新的数据，只会多一条可能卡死的线程。
+
+    全程吞异常：World Monitor 的任何问题都不该阻断大盘复盘。
+    """
+    if not (
+        getattr(runtime_config, "worldmonitor_enabled", False)
+        and getattr(runtime_config, "worldmonitor_events_enabled", False)
+    ):
+        return
+
+    try:
+        result = WorldMonitorService(runtime_config).sync_events()
+        if result.performed:
+            failed = [
+                category
+                for category, outcome in result.outcomes.items()
+                if outcome.status != "ok"
+            ]
+            logger.info(
+                "[MarketReview] component=worldmonitor action=sync_events "
+                "status=done failed=%s budget_exhausted=%s",
+                ",".join(failed) or "none",
+                result.budget_exhausted,
+            )
+    except Exception as exc:
+        logger.warning(
+            "[MarketReview] component=worldmonitor action=sync_events status=failed error=%s",
+            exc,
+        )
 
 
 def _build_market_review_context_overview(

@@ -177,6 +177,50 @@ class MarketAnalyzer:
     def _log_context(self) -> str:
         return f"component=market_review region={self.region}"
 
+    def _worldmonitor_service(self):
+        """延迟构造 World Monitor 服务，便于测试替换且不增加导入期开销。"""
+        from src.services.worldmonitor_service import WorldMonitorService
+
+        return WorldMonitorService(self.config)
+
+    @staticmethod
+    def _render_worldmonitor_block(**kwargs) -> str:
+        from src.services.worldmonitor_events import render_worldmonitor_prompt_block
+
+        return render_worldmonitor_prompt_block(**kwargs)
+
+    def _build_worldmonitor_prompt_block(self, review_language: str) -> str:
+        """构建全球风险事件区块；未启用或取数失败时返回空串。
+
+        设计 §6/§9。全程 fail-open：World Monitor 出问题只是少一个区块，
+        绝不能让整份复盘失败。
+        """
+        # 用 getattr：历史配置对象与测试用的轻量配置都可能没有这个字段。
+        if not getattr(self.config, "worldmonitor_events_enabled", False):
+            return ""
+
+        try:
+            service = self._worldmonitor_service()
+            now = datetime.now()
+            events = service.get_events_for_prompt(market=self.region, now=now)
+            freshness = service.get_all_freshness(now=now)
+            rendered = self._render_worldmonitor_block(
+                events_by_category=events,
+                freshness=freshness,
+                language=review_language,
+                now=now,
+            ).strip()
+            # 自带尾部分隔：模板里紧贴下一个标题插入，未启用时返回空串即可保证
+            # 现有提示词逐字节不变（不会多出空行）。
+            return f"{rendered}\n\n" if rendered else ""
+        except Exception as exc:
+            logger.warning(
+                "[大盘] %s action=build_worldmonitor_block status=failed error=%s",
+                self._log_context(),
+                exc,
+            )
+            return ""
+
     def _get_review_language(self) -> str:
         return resolve_report_language(self.config)
 
@@ -2282,6 +2326,10 @@ Concept lagging: {bottom_concepts_text if bottom_concepts_text else "N/A"}"""
             if kr_sections:
                 stats_block = "\n\n".join(kr_sections)
 
+        # World Monitor 全球风险事件（默认关闭）。未启用时为空串，
+        # 三个语言模板都以 f-string 直接展开，因此提示词逐字节不变。
+        worldmonitor_block = self._build_worldmonitor_prompt_block(review_language)
+
         data_no_indices_hint = (
             "注意：由于行情数据获取失败，请主要根据【市场新闻】进行定性分析和总结，不要编造具体的指数点位。"
             if not indices_text
@@ -2377,7 +2425,7 @@ Concept lagging: {bottom_concepts_text if bottom_concepts_text else "N/A"}"""
 
 {data_limits_block}
 
-## Market News
+{worldmonitor_block}## Market News
 {news_placeholder}
 
 {data_no_indices_hint}
@@ -2432,7 +2480,7 @@ Output the report content directly, no extra commentary.
 
 {sector_block}
 
-## 시장 뉴스
+{worldmonitor_block}## 시장 뉴스
 {news_placeholder}
 
 {data_no_indices_hint}
@@ -2501,7 +2549,7 @@ Output the report content directly, no extra commentary.
 
 {data_limits_block}
 
-## 市场新闻
+{worldmonitor_block}## 市场新闻
 {news_placeholder}
 
 {data_no_indices_hint}
