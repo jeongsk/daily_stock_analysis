@@ -34,7 +34,6 @@ from src.services.worldmonitor_events import (
     normalize_acled_event,
     normalize_energy_disruption,
     normalize_internet_outage,
-    render_worldmonitor_prompt_block,
 )
 from src.storage import WorldEvent
 
@@ -373,6 +372,62 @@ class WorldMonitorService:
         return results
 
     # ------------------------------------------------------------------
+    # 诊断（只读，设计 §12）
+    # ------------------------------------------------------------------
+
+    def get_events_diagnostics(self, *, now: Optional[datetime] = None) -> Dict[str, Any]:
+        """事件同步的低敏感度只读摘要。不新增公开端点，附加在既有状态上。"""
+        now = now or datetime.now()
+        enabled = bool(
+            self.config.worldmonitor_enabled and self.config.worldmonitor_events_enabled
+        )
+
+        categories: Dict[str, Dict[str, Any]] = {}
+        for category in CATEGORIES:
+            freshness = self.get_freshness(category, now=now)
+            categories[category] = {
+                "state": freshness.state,
+                "last_success_at": _iso(freshness.last_success_at),
+                "last_nonempty_at": _iso(freshness.last_nonempty_at),
+                "can_claim_no_events": freshness.can_claim_no_events,
+                "stored_events": self._safe_count(category, now=now),
+                "detail": sanitize_diagnostic_text(freshness.detail or "", max_length=200)
+                or None,
+            }
+
+        return {
+            "enabled": enabled,
+            "categories": categories,
+            # unmapped 持续增长意味着上游在提供 denorm 之前的行（发生地未知）。
+            # 这些行被有意排除在提示词之外，运维需要能看到它的规模（设计 §8.1）。
+            "unmapped_events": self._safe_scope_count("unmapped"),
+        }
+
+    def get_status_payload(self, *, now: Optional[datetime] = None) -> Dict[str, Any]:
+        """既有 status 契约 + 附加的事件摘要。原有键不变，纯增量。"""
+        payload: Dict[str, Any] = dict(self.get_status().to_dict())
+        payload["events"] = self.get_events_diagnostics(now=now)
+        return payload
+
+    def _safe_count(self, category: str, *, now: datetime) -> int:
+        try:
+            return len(
+                self.repo.list_events(
+                    now=now,
+                    categories=[category],
+                    lookback_days=self.config.worldmonitor_event_lookback_days,
+                )
+            )
+        except Exception:  # pragma: no cover - 诊断读失败不应抛给调用方
+            return 0
+
+    def _safe_scope_count(self, scope: str) -> int:
+        try:
+            return self.repo.count_by_scope(scope)
+        except Exception:  # pragma: no cover
+            return 0
+
+    # ------------------------------------------------------------------
     # 内部工具
     # ------------------------------------------------------------------
 
@@ -403,3 +458,7 @@ class WorldMonitorService:
             write=self.config.worldmonitor_read_timeout_seconds,
             pool=self.config.worldmonitor_connect_timeout_seconds,
         )
+
+
+def _iso(value: Optional[datetime]) -> Optional[str]:
+    return value.isoformat() if isinstance(value, datetime) else None

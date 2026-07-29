@@ -141,7 +141,37 @@ GET {NEWSNOW_BASE_URL}/api/s?id=cls-hot
 - 回滚方案：最小回滚路径为 `revert this PR`；如仅需降级接入，可在运行时停用并清理本地资讯源（`sources` 与 `intelligence_items`）。
 ## World Monitor 集成边界
 
-World Monitor 可以通过 `scripts/worldmonitor-stack.sh` 与 DSA 一起本地运行。本阶段
-只提供连接配置与 `GET /api/v1/worldmonitor/status` 状态检查，不会读取、保存或合并
-World Monitor 事件，也不会改变资讯卡片、Prompt、市场复盘或投资评分。事件契约、
-时间戳可复现性和回测验证将在后续独立阶段完成。
+World Monitor 可以通过 `scripts/worldmonitor-stack.sh` 与 DSA 一起本地运行。
+`GET /api/v1/worldmonitor/status` 提供连接状态检查。
+
+### 事件采集（`WORLDMONITOR_EVENTS_ENABLED`，默认关闭）
+
+开启后 DSA 会在**市场复盘开始前**同步一次三个类别的事件，写入独立的
+`world_events` 表，并注入**市场复盘提示词**。
+
+设计：`docs/superpowers/specs/2026-07-29-worldmonitor-market-review-events-design.md`
+
+| 类别 | 上游端点 |
+| --- | --- |
+| 地缘冲突 | `/api/conflict/v1/list-acled-events` |
+| 基础设施中断 | `/api/infrastructure/v1/list-internet-outages` |
+| 供应链与能源 | `/api/supply-chain/v1/list-energy-disruptions` |
+
+边界：
+
+- **仅影响市场复盘。** 个股分析、评分、买卖判断与 DSA liveness 均不受影响。
+- **不与 `intelligence_items` 合并。** 这些是带发生时刻与持续区间的结构化事件，
+  去重键与时间语义都与条目化资讯不同。
+- **同时保存原始发生时刻与 DSA 采集时刻**，供审计、重放与未来信息泄漏防护使用。
+  发生时刻晚于采集时刻的记录直接丢弃。
+- **全程 fail-open。** World Monitor 不可用时复盘使用已存事件继续运行。
+- 保留期默认 90 天，超期按发生时刻清理。
+
+关于"没有事件"与"无法确认"：上游在缺少数据源 API key 时会长期返回 HTTP 200 +
+空数组。因此 DSA 额外记录"最后一次拿到非空结果"的时刻，只有当某个类别在回溯窗口内
+确实产出过事件时，提示词才允许写"无事件"；否则一律标记为"无法确认"。
+`GET /api/v1/worldmonitor/status` 的 `events` 字段会区分 `unverified`
+（可达但产不出事件，通常是上游缺 key）与 `unavailable`（不可达）。
+
+后续阶段：行业/板块暴露度映射、阻断未来信息泄漏的回测验证，以及仅在确认有效后
+才考虑影响个股判断。
