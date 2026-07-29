@@ -1809,6 +1809,7 @@ class ConditionalOrderApiTestCase(unittest.TestCase):
 
     def test_create_approve_dry_run_round_trip_with_verified_session(self) -> None:
         fetcher = FakeConditionalTossFetcher()
+        expire_date = (_now_kst_naive().date() + timedelta(days=1)).isoformat()
         with patch("api.v1.endpoints.portfolio.is_auth_enabled", return_value=True), patch(
             "api.v1.endpoints.portfolio.verify_session", return_value=True
         ), patch("src.services.portfolio_order_service.TossFetcher") as mock_cls:
@@ -1825,7 +1826,7 @@ class ConditionalOrderApiTestCase(unittest.TestCase):
                     "trigger_price": 65000,
                     "limit_price": 64500,
                     "quantity": 1,
-                    "expire_date": "2026-07-26",
+                    "expire_date": expire_date,
                 },
             )
             self.assertEqual(create_resp.status_code, 200, create_resp.text)
