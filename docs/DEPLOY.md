@@ -520,3 +520,35 @@ A: 每次运行约 2-5 分钟，一个月 22 个工作日 = 44-110 分钟，远�
 ---
 
 **祝部署顺利！🎉**
+## World Monitor 本地联动（可选）
+
+World Monitor 以固定 Git submodule 独立维护，采用其上游 Dockerfile 本地构建，
+不会把 AGPL-3.0-only 源码合并进本项目的 MIT 源码。首次使用：
+
+```bash
+git submodule update --init --recursive
+cp .env.example .env
+openssl rand -hex 32  # 分别生成 RELAY_SHARED_SECRET、REDIS_PASSWORD、REDIS_TOKEN
+./scripts/worldmonitor-stack.sh validate
+./scripts/worldmonitor-stack.sh up
+```
+
+DSA WebUI 默认位于 `http://localhost:8001`，World Monitor 位于
+`http://localhost:3000`。常用命令：
+
+```bash
+./scripts/worldmonitor-stack.sh status
+./scripts/worldmonitor-stack.sh logs
+./scripts/worldmonitor-stack.sh seed
+./scripts/worldmonitor-stack.sh down
+```
+
+`down` 不删除 Redis volume。World Monitor 不可用时，DSA 仍使用原有数据源继续运行；
+`GET /api/v1/worldmonitor/status` 仅报告可选依赖状态。当前阶段不会将 World Monitor
+数据写入分析上下文或改变投资评分。
+
+AIS 船舶跟踪是 opt-in 功能：上游 relay 实际运行时要求 `AISSTREAM_API_KEY`。未配置时
+默认栈不会启动 relay；在 `.env` 设置该键后，运行脚本会自动启用 `ais` profile。
+
+更新 World Monitor 时必须同时更新 submodule 固定 commit、Compose 兼容性验证和
+相关测试。回滚时恢复上一个已验证的 submodule commit 后重新构建即可。

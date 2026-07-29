@@ -139,3 +139,9 @@ GET {NEWSNOW_BASE_URL}/api/s?id=cls-hot
 - Refs: `#1707`
 - 兼容性结论：本次仅新增本地资讯消费链路，不改模型名/provider/base URL/默认模型策略/回退策略/保存前清理逻辑/运行时配置迁移。`news_context` 与 `market_review_payload` 的扩展为 best-effort 追加，不影响既有契约与兼容性边界。
 - 回滚方案：最小回滚路径为 `revert this PR`；如仅需降级接入，可在运行时停用并清理本地资讯源（`sources` 与 `intelligence_items`）。
+## World Monitor 集成边界
+
+World Monitor 可以通过 `scripts/worldmonitor-stack.sh` 与 DSA 一起本地运行。本阶段
+只提供连接配置与 `GET /api/v1/worldmonitor/status` 状态检查，不会读取、保存或合并
+World Monitor 事件，也不会改变资讯卡片、Prompt、市场复盘或投资评分。事件契约、
+时间戳可复现性和回测验证将在后续独立阶段完成。

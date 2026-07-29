@@ -1,0 +1,15 @@
+FROM node:24-alpine
+
+RUN apk add --no-cache coreutils
+WORKDIR /worldmonitor
+
+COPY external/worldmonitor/scripts/package.json external/worldmonitor/scripts/package-lock.json ./scripts/
+RUN npm ci --prefix scripts --omit=dev --omit=optional --ignore-scripts
+
+COPY external/worldmonitor/scripts ./scripts
+COPY external/worldmonitor/shared ./shared
+COPY external/worldmonitor/data ./data
+COPY docker/worldmonitor/run-seeder-loop.sh /usr/local/bin/run-seeder-loop
+
+RUN chmod +x /usr/local/bin/run-seeder-loop
+ENTRYPOINT ["/usr/local/bin/run-seeder-loop"]

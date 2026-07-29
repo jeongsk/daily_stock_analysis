@@ -1,0 +1,143 @@
+services:
+  analyzer:
+    environment:
+      WORLDMONITOR_ENABLED: "${WORLDMONITOR_ENABLED:-true}"
+      WORLDMONITOR_BASE_URL: "http://worldmonitor:8080"
+    networks:
+      - default
+      - worldmonitor
+
+  server:
+    environment:
+      WORLDMONITOR_ENABLED: "${WORLDMONITOR_ENABLED:-true}"
+      WORLDMONITOR_BASE_URL: "http://worldmonitor:8080"
+    networks:
+      - default
+      - worldmonitor
+
+  worldmonitor:
+    build:
+      context: ../external/worldmonitor
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${WORLDMONITOR_PORT:-3000}:8080"
+    environment:
+      UPSTASH_REDIS_REST_URL: "http://worldmonitor-redis-rest:80"
+      UPSTASH_REDIS_REST_TOKEN: "${REDIS_TOKEN:?REDIS_TOKEN is required}"
+      LOCAL_API_PORT: "46123"
+      LOCAL_API_MODE: "docker"
+      LOCAL_API_CLOUD_FALLBACK: "false"
+      WS_RELAY_URL: "http://worldmonitor-ais-relay:3004"
+      RELAY_SHARED_SECRET: "${RELAY_SHARED_SECRET:?RELAY_SHARED_SECRET is required}"
+      LLM_API_URL: "${LLM_API_URL:-}"
+      LLM_API_KEY: "${LLM_API_KEY:-}"
+      LLM_MODEL: "${LLM_MODEL:-}"
+      GROQ_API_KEY: "${GROQ_API_KEY:-}"
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      FINNHUB_API_KEY: "${FINNHUB_API_KEY:-}"
+      FRED_API_KEY: "${FRED_API_KEY:-}"
+      EIA_API_KEY: "${EIA_API_KEY:-}"
+      ACLED_EMAIL: "${ACLED_EMAIL:-}"
+      ACLED_PASSWORD: "${ACLED_PASSWORD:-}"
+      ACLED_ACCESS_TOKEN: "${ACLED_ACCESS_TOKEN:-}"
+      NASA_FIRMS_API_KEY: "${NASA_FIRMS_API_KEY:-}"
+      CLOUDFLARE_API_TOKEN: "${CLOUDFLARE_API_TOKEN:-}"
+      AVIATIONSTACK_API: "${AVIATIONSTACK_API:-}"
+      AISSTREAM_API_KEY: "${AISSTREAM_API_KEY:-}"
+    depends_on:
+      worldmonitor-redis-rest:
+        condition: service_started
+    networks:
+      - worldmonitor
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    # Upstream image healthcheck probes port 80 although the root self-hosting
+    # image listens on 8080. Keep container liveness separate from data freshness.
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+  worldmonitor-redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --requirepass
+      - "${REDIS_PASSWORD:?REDIS_PASSWORD is required}"
+      - --maxmemory
+      - 256mb
+      - --maxmemory-policy
+      - allkeys-lru
+    volumes:
+      - worldmonitor-redis-data:/data
+    networks:
+      - worldmonitor
+
+  worldmonitor-redis-rest:
+    build:
+      context: ../external/worldmonitor/docker
+      dockerfile: Dockerfile.redis-rest
+    restart: unless-stopped
+    environment:
+      SRH_TOKEN: "${REDIS_TOKEN:?REDIS_TOKEN is required}"
+      SRH_CONNECTION_STRING: "redis://:${REDIS_PASSWORD:?REDIS_PASSWORD is required}@worldmonitor-redis:6379"
+    depends_on:
+      - worldmonitor-redis
+    networks:
+      - worldmonitor
+
+  worldmonitor-ais-relay:
+    build:
+      context: ../external/worldmonitor
+      dockerfile: Dockerfile.relay
+    restart: unless-stopped
+    profiles: ["ais"]
+    environment:
+      RELAY_SHARED_SECRET: "${RELAY_SHARED_SECRET:?RELAY_SHARED_SECRET is required}"
+      AISSTREAM_API_KEY: "${AISSTREAM_API_KEY:-}"
+      UPSTASH_REDIS_REST_URL: "http://worldmonitor-redis-rest:80"
+      UPSTASH_REDIS_REST_TOKEN: "${REDIS_TOKEN:?REDIS_TOKEN is required}"
+      UPSTASH_ALLOW_INSECURE_HTTP: "true"
+      PORT: "3004"
+    depends_on:
+      - worldmonitor-redis-rest
+    networks:
+      - worldmonitor
+
+  worldmonitor-seeder:
+    build:
+      context: ..
+      dockerfile: docker/worldmonitor/Dockerfile.seeder
+    restart: unless-stopped
+    environment:
+      REDIS_TOKEN: "${REDIS_TOKEN:?REDIS_TOKEN is required}"
+      UPSTASH_REDIS_REST_URL: "http://worldmonitor-redis-rest:80"
+      UPSTASH_REDIS_REST_TOKEN: "${REDIS_TOKEN:?REDIS_TOKEN is required}"
+      WORLDMONITOR_SEED_INTERVAL_SECONDS: "${WORLDMONITOR_SEED_INTERVAL_SECONDS:-1800}"
+      SEED_TIMEOUT: "${WORLDMONITOR_SEED_TIMEOUT_SECONDS:-1800}"
+      GROQ_API_KEY: "${GROQ_API_KEY:-}"
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      FINNHUB_API_KEY: "${FINNHUB_API_KEY:-}"
+      FRED_API_KEY: "${FRED_API_KEY:-}"
+      EIA_API_KEY: "${EIA_API_KEY:-}"
+      ACLED_EMAIL: "${ACLED_EMAIL:-}"
+      ACLED_PASSWORD: "${ACLED_PASSWORD:-}"
+      ACLED_ACCESS_TOKEN: "${ACLED_ACCESS_TOKEN:-}"
+      NASA_FIRMS_API_KEY: "${NASA_FIRMS_API_KEY:-}"
+    depends_on:
+      - worldmonitor-redis-rest
+    networks:
+      - worldmonitor
+
+volumes:
+  worldmonitor-redis-data:
+
+networks:
+  worldmonitor:

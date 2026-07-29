@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+
+- [新功能] 新增 World Monitor 本地自托管集成基础：通过 Docker Compose 从固定 Git submodule 源码构建并运行仪表盘/API、可选 AIS relay、Redis REST 和周期 seeder；DSA 通过故障隔离的只读状态 API 检查连接。本阶段不将全球事件注入分析提示词或投资评分。
 - [文档] `AGENTS.md`에서 코드베이스로 직접 확인 가능한 중복 정보 제거(§3 디렉터리 목록, §6 CI 검사 항목 표). 규칙 의미·검증 요구사항 변경 없음이며, 미러 문서(`.github/copilot-instructions.md`, `.github/instructions/*.instructions.md`)에는 해당 내용이 없어 동기화 불필요.
 - [新功能] 스케줄러 정체 시 자동 복구를 위한 opt-in `autoheal` 서비스를 `docker/docker-compose.yml`에 추가. Docker는 헬스체크 실패를 unhealthy로 표시만 하고 재시작하지 않으므로(restart 정책은 프로세스 종료에만 반응), 스케줄러 스레드가 멈춰도 프로세스는 살아 있어 외부 감시 없이는 사람이 발견할 때까지 방치된다(2026-07-24에 14.5시간 무증상). `autoheal` 라벨이 붙은 컨테이너(현재 `analyzer`)가 계속 unhealthy면 재시작한다. compose `profiles`로 기본 비활성 — `docker.sock` 마운트가 호스트 root 권한과 동등하므로 모든 배포에 강제하지 않는다. 활성화: `docker-compose -f ./docker/docker-compose.yml up -d analyzer autoheal`. 활성화 시 `SCHEDULER_HEARTBEAT_MAX_AGE_SECONDS`는 경고 임계값이 아니라 강제 재시작 기한이 된다.
 - [改进] 스케줄러 존재 표시를 분석 진척도에 따라서도 갱신하도록 개선(`StockAnalysisPipeline._emit_progress`). 스케줄러 루프는 정기 분석을 동기 실행하므로, 루프 자체만 표시를 남기면 「정상이지만 오래 걸리는 한 회차」와 「루프 정지」가 헬스체크 입장에서 구별되지 않는다(autoheal을 붙이면 전자가 오탐으로 재시작된다). 판정 기준을 「한 회차 총 소요 시간」에서 「얼마 동안 아무 진척이 없었는가」로 바꿔 오탐을 제거. 정기 실행에는 progress 콜백이 없으므로 콜백 null 검사보다 앞에서 갱신한다.

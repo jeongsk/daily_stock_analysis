@@ -468,3 +468,36 @@ A: Each run takes about 2-5 minutes, 22 workdays per month = 44-110 minutes, wel
 ---
 
 **Wishing you a smooth deployment!**
+## Optional local World Monitor integration
+
+World Monitor is maintained as a pinned Git submodule and built with its upstream
+Dockerfiles. Its AGPL-3.0-only source remains separate from this project's MIT source.
+
+```bash
+git submodule update --init --recursive
+cp .env.example .env
+openssl rand -hex 32  # generate separate RELAY_SHARED_SECRET, REDIS_PASSWORD, REDIS_TOKEN values
+./scripts/worldmonitor-stack.sh validate
+./scripts/worldmonitor-stack.sh up
+```
+
+The DSA WebUI is available at `http://localhost:8001` by default and World Monitor at
+`http://localhost:3000`. Operational commands:
+
+```bash
+./scripts/worldmonitor-stack.sh status
+./scripts/worldmonitor-stack.sh logs
+./scripts/worldmonitor-stack.sh seed
+./scripts/worldmonitor-stack.sh down
+```
+
+`down` preserves the Redis volume. A World Monitor outage does not stop DSA analysis;
+`GET /api/v1/worldmonitor/status` reports only the optional dependency status. This
+phase does not inject World Monitor data into analysis context or investment scores.
+
+AIS vessel tracking is opt-in because the upstream relay requires `AISSTREAM_API_KEY`
+at runtime. Without it, the default stack omits the relay. Setting the key in `.env`
+makes the runner enable the `ais` profile automatically.
+
+Update the pinned submodule commit only together with Compose compatibility tests.
+Rollback by restoring the previous verified submodule commit and rebuilding the stack.

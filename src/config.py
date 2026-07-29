@@ -1013,6 +1013,10 @@ class Config:
     news_intel_max_items_per_source: int = 50  # 单次每个资讯源最多采集条数
     news_intel_auto_fetch_enabled: bool = False  # 是否在分析前自动初始化并拉取本地资讯源
     newsnow_base_url: str = "https://newsnow.busiyi.world"  # NewsNow HTTP API base URL (数据源侧，不影响 LLM/provider base URL)
+    worldmonitor_enabled: bool = False
+    worldmonitor_base_url: str = "http://127.0.0.1:3000"
+    worldmonitor_connect_timeout_seconds: float = 2.0
+    worldmonitor_read_timeout_seconds: float = 5.0
     news_card_merge_intel_enabled: bool = True  # 报告页相关资讯卡片是否合并 intelligence_items 池（opt-out，失败 fail-open）
     news_translation_unavailable_ttl_hours: int = 24  # 翻译失败缓存的重试间隔（小时），仅影响 unavailable 行
     bias_threshold: float = 5.0  # 乖离率阈值（%），超过此值提示不追高
@@ -1967,6 +1971,25 @@ class Config:
                 False,
             ),
             newsnow_base_url=((os.getenv('NEWSNOW_BASE_URL') or '').strip().rstrip('/') or 'https://newsnow.busiyi.world'),
+            worldmonitor_enabled=parse_env_bool(os.getenv('WORLDMONITOR_ENABLED'), False),
+            worldmonitor_base_url=(
+                (os.getenv('WORLDMONITOR_BASE_URL') or '').strip().rstrip('/')
+                or 'http://127.0.0.1:3000'
+            ),
+            worldmonitor_connect_timeout_seconds=parse_env_float(
+                os.getenv('WORLDMONITOR_CONNECT_TIMEOUT_SECONDS'),
+                2.0,
+                field_name='WORLDMONITOR_CONNECT_TIMEOUT_SECONDS',
+                minimum=0.1,
+                maximum=30.0,
+            ),
+            worldmonitor_read_timeout_seconds=parse_env_float(
+                os.getenv('WORLDMONITOR_READ_TIMEOUT_SECONDS'),
+                5.0,
+                field_name='WORLDMONITOR_READ_TIMEOUT_SECONDS',
+                minimum=0.1,
+                maximum=60.0,
+            ),
             news_card_merge_intel_enabled=parse_env_bool(
                 os.getenv('NEWS_CARD_MERGE_INTEL_ENABLED'),
                 True,

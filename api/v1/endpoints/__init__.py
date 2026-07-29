@@ -10,6 +10,7 @@ API v1 Endpoints 模块初始化
 
 from api.v1.endpoints import (
     health,
+    worldmonitor,
     analysis,
     history,
     stocks,
@@ -25,6 +26,7 @@ from api.v1.endpoints import (
 )
 __all__ = [
     "health",
+    "worldmonitor",
     "analysis",
     "history",
     "stocks",

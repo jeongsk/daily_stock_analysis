@@ -5009,6 +5009,7 @@ def _infer_category(key: str) -> str:
             "ANSPIRE",
             "SEARXNG",
             "NEWS_",
+            "WORLDMONITOR_",
             "BIAS_",
         )
     ) or key in ("ENABLE_REALTIME_QUOTE", "ENABLE_CHIP_DISTRIBUTION"):
