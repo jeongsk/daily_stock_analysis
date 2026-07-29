@@ -2056,7 +2056,10 @@ class Config:
                 500,
                 field_name='WORLDMONITOR_EVENT_MAX_PER_SYNC',
                 minimum=1,
-                maximum=20000,
+                # 上界刻意压低：总预算只在类别之间检查，因此单个类别的适配开销
+                # （每条一次 SELECT）无法被预算打断，上界过高会让一个类别自己
+                # 就跑穿整次同步的截止时间。
+                maximum=5000,
             ),
             news_card_merge_intel_enabled=parse_env_bool(
                 os.getenv('NEWS_CARD_MERGE_INTEL_ENABLED'),

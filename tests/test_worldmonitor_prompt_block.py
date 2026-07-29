@@ -154,6 +154,25 @@ def test_ongoing_events_are_marked(language):
 
 
 @pytest.mark.parametrize("language", LANGUAGES)
+@pytest.mark.parametrize("state", ["fresh", "stale", "unavailable", "unverified"])
+def test_section_heading_label_is_short(language, state):
+    """Regression: the label used to be sliced out of a full sentence with
+    `.split(".")`. Chinese ends sentences with a fullwidth period, so the split
+    was a no-op there and the whole sentence leaked into the heading."""
+    freshness = {
+        c: CategoryFreshness(
+            category=c, state=state, can_claim_no_events=(state == "fresh")
+        )
+        for c in (CATEGORY_CONFLICT, CATEGORY_OUTAGE, CATEGORY_ENERGY)
+    }
+    block = _render(freshness=freshness, language=language)
+    heading = next(line for line in block.splitlines() if line.startswith("### "))
+    label = heading[heading.rindex("(") + 1 : heading.rindex(")")]
+    assert len(label) <= 20
+    assert "." not in label and "。" not in label
+
+
+@pytest.mark.parametrize("language", LANGUAGES)
 def test_block_carries_a_heading(language):
     assert _render(language=language).strip().startswith("##")
 

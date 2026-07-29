@@ -25,19 +25,16 @@ from src.repositories.world_event_repo import PROMPT_SCOPES, WorldEventRepositor
 from src.services.run_diagnostics import sanitize_diagnostic_text
 from src.services.worldmonitor_events import (
     CATEGORIES,
-    CATEGORY_CONFLICT,
-    CATEGORY_ENDPOINTS,
-    CATEGORY_ENERGY,
-    CATEGORY_OUTAGE,
     CategoryFreshness,
     FreshnessState,
-    normalize_acled_event,
-    normalize_energy_disruption,
-    normalize_internet_outage,
+    build_category_specs,
 )
 from src.storage import WorldEvent
 
 logger = logging.getLogger(__name__)
+
+# 每个类别的端点、响应字段、归一化函数与是否接受时间窗口，集中在一处声明。
+_CATEGORY_SPECS = build_category_specs()
 
 WorldMonitorStatusName = Literal[
     "disabled", "healthy", "degraded", "unreachable", "misconfigured"
@@ -49,13 +46,6 @@ __all__ = [
     "WorldMonitorService",
     "WorldMonitorStatus",
 ]
-
-# 每个类别的响应数组字段名与归一化函数。
-_CATEGORY_SPECS = {
-    CATEGORY_CONFLICT: ("events", normalize_acled_event),
-    CATEGORY_OUTAGE: ("outages", normalize_internet_outage),
-    CATEGORY_ENERGY: ("events", normalize_energy_disruption),
-}
 
 
 @dataclass(frozen=True)
@@ -101,7 +91,6 @@ class WorldMonitorService:
     ):
         self.config = config or get_config()
         self._repo = repo
-        self._last_sync_at: Optional[datetime] = None
 
     @property
     def repo(self) -> WorldEventRepository:
@@ -198,8 +187,6 @@ class WorldMonitorService:
                 upstream_unavailable=outcome.upstream_unavailable,
             )
 
-        self._last_sync_at = now
-
         if any(outcome.status == "ok" for outcome in outcomes.values()):
             try:
                 self.repo.prune(
@@ -215,13 +202,13 @@ class WorldMonitorService:
     def _sync_category(
         self, category: str, *, base_url: str, now: datetime
     ) -> CategorySyncOutcome:
-        endpoint = CATEGORY_ENDPOINTS[category]
-        array_key, normalizer = _CATEGORY_SPECS[category]
+        spec = _CATEGORY_SPECS[category]
+        array_key, normalizer = spec.array_key, spec.normalizer
 
         try:
             response = httpx.get(
-                f"{base_url}{endpoint}",
-                params=self._category_params(category, now=now),
+                f"{base_url}{spec.endpoint}",
+                params=self._category_params(spec, now=now),
                 timeout=self._timeout(),
                 follow_redirects=False,
             )
@@ -294,14 +281,13 @@ class WorldMonitorService:
             category=category, status="ok", event_count=stored, truncated=truncated
         )
 
-    def _category_params(self, category: str, *, now: datetime) -> Dict[str, Any]:
+    def _category_params(self, spec: Any, *, now: datetime) -> Dict[str, Any]:
         """按类别构造查询参数。
 
-        listAcledEvents 支持 start/end，缺省是 30 天窗口且缓存未命中时会真的去
-        请求受限流的第三方；这里只要我们实际会读取的回溯窗口，不多取。
-        另外两个端点是 seeder 快照读取，不接受时间窗口参数。
+        接受时间窗口的端点（目前只有 listAcledEvents）缺省是 30 天窗口，且缓存
+        未命中时会真的去请求受限流的第三方；这里只要我们实际会读取的回溯窗口。
         """
-        if category != CATEGORY_CONFLICT:
+        if not spec.accepts_time_window:
             return {}
         start = now - timedelta(days=self.config.worldmonitor_event_lookback_days)
         return {
@@ -428,6 +414,11 @@ class WorldMonitorService:
             self.config.worldmonitor_enabled and self.config.worldmonitor_events_enabled
         )
 
+        # 关闭后表里的行还会按保留期留 90 天，若不提前返回，/status 会继续为一个
+        # 已停用的功能付查询代价。
+        if not enabled:
+            return {"enabled": False, "categories": {}, "unmapped_events": 0}
+
         categories: Dict[str, Dict[str, Any]] = {}
         for category in CATEGORIES:
             freshness = self.get_freshness(category, now=now)
@@ -456,13 +447,13 @@ class WorldMonitorService:
         return payload
 
     def _safe_count(self, category: str, *, now: datetime) -> int:
+        # 用计数查询而不是取回整窗口的行再 len()：这个方法在每次
+        # /api/v1/worldmonitor/status 请求里按类别各跑一次。
         try:
-            return len(
-                self.repo.list_events(
-                    now=now,
-                    categories=[category],
-                    lookback_days=self.config.worldmonitor_event_lookback_days,
-                )
+            return self.repo.count_events(
+                now=now,
+                category=category,
+                lookback_days=self.config.worldmonitor_event_lookback_days,
             )
         except Exception:  # pragma: no cover - 诊断读失败不应抛给调用方
             return 0
@@ -480,16 +471,14 @@ class WorldMonitorService:
     def _within_cooldown(self, now: datetime) -> bool:
         """冷却判断只能基于持久化状态。
 
-        ``run_market_review`` 每次调用都新建一个 service 实例，所以实例属性在
-        生产路径上永远是 None —— 用它做冷却等于没有冷却，每次复盘都会重新打一遍
+        ``run_market_review`` 每次调用都新建一个 service 实例，所以进程内状态在
+        生产路径上永远是空的 —— 用它做冷却等于没有冷却，每次复盘都会重新打一遍
         上游（其中 ACLED 在缓存未命中时会真的请求受限流的第三方）。
         """
         try:
             last_attempt = self.repo.get_last_attempt_at()
         except Exception:  # pragma: no cover - 读状态失败时宁可重新同步
-            last_attempt = None
-        if last_attempt is None:
-            last_attempt = self._last_sync_at
+            return False
         if last_attempt is None:
             return False
         elapsed = (now - last_attempt).total_seconds()

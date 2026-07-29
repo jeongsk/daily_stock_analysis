@@ -34,6 +34,7 @@ class CategoryFreshness:
     can_claim_no_events: bool = False
     detail: Optional[str] = None
 
+
 CATEGORY_CONFLICT = "geopolitical_conflict"
 CATEGORY_OUTAGE = "infrastructure_outage"
 CATEGORY_ENERGY = "supply_chain_energy"
@@ -49,6 +50,49 @@ CATEGORY_ENDPOINTS: Dict[str, str] = {
     CATEGORY_OUTAGE: ENDPOINT_OUTAGE,
     CATEGORY_ENERGY: ENDPOINT_ENERGY,
 }
+
+
+@dataclass(frozen=True)
+class CategorySpec:
+    """一个类别所需的全部上游知识，集中一处声明。
+
+    端点、响应数组字段名、归一化函数、是否接受时间窗口 —— 这四件事以前散在两个
+    模块的两张表和一个 if 分支里。设计的后续阶段还要加自然灾害等类别，分散声明
+    会让每加一个类别就要改三处，而那个 if 会退化成 `if category in (...)`。
+    """
+
+    category: str
+    endpoint: str
+    # 响应里承载数组的字段名：conflict/energy 是 `events`，outage 是 `outages`。
+    array_key: str
+    normalizer: Any
+    # 只有 listAcledEvents 接受 start/end；另两个是 seeder 快照读取，不收时间窗口。
+    accepts_time_window: bool = False
+
+
+def build_category_specs() -> Dict[str, "CategorySpec"]:
+    return {
+        CATEGORY_CONFLICT: CategorySpec(
+            category=CATEGORY_CONFLICT,
+            endpoint=ENDPOINT_CONFLICT,
+            array_key="events",
+            normalizer=normalize_acled_event,
+            accepts_time_window=True,
+        ),
+        CATEGORY_OUTAGE: CategorySpec(
+            category=CATEGORY_OUTAGE,
+            endpoint=ENDPOINT_OUTAGE,
+            array_key="outages",
+            normalizer=normalize_internet_outage,
+        ),
+        CATEGORY_ENERGY: CategorySpec(
+            category=CATEGORY_ENERGY,
+            endpoint=ENDPOINT_ENERGY,
+            array_key="events",
+            normalizer=normalize_energy_disruption,
+        ),
+    }
+
 
 # ISO2 国家码到 DSA 市场的 1:1 映射（设计 §8）。
 # 刻意不编码跨国传导关系（例如中国事件对港股的影响）：那属于未经验证的因果，
@@ -313,6 +357,8 @@ _PROMPT_TEXT: Dict[str, Dict[str, str]] = {
         CATEGORY_ENERGY: "공급망·에너지",
         "no_events": "해당 없음",
         "unverified": "확인할 수 없습니다. 이 표기는 이상 없음을 뜻하지 않습니다.",
+        "unverified_label": "확인 불가",
+        "stale_label": "갱신 실패",
         "stale": "최신 확인 실패. 아래는 마지막으로 확인된 시점의 데이터입니다.",
         "fresh_label": "최신",
         "ongoing": "진행 중",
@@ -330,6 +376,8 @@ _PROMPT_TEXT: Dict[str, Dict[str, str]] = {
         CATEGORY_ENERGY: "Supply chain and energy",
         "no_events": "None in this window",
         "unverified": "Could not be verified. This does not mean nothing happened.",
+        "unverified_label": "unverified",
+        "stale_label": "not refreshed",
         "stale": "Not freshly confirmed. The entries below are from the last confirmed check.",
         "fresh_label": "current",
         "ongoing": "ongoing",
@@ -347,6 +395,8 @@ _PROMPT_TEXT: Dict[str, Dict[str, str]] = {
         CATEGORY_ENERGY: "供应链与能源",
         "no_events": "本窗口内无事件",
         "unverified": "无法确认。该标记不代表没有发生事件。",
+        "unverified_label": "无法确认",
+        "stale_label": "未刷新",
         "stale": "未能刷新确认，以下为最后一次确认时的数据。",
         "fresh_label": "最新",
         "ongoing": "进行中",
@@ -370,7 +420,10 @@ def render_worldmonitor_prompt_block(
 
     每个类别都会出现，即使为空 —— 悄悄省略一个类别会让模型默认它已被检查过。
     """
-    text = _PROMPT_TEXT.get(language) or _PROMPT_TEXT["en"]
+    # 走仓库统一的语言归一化，而不是自己 get/fallback：这个函数是模块级公开入口，
+    # 调用方可能传 "zh-CN"/"ko_KR" 这类别名，自建映射会静默退回英文，而且以后
+    # 中央别名表新增的写法也传不进来。
+    text = _PROMPT_TEXT[_normalize_language(language)]
 
     sections: List[str] = [text["heading"], "", text["intro"], ""]
     for category in CATEGORIES:
@@ -393,16 +446,25 @@ def render_worldmonitor_prompt_block(
     return "\n".join(sections).strip() + "\n"
 
 
+def _normalize_language(language: str) -> str:
+    """归一到 `_PROMPT_TEXT` 的键（其键集即 SUPPORTED_REPORT_LANGUAGES）。"""
+    from src.report_language import normalize_report_language
+
+    normalized = normalize_report_language(language)
+    return normalized if normalized in _PROMPT_TEXT else "zh"
+
+
 def _state_label(state: Optional[CategoryFreshness], text: Dict[str, str]) -> str:
-    if state is None:
-        return text["unverified"].split(".")[0]
-    if state.state == "fresh":
-        return text["fresh_label"]
-    return {
-        "stale": text["stale"].split(".")[0],
-        "unavailable": text["unverified"].split(".")[0],
-        "unverified": text["unverified"].split(".")[0],
-    }.get(state.state, text["fresh_label"])
+    """标题里的短标签。
+
+    刻意用独立的 label 键，而不是从完整句子里切分：中文用的是全角句号「。」，
+    按 ASCII 句点切分是空操作，会把整句话塞进标题。这种耦合在改文案时看不见。
+    """
+    if state is None or state.state in ("unavailable", "unverified"):
+        return text["unverified_label"]
+    if state.state == "stale":
+        return text["stale_label"]
+    return text["fresh_label"]
 
 
 def _render_row(row: Any, text: Dict[str, str]) -> str:

@@ -183,12 +183,6 @@ class MarketAnalyzer:
 
         return WorldMonitorService(self.config)
 
-    @staticmethod
-    def _render_worldmonitor_block(**kwargs) -> str:
-        from src.services.worldmonitor_events import render_worldmonitor_prompt_block
-
-        return render_worldmonitor_prompt_block(**kwargs)
-
     def _build_worldmonitor_prompt_block(self, review_language: str) -> str:
         """构建全球风险事件区块；未启用或取数失败时返回空串。
 
@@ -204,7 +198,11 @@ class MarketAnalyzer:
             now = datetime.now()
             events = service.get_events_for_prompt(market=self.region, now=now)
             freshness = service.get_all_freshness(now=now)
-            rendered = self._render_worldmonitor_block(
+            from src.services.worldmonitor_events import (
+                render_worldmonitor_prompt_block,
+            )
+
+            rendered = render_worldmonitor_prompt_block(
                 events_by_category=events,
                 freshness=freshness,
                 language=review_language,

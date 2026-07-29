@@ -306,6 +306,49 @@ def test_retention_prune_respects_a_shorter_window(repo):
     assert repo.prune(now=datetime(2026, 7, 29, 9, 0, 0), retention_days=7) == 1
 
 
+def test_market_filter_matches_whole_codes_not_substrings(repo):
+    """The market filter runs as a SQL LIKE over a JSON text column, so it must
+    match the quoted element and not merely the letters inside another code."""
+    repo.upsert_events(
+        [
+            _event(external_id="kr-row", markets=["kr"], scope="market"),
+            _event(external_id="hk-row", markets=["hk"], scope="market"),
+            _event(external_id="us-row", markets=["us"], scope="market"),
+        ],
+        collected_at=datetime(2026, 7, 29, 9, 0, 0),
+    )
+
+    rows = repo.list_events(now=datetime(2026, 7, 29, 9, 0, 0), markets=["kr"])
+    assert [r.external_id for r in rows] == ["kr-row"]
+
+
+def test_market_filter_always_includes_global_scope(repo):
+    """Global events are, by design, relevant to every market."""
+    repo.upsert_events(
+        [
+            _event(external_id="kr-row", markets=["kr"], scope="market"),
+            _event(external_id="global-row", markets=[], scope="global"),
+            _event(external_id="jp-row", markets=["jp"], scope="market"),
+        ],
+        collected_at=datetime(2026, 7, 29, 9, 0, 0),
+    )
+
+    rows = repo.list_events(now=datetime(2026, 7, 29, 9, 0, 0), markets=["kr"])
+    assert sorted(r.external_id for r in rows) == ["global-row", "kr-row"]
+
+
+def test_market_filter_matches_any_of_several_markets_on_one_row(repo):
+    repo.upsert_events(
+        [_event(external_id="multi", markets=["kr", "jp"], scope="market")],
+        collected_at=datetime(2026, 7, 29, 9, 0, 0),
+    )
+
+    for market in ("kr", "jp"):
+        rows = repo.list_events(now=datetime(2026, 7, 29, 9, 0, 0), markets=[market])
+        assert [r.external_id for r in rows] == ["multi"]
+    assert repo.list_events(now=datetime(2026, 7, 29, 9, 0, 0), markets=["us"]) == []
+
+
 def test_limit_is_applied_per_query(repo):
     repo.upsert_events(
         [_event(external_id=f"e{i}", occurred_at=datetime(2026, 7, 20) + timedelta(days=i))

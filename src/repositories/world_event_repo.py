@@ -13,7 +13,8 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
-from sqlalchemy import and_, delete, select
+from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy.exc import IntegrityError
 
 from src.storage import DatabaseManager, WorldEvent, WorldEventSyncState
 
@@ -40,12 +41,18 @@ class WorldEventRepository:
         *,
         collected_at: datetime,
     ) -> int:
-        """写入或更新归一化事件，返回实际落库的条数。
+        """写入或更新归一化事件，返回实际落库的条数（新增 + 更新）。
 
         重复同步以 ``(category, external_id)`` 去重。更新时刷新 ``ended_at`` /
         ``severity_rank`` 等会变化的字段，但 ``occurred_at`` 与 ``collected_at``
         保持首次观测值不变 —— 首次观测时刻是审计与回测重放的基准，不能被后续
         同步改写（设计 §4）。
+
+        注意返回值把"更新"也算进去，与 ``IntelligenceRepository.upsert_items``
+        只数新增不同。这里的计数会喂给 ``record_sync(event_count=...)``，回答的是
+        "上游这次给出事件了吗"，而不是"有没有新事件"。若只数新增，一组稳定不变的
+        事件在第二次同步后就会被判成"上游产不出事件"，从而错误地进入
+        ``unverified``（设计 §7.1）。
         """
         stored = 0
         with self.db.get_session() as session:
@@ -78,25 +85,33 @@ class WorldEventRepository:
                 ).scalar_one_or_none()
 
                 if row is None:
-                    session.add(
-                        WorldEvent(
-                            category=category,
-                            source=payload.get("source") or "worldmonitor",
-                            source_endpoint=payload.get("source_endpoint"),
-                            external_id=external_id,
-                            title=payload.get("title") or "",
-                            summary=payload.get("summary"),
-                            url=payload.get("url"),
-                            occurred_at=occurred_at,
-                            ended_at=payload.get("ended_at"),
-                            collected_at=collected_at,
-                            countries=_encode_json_list(payload.get("countries")),
-                            markets=_encode_json_list(payload.get("markets")),
-                            scope=payload.get("scope") or "unmapped",
-                            severity_rank=int(payload.get("severity_rank") or 0),
-                            raw_payload=_encode_json(payload.get("raw_payload")),
-                        )
-                    )
+                    # 与 IntelligenceRepository.upsert_items 同样的写法：select 与
+                    # insert 之间存在竞态窗口，唯一约束冲突时只丢这一条，不能让
+                    # 整批提交失败。
+                    try:
+                        with session.begin_nested():
+                            session.add(
+                                WorldEvent(
+                                    category=category,
+                                    source=payload.get("source") or "worldmonitor",
+                                    source_endpoint=payload.get("source_endpoint"),
+                                    external_id=external_id,
+                                    title=payload.get("title") or "",
+                                    summary=payload.get("summary"),
+                                    url=payload.get("url"),
+                                    occurred_at=occurred_at,
+                                    ended_at=payload.get("ended_at"),
+                                    collected_at=collected_at,
+                                    countries=_encode_json_list(payload.get("countries")),
+                                    markets=_encode_json_list(payload.get("markets")),
+                                    scope=payload.get("scope") or "unmapped",
+                                    severity_rank=int(payload.get("severity_rank") or 0),
+                                    raw_payload=_encode_json(payload.get("raw_payload")),
+                                )
+                            )
+                            session.flush()
+                    except IntegrityError:
+                        continue
                 else:
                     row.title = payload.get("title") or row.title
                     row.summary = payload.get("summary")
@@ -136,6 +151,19 @@ class WorldEventRepository:
         if scopes:
             conditions.append(WorldEvent.scope.in_(list(scopes)))
 
+        if markets:
+            # 市场过滤下推到 SQL。这里的谓词并不选择性强（global 事件按设计要进
+            # 所有市场），所以留在 Python 侧过滤等于把整个回溯窗口的行都实例化 ——
+            # 每行都带 raw_payload 大文本，而这段代码跑在复盘开始之前的内联路径上。
+            # markets 存为 JSON 文本数组，用带引号的 LIKE 匹配整个元素，避免
+            # 子串误命中（`"kr"` 不会匹配到别的市场码）。
+            conditions.append(
+                or_(
+                    WorldEvent.scope == "global",
+                    *[WorldEvent.markets.like(f'%"{market}"%') for market in markets],
+                )
+            )
+
         with self.db.get_session() as session:
             stmt = (
                 select(WorldEvent)
@@ -147,18 +175,9 @@ class WorldEventRepository:
                     WorldEvent.occurred_at.desc(),
                 )
             )
-            rows = list(session.execute(stmt).scalars().all())
-            # 市场过滤放在 Python 侧：markets 是 JSON 文本列，跨方言的数组包含
-            # 查询不可移植，而这里的候选集已被回溯窗口限制到很小的量级。
-            if markets:
-                wanted = set(markets)
-                rows = [
-                    row
-                    for row in rows
-                    if row.scope == "global" or wanted & set(row.market_list)
-                ]
             if limit is not None:
-                rows = rows[:limit]
+                stmt = stmt.limit(limit)
+            rows = list(session.execute(stmt).scalars().all())
             for row in rows:
                 session.expunge(row)
             return rows
@@ -175,10 +194,35 @@ class WorldEventRepository:
 
     def count_by_scope(self, scope: str) -> int:
         with self.db.get_session() as session:
-            rows = session.execute(
-                select(WorldEvent.id).where(WorldEvent.scope == scope)
-            ).all()
-            return len(rows)
+            return int(
+                session.execute(
+                    select(func.count(WorldEvent.id)).where(WorldEvent.scope == scope)
+                ).scalar_one()
+                or 0
+            )
+
+    def count_events(
+        self,
+        *,
+        now: datetime,
+        category: Optional[str] = None,
+        lookback_days: int = 30,
+    ) -> int:
+        """回溯窗口内的条数。诊断只要一个整数，不该把整窗口的行读进内存。"""
+        window_start = now - timedelta(days=max(1, lookback_days))
+        conditions = [
+            WorldEvent.occurred_at >= window_start,
+            WorldEvent.occurred_at <= now,
+        ]
+        if category:
+            conditions.append(WorldEvent.category == category)
+        with self.db.get_session() as session:
+            return int(
+                session.execute(
+                    select(func.count(WorldEvent.id)).where(and_(*conditions))
+                ).scalar_one()
+                or 0
+            )
 
     # ------------------------------------------------------------------
     # 同步状态
