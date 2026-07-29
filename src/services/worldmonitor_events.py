@@ -277,10 +277,13 @@ def _from_epoch_millis(value: Any) -> Optional[datetime]:
 
 
 def _from_iso(value: Any) -> Optional[datetime]:
-    """ISO 8601 -> naive datetime。空串表示"仍在进行中"。
+    """ISO 8601 -> naive 本地时刻。空串表示"仍在进行中"。
 
-    统一返回 naive 本地时刻，与库内其它时间列（`datetime.now()` 写入）保持同一
-    参照系；混用 aware/naive 会让比较直接抛异常。
+    必须是**本地**时刻，不是 UTC 挂钟时刻。``_from_epoch_millis`` 用
+    ``datetime.fromtimestamp`` 得到的是本地时刻，两者写进同一个 ``occurred_at``
+    列并与本地 ``datetime.now()`` 比较；若这里对带时区的输入直接 ``replace(tzinfo=None)``
+    保留 UTC 挂钟值，KST 下就会产生 9 小时偏差 —— 跨类别排序错乱，提示词里显示的
+    日期还可能整整差一天。
     """
     text = _clean_str(value)
     if not text:
@@ -291,7 +294,7 @@ def _from_iso(value: Any) -> Optional[datetime]:
     except ValueError:
         return None
     if parsed.tzinfo is not None:
-        parsed = parsed.replace(tzinfo=None)
+        parsed = parsed.astimezone().replace(tzinfo=None)
     return parsed
 
 

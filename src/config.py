@@ -1027,6 +1027,9 @@ class Config:
     worldmonitor_event_retention_days: int = 90  # 归一化事件保留天数
     worldmonitor_event_lookback_days: int = 30  # 注入提示词的回溯窗口
     worldmonitor_event_prompt_limit: int = 5  # 每个类别注入提示词的条数上限
+    # 单次同步每个类别最多入库条数。同步在复盘之前内联执行，而总预算只在类别之间
+    # 检查，因此单个类别必须自带上界（ACLED 30 天全球窗口可达数千条）。
+    worldmonitor_event_max_per_sync: int = 500
     news_card_merge_intel_enabled: bool = True  # 报告页相关资讯卡片是否合并 intelligence_items 池（opt-out，失败 fail-open）
     news_translation_unavailable_ttl_hours: int = 24  # 翻译失败缓存的重试间隔（小时），仅影响 unavailable 行
     bias_threshold: float = 5.0  # 乖离率阈值（%），超过此值提示不追高
@@ -2047,6 +2050,13 @@ class Config:
                 field_name='WORLDMONITOR_EVENT_PROMPT_LIMIT',
                 minimum=1,
                 maximum=50,
+            ),
+            worldmonitor_event_max_per_sync=parse_env_int(
+                os.getenv('WORLDMONITOR_EVENT_MAX_PER_SYNC'),
+                500,
+                field_name='WORLDMONITOR_EVENT_MAX_PER_SYNC',
+                minimum=1,
+                maximum=20000,
             ),
             news_card_merge_intel_enabled=parse_env_bool(
                 os.getenv('NEWS_CARD_MERGE_INTEL_ENABLED'),

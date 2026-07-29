@@ -80,6 +80,7 @@ class CategorySyncOutcome:
     status: Literal["ok", "error", "skipped"]
     event_count: int = 0
     upstream_unavailable: bool = False
+    truncated: bool = False
     error: Optional[str] = None
 
 
@@ -194,6 +195,7 @@ class WorldMonitorService:
                 synced_at=now,
                 event_count=outcome.event_count,
                 error=outcome.error,
+                upstream_unavailable=outcome.upstream_unavailable,
             )
 
         self._last_sync_at = now
@@ -219,6 +221,7 @@ class WorldMonitorService:
         try:
             response = httpx.get(
                 f"{base_url}{endpoint}",
+                params=self._category_params(category, now=now),
                 timeout=self._timeout(),
                 follow_redirects=False,
             )
@@ -250,6 +253,20 @@ class WorldMonitorService:
         if not isinstance(raw_items, list):
             raw_items = []
 
+        # 单类别自带上界：总预算只在类别之间检查，挡不住某一个类别自己拉回上千条
+        # 并逐条 upsert（每条一次 SELECT），而这一切都跑在复盘开始之前。
+        max_items = self.config.worldmonitor_event_max_per_sync
+        truncated = len(raw_items) > max_items
+        if truncated:
+            logger.warning(
+                "[WorldMonitor] category=%s truncated ingest received=%d kept=%d "
+                "(raise WORLDMONITOR_EVENT_MAX_PER_SYNC to keep more)",
+                category,
+                len(raw_items),
+                max_items,
+            )
+            raw_items = raw_items[:max_items]
+
         normalized: List[Dict[str, Any]] = []
         for raw in raw_items:
             item = normalizer(raw)
@@ -269,12 +286,28 @@ class WorldMonitorService:
                 status="error",
                 event_count=stored,
                 upstream_unavailable=True,
+                truncated=truncated,
                 error="upstream reported unavailable",
             )
 
         return CategorySyncOutcome(
-            category=category, status="ok", event_count=stored
+            category=category, status="ok", event_count=stored, truncated=truncated
         )
+
+    def _category_params(self, category: str, *, now: datetime) -> Dict[str, Any]:
+        """按类别构造查询参数。
+
+        listAcledEvents 支持 start/end，缺省是 30 天窗口且缓存未命中时会真的去
+        请求受限流的第三方；这里只要我们实际会读取的回溯窗口，不多取。
+        另外两个端点是 seeder 快照读取，不接受时间窗口参数。
+        """
+        if category != CATEGORY_CONFLICT:
+            return {}
+        start = now - timedelta(days=self.config.worldmonitor_event_lookback_days)
+        return {
+            "start": int(start.timestamp() * 1000),
+            "end": int(now.timestamp() * 1000),
+        }
 
     # ------------------------------------------------------------------
     # 新鲜度
@@ -297,6 +330,19 @@ class WorldMonitorService:
 
         last_success = state_row.last_success_at
         last_nonempty = state_row.last_nonempty_at
+
+        # 上游明确说"数据不可用"时立刻判定 unavailable，不看时间戳。
+        # 否则"10 分钟前同步成功、现在 Redis 挂了"会被读成 fresh，把陈旧的存量
+        # 事件当成当前状况送进提示词（设计 §7 状态表、§13 错误表）。
+        if getattr(state_row, "last_upstream_unavailable", False):
+            return CategoryFreshness(
+                category=category,
+                state="unavailable",
+                last_success_at=last_success,
+                last_nonempty_at=last_nonempty,
+                can_claim_no_events=False,
+                detail=state_row.last_error,
+            )
 
         # "确实没有事件"这句话，只有在该类别于回溯窗口内真的产出过事件时才能说。
         # 上游缺 API key 时会长期返回 200 + 空数组，仅看成功时刻会把它读成
@@ -432,9 +478,21 @@ class WorldMonitorService:
     # ------------------------------------------------------------------
 
     def _within_cooldown(self, now: datetime) -> bool:
-        if self._last_sync_at is None:
+        """冷却判断只能基于持久化状态。
+
+        ``run_market_review`` 每次调用都新建一个 service 实例，所以实例属性在
+        生产路径上永远是 None —— 用它做冷却等于没有冷却，每次复盘都会重新打一遍
+        上游（其中 ACLED 在缓存未命中时会真的请求受限流的第三方）。
+        """
+        try:
+            last_attempt = self.repo.get_last_attempt_at()
+        except Exception:  # pragma: no cover - 读状态失败时宁可重新同步
+            last_attempt = None
+        if last_attempt is None:
+            last_attempt = self._last_sync_at
+        if last_attempt is None:
             return False
-        elapsed = (now - self._last_sync_at).total_seconds()
+        elapsed = (now - last_attempt).total_seconds()
         return 0 <= elapsed < self.config.worldmonitor_sync_cooldown_seconds
 
     def _resolve_base_url(self) -> Optional[str]:

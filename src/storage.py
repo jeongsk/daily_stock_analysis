@@ -358,7 +358,13 @@ class WorldEventSyncState(Base):
     category = Column(String(32), nullable=False, unique=True, index=True)
     last_success_at = Column(DateTime, index=True)
     last_nonempty_at = Column(DateTime, index=True)
+    # 最近一次同步尝试的时刻，无论成败。冷却判断必须用它而不是进程内状态：
+    # run_market_review 每次都新建 service 实例，实例属性永远拦不住重复同步。
+    last_attempt_at = Column(DateTime, index=True)
     last_status = Column(String(32))
+    # 上游明确报告"数据不可用"（目前只有 list-energy-disruptions 会给这个信号）。
+    # 必须单独持久化：仅凭时间戳无法表达"最近成功过、但现在上游挂了"。
+    last_upstream_unavailable = Column(Boolean, nullable=False, default=False)
     last_error = Column(Text)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 

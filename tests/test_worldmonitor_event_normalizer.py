@@ -4,7 +4,7 @@ Design: docs/superpowers/specs/2026-07-29-worldmonitor-market-review-events-desi
 §3 (field mapping), §8/§8.1 (scope), §9 (severity_rank)
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from src.services.worldmonitor_events import (
     CATEGORY_CONFLICT,
@@ -166,10 +166,17 @@ def _energy(**updates):
     return values
 
 
+def _utc_as_local(*args):
+    """Express a UTC instant as the naive local time the normalizers produce."""
+    return (
+        datetime(*args, tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
+    )
+
+
 def test_energy_parses_iso_timestamps():
     event = normalize_energy_disruption(_energy())
     assert event["category"] == CATEGORY_ENERGY
-    assert event["occurred_at"] == datetime(2026, 7, 20, 0, 0, 0)
+    assert event["occurred_at"] == _utc_as_local(2026, 7, 20, 0, 0, 0)
 
 
 def test_energy_empty_end_string_means_ongoing():
@@ -178,7 +185,27 @@ def test_energy_empty_end_string_means_ongoing():
 
 def test_energy_end_time_is_parsed_when_present():
     event = normalize_energy_disruption(_energy(endAt="2026-07-25T00:00:00Z"))
-    assert event["ended_at"] == datetime(2026, 7, 25, 0, 0, 0)
+    assert event["ended_at"] == _utc_as_local(2026, 7, 25, 0, 0, 0)
+
+
+def test_epoch_and_iso_sources_agree_on_the_same_instant():
+    """Regression: occurred_at mixes rows from both parsers and is compared
+    against a local datetime.now(). If the ISO path kept UTC wall-clock values,
+    cross-category ordering would skew by the UTC offset (9h on KST) and the
+    date shown in the prompt could be off by a day."""
+    instant = datetime(2026, 7, 20, 0, 0, 0, tzinfo=timezone.utc)
+    from_epoch = normalize_acled_event(
+        _acled(occurredAt=int(instant.timestamp() * 1000))
+    )["occurred_at"]
+    from_iso = normalize_energy_disruption(
+        _energy(startAt="2026-07-20T00:00:00Z")
+    )["occurred_at"]
+    assert from_epoch == from_iso
+
+
+def test_naive_iso_input_is_taken_as_local_time():
+    event = normalize_energy_disruption(_energy(startAt="2026-07-20T00:00:00"))
+    assert event["occurred_at"] == datetime(2026, 7, 20, 0, 0, 0)
 
 
 def test_energy_severity_uses_mbd_scaled_by_ten():

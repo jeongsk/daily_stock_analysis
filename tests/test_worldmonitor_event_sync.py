@@ -401,6 +401,98 @@ def test_upstream_unavailable_flag_marks_the_category_unavailable(db):
     assert freshness.state == "unavailable"
 
 
+def test_upstream_unavailable_overrides_a_recent_success(db):
+    """Regression: the earlier version of this test only covered the case where
+    no sync had ever succeeded, so `last_success_at is None` short-circuited
+    before the unavailable flag was ever consulted. The real failure is a
+    category that synced fine and *then* lost its upstream - stale stored
+    events would keep being presented as current."""
+    service = _service(db)
+    with patch("src.services.worldmonitor_service.httpx.get", side_effect=_route()):
+        service.sync_events(now=NOW)
+    assert service.get_freshness(CATEGORY_ENERGY, now=NOW).state == "fresh"
+
+    later = NOW + timedelta(minutes=40)
+    with patch(
+        "src.services.worldmonitor_service.httpx.get",
+        side_effect=_route(energy=_Resp(_energy_payload(count=0, upstream_unavailable=True))),
+    ):
+        service.sync_events(now=later)
+
+    freshness = service.get_freshness(CATEGORY_ENERGY, now=later)
+    assert freshness.state == "unavailable"
+    assert freshness.can_claim_no_events is False
+
+
+def test_cooldown_survives_a_fresh_service_instance(db):
+    """Regression: run_market_review builds a new WorldMonitorService per call,
+    so an instance attribute could never suppress anything in production - every
+    market review would re-hit the rate-limited upstream."""
+    with patch("src.services.worldmonitor_service.httpx.get", side_effect=_route()):
+        _service(db).sync_events(now=NOW)
+
+    with patch("src.services.worldmonitor_service.httpx.get", side_effect=_route()) as mock_get:
+        result = _service(db).sync_events(now=NOW + timedelta(minutes=5))
+
+    assert mock_get.call_count == 0
+    assert result.performed is False
+
+
+def test_cooldown_expiry_survives_a_fresh_service_instance(db):
+    with patch("src.services.worldmonitor_service.httpx.get", side_effect=_route()):
+        _service(db).sync_events(now=NOW)
+
+    with patch("src.services.worldmonitor_service.httpx.get", side_effect=_route()) as mock_get:
+        result = _service(db).sync_events(now=NOW + timedelta(minutes=31))
+
+    assert mock_get.call_count == 3
+    assert result.performed is True
+
+
+def test_ingest_is_capped_per_category(db):
+    """The sync runs inline ahead of market review and the overall budget is
+    only checked *between* categories, so a single category must not be able to
+    do unbounded work. A 30-day global ACLED pull is thousands of events."""
+    with patch(
+        "src.services.worldmonitor_service.httpx.get",
+        side_effect=_route(acled=_Resp(_acled_payload(count=200))),
+    ):
+        service = _service(db, worldmonitor_event_max_per_sync=25)
+        result = service.sync_events(now=NOW)
+
+    assert result.outcomes[CATEGORY_CONFLICT].event_count == 25
+    assert result.outcomes[CATEGORY_CONFLICT].truncated is True
+
+
+def test_untruncated_sync_is_not_flagged(db):
+    with patch(
+        "src.services.worldmonitor_service.httpx.get",
+        side_effect=_route(acled=_Resp(_acled_payload(count=3))),
+    ):
+        result = _service(db, worldmonitor_event_max_per_sync=25).sync_events(now=NOW)
+
+    assert result.outcomes[CATEGORY_CONFLICT].truncated is False
+
+
+def test_conflict_request_bounds_the_upstream_window(db):
+    """listAcledEvents defaults to a 30-day window and fetches live from a
+    rate-limited third party on a cold cache; ask only for the window we will
+    actually read from."""
+    captured = {}
+
+    def _capture(url, **kwargs):
+        if "list-acled-events" in url:
+            captured.update(kwargs.get("params") or {})
+        return _Resp(_acled_payload())
+
+    with patch("src.services.worldmonitor_service.httpx.get", side_effect=_capture):
+        _service(db, worldmonitor_event_lookback_days=7).sync_events(now=NOW)
+
+    assert captured.get("start")
+    expected_start = int((NOW - timedelta(days=7)).timestamp() * 1000)
+    assert abs(captured["start"] - expected_start) < 1000
+
+
 def test_failed_sync_leaves_previously_stored_events_readable(db):
     service = _service(db)
     with patch("src.services.worldmonitor_service.httpx.get", side_effect=_route()):

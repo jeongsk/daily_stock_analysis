@@ -192,12 +192,17 @@ class WorldEventRepository:
         synced_at: datetime,
         event_count: int,
         error: Optional[str] = None,
+        upstream_unavailable: bool = False,
     ) -> None:
         """记录一次同步结果。
 
         只有成功才推进 ``last_success_at``；只有成功且拿到非空结果才推进
         ``last_nonempty_at``。后者是 §7.1 判定 ``unverified`` 的唯一依据 ——
         没有它，"上游永远返回空数组"会被读成"确实没有事件"。
+
+        ``last_attempt_at`` 无论成败都推进，供冷却判断使用；
+        ``last_upstream_unavailable`` 单独保存，因为"最近成功过但现在上游挂了"
+        用时间戳表达不出来。
         """
         with self.db.get_session() as session:
             row = session.execute(
@@ -211,11 +216,22 @@ class WorldEventRepository:
 
             row.last_status = status
             row.last_error = error
+            row.last_attempt_at = synced_at
+            row.last_upstream_unavailable = bool(upstream_unavailable)
             if status == "ok":
                 row.last_success_at = synced_at
                 if event_count > 0:
                     row.last_nonempty_at = synced_at
             session.commit()
+
+    def get_last_attempt_at(self) -> Optional[datetime]:
+        """所有类别里最近一次同步尝试的时刻，用于跨实例的冷却判断。"""
+        with self.db.get_session() as session:
+            values = session.execute(
+                select(WorldEventSyncState.last_attempt_at)
+            ).scalars().all()
+            stamps = [v for v in values if isinstance(v, datetime)]
+            return max(stamps) if stamps else None
 
     def get_sync_state(self, category: str) -> Optional[WorldEventSyncState]:
         with self.db.get_session() as session:
