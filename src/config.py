@@ -1017,6 +1017,16 @@ class Config:
     worldmonitor_base_url: str = "http://127.0.0.1:3000"
     worldmonitor_connect_timeout_seconds: float = 2.0
     worldmonitor_read_timeout_seconds: float = 5.0
+    # World Monitor 事件采集（市场复盘专用），设计见
+    # docs/superpowers/specs/2026-07-29-worldmonitor-market-review-events-design.md
+    # 与 worldmonitor_enabled（仅状态探测）分离：升级本身不应改变复盘提示词。
+    worldmonitor_events_enabled: bool = False
+    worldmonitor_sync_cooldown_seconds: int = 1800  # 复盘前重复同步的最小间隔
+    worldmonitor_sync_budget_seconds: float = 20.0  # 整次同步的总截止时间（非单请求超时）
+    worldmonitor_event_stale_after_seconds: int = 7200  # 超过此时长判定为 stale
+    worldmonitor_event_retention_days: int = 90  # 归一化事件保留天数
+    worldmonitor_event_lookback_days: int = 30  # 注入提示词的回溯窗口
+    worldmonitor_event_prompt_limit: int = 5  # 每个类别注入提示词的条数上限
     news_card_merge_intel_enabled: bool = True  # 报告页相关资讯卡片是否合并 intelligence_items 池（opt-out，失败 fail-open）
     news_translation_unavailable_ttl_hours: int = 24  # 翻译失败缓存的重试间隔（小时），仅影响 unavailable 行
     bias_threshold: float = 5.0  # 乖离率阈值（%），超过此值提示不追高
@@ -1989,6 +1999,54 @@ class Config:
                 field_name='WORLDMONITOR_READ_TIMEOUT_SECONDS',
                 minimum=0.1,
                 maximum=60.0,
+            ),
+            worldmonitor_events_enabled=parse_env_bool(
+                os.getenv('WORLDMONITOR_EVENTS_ENABLED'),
+                False,
+            ),
+            worldmonitor_sync_cooldown_seconds=parse_env_int(
+                os.getenv('WORLDMONITOR_SYNC_COOLDOWN_SECONDS'),
+                1800,
+                field_name='WORLDMONITOR_SYNC_COOLDOWN_SECONDS',
+                minimum=0,
+                maximum=86400,
+            ),
+            # 用 in_range 而非 parse_env_float：NaN 与任何边界比较都为 False，
+            # 会直接废掉 §6.1 的同步截止判断，因此非有限值必须整体退回默认值而非钳制。
+            worldmonitor_sync_budget_seconds=parse_env_float_in_range(
+                os.getenv('WORLDMONITOR_SYNC_BUDGET_SECONDS'),
+                20.0,
+                field_name='WORLDMONITOR_SYNC_BUDGET_SECONDS',
+                minimum=1.0,
+                maximum=300.0,
+            ),
+            worldmonitor_event_stale_after_seconds=parse_env_int(
+                os.getenv('WORLDMONITOR_EVENT_STALE_AFTER_SECONDS'),
+                7200,
+                field_name='WORLDMONITOR_EVENT_STALE_AFTER_SECONDS',
+                minimum=60,
+                maximum=604800,
+            ),
+            worldmonitor_event_retention_days=parse_env_int(
+                os.getenv('WORLDMONITOR_EVENT_RETENTION_DAYS'),
+                90,
+                field_name='WORLDMONITOR_EVENT_RETENTION_DAYS',
+                minimum=1,
+                maximum=3650,
+            ),
+            worldmonitor_event_lookback_days=parse_env_int(
+                os.getenv('WORLDMONITOR_EVENT_LOOKBACK_DAYS'),
+                30,
+                field_name='WORLDMONITOR_EVENT_LOOKBACK_DAYS',
+                minimum=1,
+                maximum=3650,
+            ),
+            worldmonitor_event_prompt_limit=parse_env_int(
+                os.getenv('WORLDMONITOR_EVENT_PROMPT_LIMIT'),
+                5,
+                field_name='WORLDMONITOR_EVENT_PROMPT_LIMIT',
+                minimum=1,
+                maximum=50,
             ),
             news_card_merge_intel_enabled=parse_env_bool(
                 os.getenv('NEWS_CARD_MERGE_INTEL_ENABLED'),

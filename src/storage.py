@@ -275,6 +275,97 @@ class IntelligenceItem(Base):
     )
 
 
+def _decode_json_list(raw: Optional[str]) -> List[str]:
+    """把存为 JSON 文本的字符串数组读回来，坏数据一律降级为空列表。
+
+    这些列由同步流程写入，但历史行或手工改动可能不合法；解析失败不应让复盘链路
+    抛异常（fail-open，见设计 §6）。
+    """
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [str(item) for item in parsed if isinstance(item, (str, int))]
+
+
+class WorldEvent(Base):
+    """World Monitor 归一化事件（市场复盘专用）。
+
+    设计: docs/superpowers/specs/2026-07-29-worldmonitor-market-review-events-design.md §4
+
+    刻意不与 ``intelligence_items`` 合并：这些是带发生时刻与持续区间的结构化事件，
+    而非条目化资讯；两者的去重键、时间语义和消费路径都不同。
+    """
+
+    __tablename__ = 'world_events'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    category = Column(String(32), nullable=False, index=True)
+    source = Column(String(32), nullable=False, default='worldmonitor')
+    source_endpoint = Column(String(128))
+    external_id = Column(String(200), nullable=False, index=True)
+    title = Column(String(300), nullable=False)
+    summary = Column(Text)
+    url = Column(String(1000))
+    # 原始发生时刻。与 collected_at 分开保存，供审计、重放与未来信息泄漏防护使用。
+    occurred_at = Column(DateTime, nullable=False, index=True)
+    ended_at = Column(DateTime)  # NULL = 仍在进行中
+    # DSA 首次采集时刻，重复同步时保持不变。
+    collected_at = Column(DateTime, nullable=False, default=datetime.now, index=True)
+    countries = Column(Text)  # ISO2 JSON 数组
+    markets = Column(Text)  # 映射到的 DSA 市场 JSON 数组
+    scope = Column(String(16), nullable=False, default='unmapped', index=True)
+    severity_rank = Column(Integer, nullable=False, default=0, index=True)
+    raw_payload = Column(Text)
+
+    __table_args__ = (
+        # 上游 id 仅在各自服务内唯一，因此去重键必须带上 category。
+        UniqueConstraint('category', 'external_id', name='uix_world_event_cat_ext'),
+        Index('ix_world_events_cat_time', 'category', 'occurred_at'),
+    )
+
+    @property
+    def country_list(self) -> List[str]:
+        return _decode_json_list(self.countries)
+
+    @property
+    def market_list(self) -> List[str]:
+        return _decode_json_list(self.markets)
+
+    @property
+    def is_ongoing(self) -> bool:
+        return self.ended_at is None
+
+    def __repr__(self) -> str:
+        return f"<WorldEvent(category={self.category}, external_id={self.external_id})>"
+
+
+class WorldEventSyncState(Base):
+    """按类别记录 World Monitor 同步状态。
+
+    设计 §7.1: 仅记录"最后一次成功"不足以关闭虚假信心路径 —— 上游缺少 API key 时
+    会长期返回 HTTP 200 + 空数组，看起来永远"同步成功且无事件"。因此额外记录
+    "最后一次拿到非空结果"的时刻，用于区分"确实没有事件"与"这个类别根本产不出事件"。
+    """
+
+    __tablename__ = 'world_event_sync_state'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    category = Column(String(32), nullable=False, unique=True, index=True)
+    last_success_at = Column(DateTime, index=True)
+    last_nonempty_at = Column(DateTime, index=True)
+    last_status = Column(String(32))
+    last_error = Column(Text)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    def __repr__(self) -> str:
+        return f"<WorldEventSyncState(category={self.category}, status={self.last_status})>"
+
+
 class NewsTranslationCache(Base):
     """Korean news card translation cache (additive, ko-only lazy batch).
 
