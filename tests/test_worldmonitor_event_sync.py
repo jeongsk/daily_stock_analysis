@@ -488,9 +488,36 @@ def test_conflict_request_bounds_the_upstream_window(db):
     with patch("src.services.worldmonitor_service.httpx.get", side_effect=_capture):
         _service(db, worldmonitor_event_lookback_days=7).sync_events(now=NOW)
 
-    assert captured.get("start")
-    expected_start = int((NOW - timedelta(days=7)).timestamp() * 1000)
-    assert abs(captured["start"] - expected_start) < 1000
+    assert captured.get("start") and captured.get("end")
+    span_days = (captured["end"] - captured["start"]) / 86_400_000
+    assert 7 <= span_days <= 9
+    assert captured["end"] >= int(NOW.timestamp() * 1000)
+
+
+def test_conflict_window_is_day_aligned_so_the_upstream_cache_can_hit(db):
+    """Upstream builds its Redis cache key from the request window's start/end
+    millis. A millisecond-precise now() makes that key unique on every sync, so
+    the 900s TTL never hits and every sync becomes a live third-party fetch."""
+    from src.services.worldmonitor_events import build_category_specs
+
+    spec = build_category_specs()[CATEGORY_CONFLICT]
+    service = _service(db)
+
+    windows = {
+        (
+            params["start"],
+            params["end"],
+        )
+        for params in (
+            service._category_params(spec, now=NOW + timedelta(minutes=offset))
+            # same calendar day, different wall-clock instants
+            for offset in (0, 37, 121, 600)
+        )
+    }
+    assert len(windows) == 1, "same-day syncs must request one identical window"
+
+    next_day = service._category_params(spec, now=NOW + timedelta(days=1))
+    assert (next_day["start"], next_day["end"]) not in windows
 
 
 def test_failed_sync_leaves_previously_stored_events_readable(db):

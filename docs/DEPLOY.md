@@ -544,8 +544,12 @@ DSA WebUI 默认位于 `http://localhost:8001`，World Monitor 位于
 ```
 
 `down` 不删除 Redis volume。World Monitor 不可用时，DSA 仍使用原有数据源继续运行；
-`GET /api/v1/worldmonitor/status` 仅报告可选依赖状态。当前阶段不会将 World Monitor
-数据写入分析上下文或改变投资评分。
+`GET /api/v1/worldmonitor/status` 报告可选依赖状态；启用事件采集后还会附带 `events` 摘要。
+
+通过 `WORLDMONITOR_EVENTS_ENABLED`（默认关闭，与 `WORLDMONITOR_ENABLED` 分离，
+使升级本身不改变提示词）可进一步采集 World Monitor 事件并**仅**注入大盘复盘提示词。
+个股分析、评分与投资判断不受影响。类别、边界与其余 `WORLDMONITOR_EVENT_*` 配置见
+`docs/intelligence-sources.md`。
 
 AIS 船舶跟踪是 opt-in 功能：上游 relay 实际运行时要求 `AISSTREAM_API_KEY`。未配置时
 默认栈不会启动 relay；在 `.env` 设置该键后，运行脚本会自动启用 `ais` profile。

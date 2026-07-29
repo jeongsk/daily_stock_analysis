@@ -35,7 +35,7 @@ DSA가 직접 수집·정규화·저장하고, **시장 리뷰 프롬프트에�
 
 | 카테고리 | 경로 | 백킹 저장소 | 상류 실패 시 |
 | --- | --- | --- | --- |
-| `geopolitical_conflict` | `/api/conflict/v1/list-acled-events` | read-through 캐시(`conflict:acled:v1`, TTL 900s) — miss 시 ACLED 실시간 fetch | 빈 배열 |
+| `geopolitical_conflict` | `/api/conflict/v1/list-acled-events` | read-through 캐시(TTL 900s) — miss 시 ACLED 실시간 fetch (§3.2) | 빈 배열 |
 | `infrastructure_outage` | `/api/infrastructure/v1/list-internet-outages` | 순수 seeder 스냅샷(`infra:outages:v1`) | 빈 배열 |
 | `supply_chain_energy` | `/api/supply-chain/v1/list-energy-disruptions` | seeder 레지스트리 스냅샷 | `upstreamUnavailable: true` |
 
@@ -66,6 +66,22 @@ DSA가 직접 수집·정규화·저장하고, **시장 리뷰 프롬프트에�
 
 즉 seeder가 죽어 있어도 인프라 카테고리는 조용히 "장애 없음"처럼 보인다. 이를
 그대로 프롬프트에 넣으면 시장 리뷰에 거짓 확신이 들어간다. §7이 이 문제를 다룬다.
+
+### 3.2 ACLED 캐시는 기본적으로 적중하지 않는다
+
+`list-acled-events`의 Redis 캐시 키는 요청 창의 시작·종료 밀리초를 포함한다
+(`conflict:acled:v1:<country>:<startMs>:<endMs>`). 따라서 요청마다 시각이 조금이라도
+다르면 키가 매번 달라지고 **900초 TTL은 한 번도 적중하지 않는다.** 파라미터를 아예
+생략해도 서버가 `Date.now()`로 채우므로 결과는 같다.
+
+두 가지 결론이 따라온다.
+
+1. 이 카테고리는 사실상 **매 동기화가 실시간 제3자 요청**이다. 따라서 §6의 쿨다운이
+   유일한 rate-limit 보호 장치이고, §6.1의 예산은 예외 상황이 아니라 정상 경로를
+   감당해야 한다.
+2. 그래서 요청 창의 경계를 **자연일로 정렬**한다. 같은 날 반복 동기화는 동일한 키를
+   만들어 상류 캐시를 실제로 재사용할 수 있다. 창은 최대 하루 넓어지지만 30일
+   조회 창이 흡수한다.
 
 ## 4. 정규화 스키마
 

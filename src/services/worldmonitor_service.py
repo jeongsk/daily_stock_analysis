@@ -289,10 +289,16 @@ class WorldMonitorService:
         """
         if not spec.accepts_time_window:
             return {}
-        start = now - timedelta(days=self.config.worldmonitor_event_lookback_days)
+        # 边界对齐到自然日。上游把请求窗口的起止毫秒直接拼进 Redis 缓存键
+        # （list-acled-events.ts 的 `conflict:acled:v1:<country>:<start>:<end>`），
+        # 所以毫秒级的 now() 会让缓存键每次都不同，900s TTL 永远命中不了，
+        # 每次同步都变成一次真实的第三方请求。按天取整后同一天内的重复同步可以
+        # 复用上游缓存；窗口最多多出一天，30 天回溯完全吸收得了。
+        end = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        start = end - timedelta(days=self.config.worldmonitor_event_lookback_days + 1)
         return {
             "start": int(start.timestamp() * 1000),
-            "end": int(now.timestamp() * 1000),
+            "end": int(end.timestamp() * 1000),
         }
 
     # ------------------------------------------------------------------

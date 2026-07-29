@@ -492,8 +492,15 @@ The DSA WebUI is available at `http://localhost:8001` by default and World Monit
 ```
 
 `down` preserves the Redis volume. A World Monitor outage does not stop DSA analysis;
-`GET /api/v1/worldmonitor/status` reports only the optional dependency status. This
-phase does not inject World Monitor data into analysis context or investment scores.
+`GET /api/v1/worldmonitor/status` reports the optional dependency status, plus an
+`events` summary once event collection is enabled.
+
+World Monitor events can additionally be collected and injected into the **market
+review prompt only** via `WORLDMONITOR_EVENTS_ENABLED` (off by default, separate from
+`WORLDMONITOR_ENABLED` so an upgrade alone never changes the prompt). Individual stock
+analysis, scores, and investment decisions are not affected. See
+`docs/intelligence-sources.md` for the categories, boundaries, and the remaining
+`WORLDMONITOR_EVENT_*` settings.
 
 AIS vessel tracking is opt-in because the upstream relay requires `AISSTREAM_API_KEY`
 at runtime. Without it, the default stack omits the relay. Setting the key in `.env`
